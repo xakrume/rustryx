@@ -6,10 +6,26 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "Rustryx: testkit"
+description = "Rustryx: in-memory ports and fixtures for tests"
 
 [lints]
 workspace = true
 
 [dependencies]
 rustryx-core.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+futures.workspace = true
+hex.workspace = true
+md-5.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+time.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# `test-util` gives `start_paused` so lock TTL tests run on virtual time. Features are
+# additive, so this does not change the feature set other crates see.
+tokio = { workspace = true, features = ["test-util"] }
