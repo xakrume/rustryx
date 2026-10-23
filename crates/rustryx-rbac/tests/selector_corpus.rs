@@ -69,11 +69,10 @@ fn corpus_expressions_compile_and_evaluate_as_expected() {
             }
         };
         for evaluation in &case.evaluations {
-            let coordinate = evaluation.coordinate.as_ref().map(|c| Coordinate {
-                group: c.group.clone(),
-                name: c.name.clone(),
-                version: c.version.clone(),
-            });
+            let coordinate = evaluation
+                .coordinate
+                .as_ref()
+                .map(|c| Coordinate::new(c.group.clone(), c.name.clone(), c.version.clone()));
             let input = SelectorInput {
                 format: evaluation.format.parse::<RepoFormat>().unwrap(),
                 path: &evaluation.path,

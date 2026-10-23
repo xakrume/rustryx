@@ -8,6 +8,7 @@ use rustryx_core::ports::InvalidationEvent;
 use tokio::task::{JoinError, JoinHandle};
 use tokio_util::sync::CancellationToken;
 
+use crate::metrics;
 use crate::selector::SelectorEngine;
 use crate::state::State;
 
@@ -54,6 +55,7 @@ pub(crate) fn spawn_listener<E: SelectorEngine>(
                         // more. Drop everything now; from here on a node serves
                         // changes only as fast as the TTL (at most five minutes).
                         tracing::warn!("rbac invalidation stream ended, caches fall back to their TTL");
+                        metrics::stream_ended();
                         state.apply(&InvalidationEvent::Reset);
                         break;
                     };

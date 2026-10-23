@@ -6,16 +6,13 @@
 
 mod common;
 
-use std::sync::Arc;
-
-use common::{Env, SpyStore, principal, resource, selector_grant, view};
+use common::{Env, open_resource, principal, selector_grant, view};
 use proptest::prelude::*;
 use rustryx_core::identity::{Action, Principal, PrivilegeGrant, ROLE_NX_ANONYMOUS};
 use rustryx_core::ids::{ContentSelectorId, PrivilegeId, RoleId};
 use rustryx_core::model::RepoFormat;
 use rustryx_core::ports::auth::{Decision, RbacChecker, ResourceRef};
-use rustryx_rbac::{Rbac, RbacConfig};
-use rustryx_testkit::{MemInvalidationBus, MemStore};
+use rustryx_rbac::RbacConfig;
 
 const ACTIONS: [Action; 4] = [Action::Browse, Action::Read, Action::Write, Action::Delete];
 
@@ -49,12 +46,15 @@ fn spec() -> impl Strategy<Value = Spec> {
         .prop_map(|(grant, actions)| Spec { grant, actions })
 }
 
+/// Every generated resource is open to anonymous callers, so that the properties about
+/// anonymous callers test the privileges and not the repository flag (which has its own
+/// tests in `rbac_anonymous.rs`).
 fn resources() -> Vec<ResourceRef> {
     let mut all = Vec::new();
     for repository in ["a", "b", "c"] {
         for format in [RepoFormat::Raw, RepoFormat::Maven2] {
             for path in ["/a/x", "/b/y", "/"] {
-                all.push(resource(repository, format, path));
+                all.push(open_resource(repository, format, path));
             }
         }
     }
@@ -66,19 +66,6 @@ fn runtime() -> tokio::runtime::Runtime {
         .enable_time()
         .build()
         .unwrap()
-}
-
-fn bare_env() -> Env {
-    let store = SpyStore::new(MemStore::new());
-    Env {
-        store: store.clone(),
-        bus: MemInvalidationBus::new(),
-        rbac: Rbac::new(
-            Arc::new(store.clone()),
-            Arc::new(store),
-            &RbacConfig::default(),
-        ),
-    }
 }
 
 /// Stores the specs as privileges of one role and returns the role id.
@@ -120,7 +107,7 @@ proptest! {
     #[test]
     fn anonymous_never_gets_write_or_delete(specs in prop::collection::vec(spec(), 0..6)) {
         let leaked = runtime().block_on(async {
-            let env = bare_env();
+            let env = Env::bare();
             role_with(&env, ROLE_NX_ANONYMOUS, &specs).await;
             decisions(&env, &Principal::anonymous())
                 .await
@@ -130,12 +117,38 @@ proptest! {
         prop_assert!(!leaked);
     }
 
+    /// Anonymous access needs the repository flag AND the global switch, whatever nx-anonymous
+    /// is granted: with either gate closed nothing is allowed, for any action.
+    #[test]
+    fn anonymous_needs_both_gates(
+        specs in prop::collection::vec(spec(), 0..6),
+        switch in any::<bool>(),
+        flag in any::<bool>(),
+    ) {
+        let allowed_any = runtime().block_on(async {
+            let config = RbacConfig { anonymous_enabled: switch, ..RbacConfig::default() };
+            let env = Env::bare_with_config(&config);
+            role_with(&env, ROLE_NX_ANONYMOUS, &specs).await;
+            let anonymous = Principal::anonymous();
+            let mut allowed_any = false;
+            for mut res in resources() {
+                res.allow_anonymous = flag;
+                for action in ACTIONS {
+                    allowed_any |=
+                        env.rbac.check(&anonymous, action, &res).await.unwrap() == Decision::Allow;
+                }
+            }
+            allowed_any
+        });
+        prop_assert!(!allowed_any || (switch && flag));
+    }
+
     /// Anonymous callers never receive more than the same role would give a
     /// real user, and an Admin privilege adds nothing for them.
     #[test]
     fn anonymous_is_never_wider_than_the_role_it_stands_for(specs in prop::collection::vec(spec(), 0..6)) {
         let (anonymous, without_admin) = runtime().block_on(async {
-            let env = bare_env();
+            let env = Env::bare();
             role_with(&env, ROLE_NX_ANONYMOUS, &specs).await;
             let anonymous = decisions(&env, &Principal::anonymous()).await;
             let rest: Vec<Spec> = specs
@@ -166,7 +179,7 @@ proptest! {
         ),
     ) {
         let (plain, scoped) = runtime().block_on(async {
-            let env = bare_env();
+            let env = Env::bare();
             let role = role_with(&env, "owner", &specs).await;
             let owner = principal(&[(role, "owner")]);
             let plain = decisions(&env, &owner).await;
@@ -186,7 +199,7 @@ proptest! {
         extra in prop::collection::vec(spec(), 0..4),
     ) {
         let (small, large) = runtime().block_on(async {
-            let env = bare_env();
+            let env = Env::bare();
             let small_role = role_with(&env, "small", &base).await;
             let all: Vec<Spec> = base.iter().chain(&extra).cloned().collect();
             let large_role = role_with(&env, "large", &all).await;
@@ -207,7 +220,7 @@ proptest! {
         second in prop::collection::vec(spec(), 0..4),
     ) {
         let (one, two, both) = runtime().block_on(async {
-            let env = bare_env();
+            let env = Env::bare();
             let r1 = role_with(&env, "r1", &first).await;
             let r2 = role_with(&env, "r2", &second).await;
             (

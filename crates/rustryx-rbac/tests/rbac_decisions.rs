@@ -35,7 +35,7 @@ async fn admin_may_do_everything_everywhere() {
     let env = Env::new();
     let admin = builtin_principal(ROLE_NX_ADMIN);
     for action in [Action::Browse, Action::Read, Action::Write, Action::Delete] {
-        for format in RepoFormat::ALL {
+        for &format in RepoFormat::ALL {
             assert!(allowed(&env, &admin, action, &resource("any", format, "/x")).await);
         }
     }

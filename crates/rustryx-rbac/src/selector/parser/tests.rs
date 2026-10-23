@@ -73,7 +73,9 @@ fn reports_syntax_errors() {
         "true)",
         "true true",
         "unknown == \"x\"",
-        "coordinate.extension == \"jar\"",
+        "coordinate.packaging == \"jar\"",
+        "coordinate.Extension == \"jar\"",
+        "coordinate.extension()",
         "path.length == 1",
         "path.substring(1) == \"x\"",
         "format in []",
@@ -183,4 +185,37 @@ fn regex_that_only_works_inside_the_anchor_wrapper_is_rejected() {
 #[test]
 fn typical_unicode_class_pattern_fits_the_default_limits() {
     assert!(parse("path =~ \"^/com/[\\\\w.-]+/.*$\"", &limits()).is_ok());
+}
+
+#[test]
+fn extension_and_classifier_are_coordinate_fields() {
+    for (src, field) in [
+        ("coordinate.extension == \"jar\"", CoordField::Extension),
+        (
+            "coordinate.classifier == \"sources\"",
+            CoordField::Classifier,
+        ),
+    ] {
+        let root = parse(src, &limits()).unwrap();
+        let BoolExpr::Eq(StrExpr::Coord(got), StrExpr::Lit(_)) = root else {
+            unreachable!("{src} parses as an equality on a coordinate field");
+        };
+        assert_eq!(got, field, "{src}");
+    }
+}
+
+#[test]
+fn the_error_for_an_unknown_coordinate_field_lists_every_field() {
+    let message = err("coordinate.packaging == \"jar\"").to_string();
+    for field in [
+        "group",
+        "groupId",
+        "name",
+        "artifactId",
+        "version",
+        "extension",
+        "classifier",
+    ] {
+        assert!(message.contains(field), "{message}");
+    }
 }

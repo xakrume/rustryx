@@ -21,6 +21,11 @@ pub struct RbacConfig {
     pub max_selectors: u64,
     /// Most cached compiled programs.
     pub max_programs: u64,
+    /// Initial position of the global anonymous switch (`auth.anonymous_enabled`). Default
+    /// `false`: a freshly built authorizer refuses every anonymous caller until the composition
+    /// root says otherwise. The switch can be flipped later through
+    /// [`Rbac::anonymous_switch`](crate::Rbac::anonymous_switch).
+    pub anonymous_enabled: bool,
 }
 
 impl Default for RbacConfig {
@@ -30,6 +35,7 @@ impl Default for RbacConfig {
             max_privilege_sets: 10_000,
             max_selectors: 1_000,
             max_programs: 1_000,
+            anonymous_enabled: false,
         }
     }
 }
@@ -52,6 +58,11 @@ mod tests {
             RbacConfig::default().effective_ttl(),
             Duration::from_secs(60)
         );
+    }
+
+    #[test]
+    fn must_not_enable_anonymous_access_by_default() {
+        assert!(!RbacConfig::default().anonymous_enabled);
     }
 
     #[test]

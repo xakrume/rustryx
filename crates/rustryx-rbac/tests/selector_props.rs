@@ -10,7 +10,7 @@ use rustryx_core::ports::auth::Coordinate;
 use rustryx_rbac::{RestrictedEngine, SelectorEngine, SelectorInput, selector_path};
 
 fn arbitrary_format() -> impl Strategy<Value = RepoFormat> {
-    prop::sample::select(RepoFormat::ALL.to_vec())
+    prop::sample::select(RepoFormat::ALL)
 }
 
 /// Text that looks like the language: tokens in random order, so that the
@@ -26,6 +26,8 @@ fn tokenish() -> impl Strategy<Value = String> {
         ".name",
         ".artifactId",
         ".version",
+        ".extension",
+        ".classifier",
         ".startsWith(",
         ".endsWith(",
         ".contains(",
@@ -81,11 +83,15 @@ proptest! {
         group in prop::option::of(".{0,40}"),
         name in prop::option::of(".{0,40}"),
         version in prop::option::of(".{0,40}"),
+        extension in prop::option::of(".{0,40}"),
+        classifier in prop::option::of(".{0,40}"),
         with_coordinate in any::<bool>(),
     ) {
         let engine = RestrictedEngine::default();
         if let Ok(program) = engine.compile(&source) {
-            let coordinate = Coordinate { group, name, version };
+            let mut coordinate = Coordinate::new(group, name, version);
+            coordinate.extension = extension;
+            coordinate.classifier = classifier;
             let input = SelectorInput {
                 format,
                 path: &path,
@@ -179,6 +185,8 @@ enum S {
     Group,
     Name,
     Version,
+    Extension,
+    Classifier,
 }
 
 /// A boolean node of the reference model: an independent, deliberately naive
@@ -211,6 +219,8 @@ fn render_s(s: &S) -> String {
         S::Group => "coordinate.groupId".into(),
         S::Name => "coordinate.name".into(),
         S::Version => "coordinate.version".into(),
+        S::Extension => "coordinate.extension".into(),
+        S::Classifier => "coordinate.classifier".into(),
     }
 }
 
@@ -254,6 +264,8 @@ fn model_s(s: &S, w: &World<'_>) -> Option<String> {
         S::Group => w.coordinate.and_then(|c| c.group.clone()),
         S::Name => w.coordinate.and_then(|c| c.name.clone()),
         S::Version => w.coordinate.and_then(|c| c.version.clone()),
+        S::Extension => w.coordinate.and_then(|c| c.extension.clone()),
+        S::Classifier => w.coordinate.and_then(|c| c.classifier.clone()),
     }
 }
 
@@ -312,6 +324,8 @@ fn s_strategy() -> impl Strategy<Value = S> {
         Just(S::Group),
         Just(S::Name),
         Just(S::Version),
+        Just(S::Extension),
+        Just(S::Classifier),
     ]
 }
 
@@ -354,6 +368,8 @@ proptest! {
         group in prop::option::of(prop::sample::select(LITERALS.to_vec())),
         name in prop::option::of(prop::sample::select(LITERALS.to_vec())),
         version in prop::option::of(prop::sample::select(LITERALS.to_vec())),
+        extension in prop::option::of(prop::sample::select(LITERALS.to_vec())),
+        classifier in prop::option::of(prop::sample::select(LITERALS.to_vec())),
         with_coordinate in any::<bool>(),
     ) {
         let source = render(&tree);
@@ -362,11 +378,13 @@ proptest! {
         let program = engine.compile(&source);
         prop_assert!(program.is_ok(), "{source}: {:?}", program.err());
         let program = program.unwrap();
-        let coordinate = Coordinate {
-            group: group.map(str::to_owned),
-            name: name.map(str::to_owned),
-            version: version.map(str::to_owned),
-        };
+        let mut coordinate = Coordinate::new(
+            group.map(str::to_owned),
+            name.map(str::to_owned),
+            version.map(str::to_owned),
+        );
+        coordinate.extension = extension.map(str::to_owned);
+        coordinate.classifier = classifier.map(str::to_owned);
         let world = World {
             format,
             path,

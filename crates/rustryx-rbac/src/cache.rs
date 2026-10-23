@@ -20,10 +20,13 @@ use std::convert::Infallible;
 use std::future::Future;
 use std::hash::Hash;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use moka::future::Cache;
 use tokio::time::Instant;
+
+use crate::metrics::{self, CacheEvent};
 
 /// Upper bound for the lifetime of any cached authorization answer.
 pub const MAX_DECISION_TTL: Duration = Duration::from_secs(300);
@@ -36,6 +39,8 @@ struct Stamped<V> {
 
 /// A bounded cache with a time to live and single flight loading.
 pub(crate) struct TtlCache<K, V> {
+    /// Value of the `cache` label of `rbac_cache_events_total`.
+    name: &'static str,
     inner: Cache<K, Stamped<V>>,
     ttl: Duration,
 }
@@ -47,8 +52,13 @@ where
 {
     /// Creates a cache of at most `max_capacity` entries living at most `ttl`
     /// (clamped to [`MAX_DECISION_TTL`]). `with_predicates` enables
-    /// [`TtlCache::invalidate_where`].
-    pub(crate) fn new(max_capacity: u64, ttl: Duration, with_predicates: bool) -> Self {
+    /// [`TtlCache::invalidate_where`]. `name` labels its metrics and must be one of a fixed set.
+    pub(crate) fn new(
+        name: &'static str,
+        max_capacity: u64,
+        ttl: Duration,
+        with_predicates: bool,
+    ) -> Self {
         let ttl = ttl.min(MAX_DECISION_TTL);
         let mut builder = Cache::builder()
             .max_capacity(max_capacity)
@@ -57,6 +67,7 @@ where
             builder = builder.support_invalidation_closures();
         }
         Self {
+            name,
             inner: builder.build(),
             ttl,
         }
@@ -81,20 +92,40 @@ where
     {
         if let Some(entry) = self.inner.get(&key).await {
             if entry.stored_at.elapsed() < self.ttl {
+                metrics::cache_event(self.name, CacheEvent::Hit);
                 return Ok(entry.value);
             }
             self.inner.invalidate(&key).await;
         }
-        let entry = self
+        // Set only by the call whose loader actually runs. Another call for the same key
+        // that waits on that load (or finds the value inserted in the meantime) leaves it
+        // false and counts as a hit: it did not touch the store.
+        let loaded_here = AtomicBool::new(false);
+        let loaded = self
             .inner
             .try_get_with(key, async {
+                loaded_here.store(true, Ordering::Relaxed);
                 load().await.map(|value| Stamped {
                     stored_at: Instant::now(),
                     value,
                 })
             })
-            .await?;
-        Ok(entry.value)
+            .await;
+        match loaded {
+            Ok(entry) => {
+                let event = if loaded_here.load(Ordering::Relaxed) {
+                    CacheEvent::Miss
+                } else {
+                    CacheEvent::Hit
+                };
+                metrics::cache_event(self.name, event);
+                Ok(entry.value)
+            }
+            Err(error) => {
+                metrics::cache_event(self.name, CacheEvent::Error);
+                Err(error)
+            }
+        }
     }
 
     /// [`TtlCache::get_or_load`] for a loader that cannot fail.
@@ -147,7 +178,7 @@ mod tests {
     use super::*;
 
     fn cache(ttl_secs: u64) -> TtlCache<u32, String> {
-        TtlCache::new(100, Duration::from_secs(ttl_secs), true)
+        TtlCache::new("test", 100, Duration::from_secs(ttl_secs), true)
     }
 
     async fn load(cache: &TtlCache<u32, String>, key: u32, calls: &AtomicU32) -> String {
@@ -175,7 +206,7 @@ mod tests {
 
     #[tokio::test]
     async fn ttl_is_clamped_to_five_minutes() {
-        let c: TtlCache<u32, u32> = TtlCache::new(10, Duration::from_hours(24), false);
+        let c: TtlCache<u32, u32> = TtlCache::new("test", 10, Duration::from_hours(24), false);
         assert_eq!(c.ttl(), MAX_DECISION_TTL);
     }
 
@@ -215,7 +246,7 @@ mod tests {
 
     #[tokio::test]
     async fn predicate_on_a_cache_without_support_drops_everything() {
-        let c: TtlCache<u32, String> = TtlCache::new(10, Duration::from_secs(60), false);
+        let c: TtlCache<u32, String> = TtlCache::new("test", 10, Duration::from_secs(60), false);
         let calls = AtomicU32::new(0);
         load(&c, 1, &calls).await;
         c.invalidate_where(|_| false);
@@ -247,7 +278,7 @@ mod tests {
 
     #[tokio::test]
     async fn capacity_is_bounded() {
-        let c: TtlCache<u32, u32> = TtlCache::new(10, Duration::from_secs(60), false);
+        let c: TtlCache<u32, u32> = TtlCache::new("test", 10, Duration::from_secs(60), false);
         for key in 0..200 {
             c.get_or_load::<String, _>(key, || async move { Ok(key) })
                 .await

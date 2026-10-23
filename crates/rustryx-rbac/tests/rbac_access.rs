@@ -9,17 +9,13 @@
 
 mod common;
 
-use std::sync::Arc;
-
-use common::{Env, SpyStore, builtin_principal, principal, resource, selector_grant, view};
+use common::{Env, builtin_principal, open_resource, principal, resource, selector_grant, view};
 use rustryx_core::error::AuthError;
 use rustryx_core::identity::{
     Action, Principal, ROLE_NX_ADMIN, ROLE_NX_ANONYMOUS, ROLE_NX_DEVELOPER,
 };
 use rustryx_core::model::RepoFormat;
 use rustryx_core::ports::auth::{Decision, RbacChecker, ResourceRef};
-use rustryx_rbac::{Rbac, RbacConfig};
-use rustryx_testkit::MemStore;
 
 async fn allowed(env: &Env, p: &Principal, action: Action, r: &ResourceRef) -> bool {
     env.rbac.check(p, action, r).await.unwrap() == Decision::Allow
@@ -29,7 +25,7 @@ async fn allowed(env: &Env, p: &Principal, action: Action, r: &ResourceRef) -> b
 async fn anonymous_reads_through_nx_anonymous_and_never_writes() {
     let env = Env::new();
     let anonymous = Principal::anonymous();
-    let res = resource("public", RepoFormat::Raw, "/x");
+    let res = open_resource("public", RepoFormat::Raw, "/x");
     assert!(allowed(&env, &anonymous, Action::Browse, &res).await);
     assert!(allowed(&env, &anonymous, Action::Read, &res).await);
     assert!(!allowed(&env, &anonymous, Action::Write, &res).await);
@@ -45,23 +41,19 @@ async fn anonymous_reads_through_nx_anonymous_and_never_writes() {
 
 #[tokio::test]
 async fn anonymous_gets_nothing_when_the_store_has_no_nx_anonymous_role() {
-    let store = SpyStore::new(MemStore::new());
-    let rbac = Rbac::new(
-        Arc::new(store.clone()),
-        Arc::new(store),
-        &RbacConfig::default(),
-    );
-    let res = resource("r", RepoFormat::Raw, "/x");
+    let env = Env::bare();
+    let res = open_resource("r", RepoFormat::Raw, "/x");
     for action in [Action::Browse, Action::Read, Action::Write, Action::Delete] {
         assert_eq!(
-            rbac.check(&Principal::anonymous(), action, &res)
+            env.rbac
+                .check(&Principal::anonymous(), action, &res)
                 .await
                 .unwrap(),
             Decision::Deny
         );
     }
     assert!(
-        !rbac
+        !env.rbac
             .can_see_repository(&Principal::anonymous(), "r", RepoFormat::Raw)
             .await
             .unwrap()
@@ -71,17 +63,7 @@ async fn anonymous_gets_nothing_when_the_store_has_no_nx_anonymous_role() {
 #[tokio::test]
 async fn anonymous_access_can_be_narrowed_with_a_custom_nx_anonymous_role() {
     // A store that does not seed the built-ins lets the test define nx-anonymous.
-    let mem = MemStore::new();
-    let store = SpyStore::new(mem);
-    let env = Env {
-        store: store.clone(),
-        bus: rustryx_testkit::MemInvalidationBus::new(),
-        rbac: Rbac::new(
-            Arc::new(store.clone()),
-            Arc::new(store),
-            &RbacConfig::default(),
-        ),
-    };
+    let env = Env::bare();
     let privilege = env
         .privilege("public-read", view("public", None), &[Action::Read])
         .await;
@@ -92,7 +74,7 @@ async fn anonymous_access_can_be_narrowed_with_a_custom_nx_anonymous_role() {
             &env,
             &anonymous,
             Action::Read,
-            &resource("public", RepoFormat::Raw, "/x")
+            &open_resource("public", RepoFormat::Raw, "/x")
         )
         .await
     );
@@ -101,7 +83,7 @@ async fn anonymous_access_can_be_narrowed_with_a_custom_nx_anonymous_role() {
             &env,
             &anonymous,
             Action::Read,
-            &resource("private", RepoFormat::Raw, "/x")
+            &open_resource("private", RepoFormat::Raw, "/x")
         )
         .await
     );
@@ -110,7 +92,7 @@ async fn anonymous_access_can_be_narrowed_with_a_custom_nx_anonymous_role() {
             &env,
             &anonymous,
             Action::Browse,
-            &resource("public", RepoFormat::Raw, "/x")
+            &open_resource("public", RepoFormat::Raw, "/x")
         )
         .await
     );
@@ -354,17 +336,7 @@ async fn selector_privileges_make_a_repository_visible_only_while_the_selector_w
 
 #[tokio::test]
 async fn anonymous_visibility_counts_only_browse_and_read() {
-    let mem = MemStore::new();
-    let store = SpyStore::new(mem);
-    let env = Env {
-        store: store.clone(),
-        bus: rustryx_testkit::MemInvalidationBus::new(),
-        rbac: Rbac::new(
-            Arc::new(store.clone()),
-            Arc::new(store),
-            &RbacConfig::default(),
-        ),
-    };
+    let env = Env::bare();
     let write_only = env
         .privilege("anon-write", view("w", None), &[Action::Write])
         .await;
@@ -385,6 +357,16 @@ async fn anonymous_visibility_counts_only_browse_and_read() {
             .await
             .unwrap()
     );
+}
+
+#[tokio::test]
+async fn the_debug_form_names_the_type_and_shows_no_data() {
+    let env = Env::new();
+    let admin = builtin_principal(ROLE_NX_ADMIN);
+    assert!(env.rbac.is_admin(&admin).await.unwrap());
+    let shown = format!("{:?}", env.rbac);
+    assert!(shown.starts_with("Rbac"), "{shown}");
+    assert!(!shown.contains("privilege"), "{shown}");
 }
 
 #[tokio::test]

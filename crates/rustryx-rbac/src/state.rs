@@ -5,7 +5,8 @@
 //!
 //! - **Version in the key.** Each cache key that depends on stored roles,
 //!   privileges or selectors carries `version`, a counter bumped by every
-//!   invalidation message. A load reads the counter *before* it queries the
+//!   invalidation message that can change them (`Rbac`, `Reset`, and a message
+//!   this build does not know). A load reads the counter *before* it queries the
 //!   store, so a load that was already running when the message arrived stores
 //!   its (possibly stale) result under the old version, where nothing will ever
 //!   look. Without this, a slow load could re-insert old data right after
@@ -24,8 +25,10 @@ use rustryx_core::identity::{ContentSelector, Privilege, ROLE_NX_ADMIN, ROLE_NX_
 use rustryx_core::ids::{ContentSelectorId, RoleId, UserId};
 use rustryx_core::ports::{InvalidationEvent, RoleRepo, SelectorRepo};
 
+use crate::anonymous::AnonymousSwitch;
 use crate::cache::{MAX_DECISION_TTL, TtlCache};
 use crate::config::RbacConfig;
+use crate::metrics;
 use crate::selector::SelectorEngine;
 
 /// Roles the authorizer treats specially, resolved by name in the store.
@@ -78,6 +81,9 @@ pub(crate) struct State<E: SelectorEngine> {
     roles: Arc<dyn RoleRepo>,
     selectors: Arc<dyn SelectorRepo>,
     pub(crate) engine: E,
+    /// The global anonymous switch. Read on every anonymous request and never cached, so
+    /// flipping it takes effect on the next request without waiting for a TTL.
+    pub(crate) anonymous: AnonymousSwitch,
     version: AtomicU64,
     privileges: TtlCache<PrivilegeKey, Arc<[Privilege]>>,
     builtin_roles: TtlCache<(u64, Builtin), Option<RoleId>>,
@@ -104,13 +110,14 @@ impl<E: SelectorEngine> State<E> {
             roles,
             selectors,
             engine,
+            anonymous: AnonymousSwitch::new(config.anonymous_enabled),
             version: AtomicU64::new(0),
-            privileges: TtlCache::new(config.max_privilege_sets, ttl, true),
-            builtin_roles: TtlCache::new(16, ttl, false),
-            selector_rows: TtlCache::new(config.max_selectors, ttl, false),
+            privileges: TtlCache::new("privileges", config.max_privilege_sets, ttl, true),
+            builtin_roles: TtlCache::new("builtin_roles", 16, ttl, false),
+            selector_rows: TtlCache::new("selectors", config.max_selectors, ttl, false),
             // A compiled program is a pure function of its key, so it may live
             // as long as any cached decision.
-            programs: TtlCache::new(config.max_programs, MAX_DECISION_TTL, false),
+            programs: TtlCache::new("programs", config.max_programs, MAX_DECISION_TTL, false),
         }
     }
 
@@ -215,6 +222,7 @@ impl<E: SelectorEngine> State<E> {
 
     /// Applies a cache invalidation message from the bus.
     pub(crate) fn apply(&self, event: &InvalidationEvent) {
+        metrics::invalidation(event);
         match event {
             InvalidationEvent::Rbac => self.drop_stored_data(),
             InvalidationEvent::User(id) => {
@@ -222,11 +230,24 @@ impl<E: SelectorEngine> State<E> {
                 self.privileges
                     .invalidate_where(move |key| key.user == Some(user));
             }
-            InvalidationEvent::Reset => {
-                self.drop_stored_data();
-                self.programs.invalidate_all();
-            }
+            // Membership, group mapping and visibility of projects (`Projects`), and a settings
+            // revision or security policy (`Config`). Nothing this crate caches depends on them
+            // yet: the repository carries its project in `ResourceRef`, no decision here reads a
+            // setting (the anonymous switch has its own handle), and the caches of project roles
+            // (`direct`, `groups`, wave 2 stream B) do not exist. `Projects` drops them here when
+            // they arrive. The version does not move: no key below holds project data, and
+            // bumping it would only throw away privileges that are still right.
+            InvalidationEvent::Projects | InvalidationEvent::Config(_) => {}
+            // `Reset`, and a variant added to core after this build. Not knowing what the
+            // latter changed, drop everything: the rule an N-1 node applies to a payload it
+            // cannot decode.
+            _ => self.reset(),
         }
+    }
+
+    fn reset(&self) {
+        self.drop_stored_data();
+        self.programs.invalidate_all();
     }
 
     /// Bumps the version first, so loads that start from now on use fresh keys,

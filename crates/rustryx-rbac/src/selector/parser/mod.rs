@@ -67,7 +67,7 @@ impl Typed {
             Self::Coordinate => Err(type_error(
                 pos,
                 format!(
-                    "{context} must be a string, use coordinate.group, coordinate.name or coordinate.version"
+                    "{context} must be a string, use coordinate.group, coordinate.name, coordinate.version, coordinate.extension or coordinate.classifier"
                 ),
             )),
             other => Err(type_error(
@@ -290,11 +290,13 @@ impl Parser<'_> {
             "group" | "groupId" => CoordField::Group,
             "name" | "artifactId" => CoordField::Name,
             "version" => CoordField::Version,
+            "extension" => CoordField::Extension,
+            "classifier" => CoordField::Classifier,
             other => {
                 return Err(syntax(
                     pos,
                     format!(
-                        "unknown coordinate field '{other}', use group (groupId), name (artifactId) or version"
+                        "unknown coordinate field '{other}', use group (groupId), name (artifactId), version, extension or classifier"
                     ),
                 ));
             }

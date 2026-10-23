@@ -240,7 +240,7 @@
     { "id": "invalid-regex-method", "expression": "path.matches(\"(\")", "cel_0_15": "accepted at compile, every evaluation fails with a regex error" },
     { "id": "non-boolean", "expression": "path", "cel_0_15": "accepted at compile, evaluates to a string instead of a bool" },
     { "id": "unknown-identifier", "expression": "unknown == \"x\"", "cel_0_15": "accepted at compile, evaluation fails" },
-    { "id": "unknown-coordinate-field", "expression": "coordinate.extension == \"jar\"", "cel_0_15": "accepted at compile, evaluation fails" },
+    { "id": "unknown-coordinate-field", "expression": "coordinate.packaging == \"jar\"", "cel_0_15": "accepted at compile, evaluation fails" },
     { "id": "bare-coordinate", "expression": "coordinate == \"x\"", "cel_0_15": "accepted at compile, evaluates to false" },
     { "id": "unsupported-method", "expression": "path.substring(1) == \"x\"", "cel_0_15": "accepted at compile, evaluation fails (undeclared function)" },
     { "id": "integer-literal", "expression": "format == 1", "cel_0_15": "accepted at compile, evaluation fails" },

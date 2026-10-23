@@ -15,6 +15,7 @@ workspace = true
 rustryx-core.workspace = true
 async-trait.workspace = true
 futures.workspace = true
+metrics.workspace = true
 moka.workspace = true
 regex.workspace = true
 thiserror.workspace = true

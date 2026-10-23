@@ -6,45 +6,30 @@
 
 mod common;
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use common::{
-    Env, SpyStore, builtin_principal, principal, resource, resource_with_coordinate,
-    selector_grant, view,
+    Env, builtin_principal, open_repo, open_resource, principal, repo, resource,
+    resource_with_coordinate, selector_grant, view,
 };
 use rustryx_core::error::AuthError;
 use rustryx_core::identity::{
     Action, Principal, PrivilegeGrant, ROLE_NX_ADMIN, ROLE_NX_ANONYMOUS, ROLE_NX_DEVELOPER,
 };
 use rustryx_core::ids::RoleId;
-use rustryx_core::model::RepoFormat;
-use rustryx_core::names::RepoName;
+use rustryx_core::model::{RepoFormat, Repository};
 use rustryx_core::ports::RoleRepo;
 use rustryx_core::ports::auth::{Decision, RbacChecker, ResourceRef};
-use rustryx_rbac::{Rbac, RbacConfig};
-use rustryx_testkit::{MemInvalidationBus, MemStore};
+use rustryx_rbac::RbacConfig;
 
 const ACTIONS: [Action; 4] = [Action::Browse, Action::Read, Action::Write, Action::Delete];
 
-/// An environment whose store does not seed the built-in roles, so a test can
-/// define `nx-anonymous` (or any built-in name) with exactly the privileges it
-/// wants to prove are not enough.
-fn bare_env() -> Env {
-    let store = SpyStore::new(MemStore::new());
-    Env {
-        store: store.clone(),
-        bus: MemInvalidationBus::new(),
-        rbac: Rbac::new(
-            Arc::new(store.clone()),
-            Arc::new(store),
-            &RbacConfig::default(),
-        ),
-    }
-}
-
 async fn allowed(env: &Env, p: &Principal, action: Action, r: &ResourceRef) -> bool {
     env.rbac.check(p, action, r).await.unwrap() == Decision::Allow
+}
+
+fn names<'a>(visible: &[&'a Repository]) -> Vec<&'a str> {
+    visible.iter().map(|m| m.name.as_str()).collect()
 }
 
 fn not_allowed<T: std::fmt::Debug>(result: &Result<Decision, T>) -> bool {
@@ -55,7 +40,7 @@ fn not_allowed<T: std::fmt::Debug>(result: &Result<Decision, T>) -> bool {
 async fn must_not_allow_anonymous_write() {
     // The most permissive nx-anonymous a misconfiguration can produce: every
     // action on every repository, plus the Admin privilege.
-    let env = bare_env();
+    let env = Env::bare();
     let everything = env
         .privilege("anon-everything", view("*", None), &ACTIONS)
         .await;
@@ -63,7 +48,7 @@ async fn must_not_allow_anonymous_write() {
         .privilege("anon-admin", PrivilegeGrant::Admin, &ACTIONS)
         .await;
     env.role(ROLE_NX_ANONYMOUS, &[everything, admin], &[]).await;
-    let res = resource("any", RepoFormat::Raw, "/x");
+    let res = open_resource("any", RepoFormat::Raw, "/x");
     let anonymous = Principal::anonymous();
     assert!(
         allowed(&env, &anonymous, Action::Read, &res).await,
@@ -84,7 +69,7 @@ async fn must_not_allow_anonymous_write() {
 async fn must_not_allow_anonymous_write_even_when_the_store_is_down() {
     let env = Env::new();
     env.store.inner.set_unavailable(true);
-    let res = resource("any", RepoFormat::Raw, "/x");
+    let res = open_resource("any", RepoFormat::Raw, "/x");
     for action in [Action::Write, Action::Delete] {
         // A definite Deny, decided before any store access: not an error.
         assert_eq!(
@@ -100,7 +85,7 @@ async fn must_not_allow_anonymous_write_even_when_the_store_is_down() {
 
 #[tokio::test]
 async fn must_not_grant_anonymous_the_admin_privilege() {
-    let env = bare_env();
+    let env = Env::bare();
     let admin = env
         .privilege("anon-admin", PrivilegeGrant::Admin, &ACTIONS)
         .await;
@@ -112,7 +97,7 @@ async fn must_not_grant_anonymous_the_admin_privilege() {
                 &env,
                 &anonymous,
                 action,
-                &resource("r", RepoFormat::Raw, "/x")
+                &open_resource("r", RepoFormat::Raw, "/x")
             )
             .await
         );
@@ -130,7 +115,7 @@ async fn must_not_fall_back_to_nx_anonymous_for_an_authenticated_user_without_ro
     // README 8.5: a user with no mapped group is refused, not treated as anonymous.
     let env = Env::new();
     let nobody = principal(&[]);
-    let res = resource("public", RepoFormat::Raw, "/x");
+    let res = open_resource("public", RepoFormat::Raw, "/x");
     assert!(
         allowed(&env, &Principal::anonymous(), Action::Read, &res).await,
         "anonymous can read"
@@ -367,7 +352,8 @@ async fn must_not_allow_on_store_error() {
     let env = Env::new();
     let dev = builtin_principal(ROLE_NX_DEVELOPER);
     let admin = builtin_principal(ROLE_NX_ADMIN);
-    let res = resource("r", RepoFormat::Raw, "/x");
+    // Open, so that the anonymous caller gets past its gates and really reaches the store.
+    let res = open_resource("r", RepoFormat::Raw, "/x");
 
     // Cold caches and a store that is down: every kind of principal is refused.
     env.store.inner.set_unavailable(true);
@@ -533,8 +519,8 @@ async fn must_not_grant_admin_to_a_role_ref_that_only_claims_the_name() {
     let res = resource("r", RepoFormat::Raw, "/x");
     let forged = principal(&[(RoleId::generate(), ROLE_NX_ADMIN)]);
     assert!(
-        forged.is_admin(),
-        "the name based check of Principal::is_admin is fooled"
+        forged.has_role(ROLE_NX_ADMIN),
+        "the name based check of the principal is fooled, which is why nothing consults it"
     );
     for action in ACTIONS {
         assert!(!allowed(&env, &forged, action, &res).await);
@@ -574,23 +560,16 @@ async fn must_not_leak_data_through_group_without_member_rights() {
         .simple_role("reader-of-m1", view("m1", None), &[Action::Read])
         .await;
     let user = principal(&[(reader, "reader-of-m1")]);
-    let members: Vec<RepoName> = ["m1", "m2", "m3"]
+    let members: Vec<Repository> = ["m1", "m2", "m3"]
         .iter()
-        .map(|n| RepoName::parse(n).unwrap())
+        .map(|n| repo(n, RepoFormat::Maven2))
         .collect();
     let visible = env
         .rbac
-        .filter_visible_members(
-            &user,
-            Action::Read,
-            RepoFormat::Maven2,
-            &members,
-            "/a/b.jar",
-            None,
-        )
+        .filter_visible_members(&user, Action::Read, &members, "/a/b.jar", None)
         .await
         .unwrap();
-    assert_eq!(visible, vec![&members[0]]);
+    assert_eq!(names(&visible), ["m1"]);
 
     // Rights on the group itself are not rights on its members.
     let group_reader = env
@@ -608,14 +587,7 @@ async fn must_not_leak_data_through_group_without_member_rights() {
     );
     let visible = env
         .rbac
-        .filter_visible_members(
-            &group_user,
-            Action::Read,
-            RepoFormat::Maven2,
-            &members,
-            "/a/b.jar",
-            None,
-        )
+        .filter_visible_members(&group_user, Action::Read, &members, "/a/b.jar", None)
         .await
         .unwrap();
     assert_eq!(visible.len(), 0);
@@ -624,7 +596,7 @@ async fn must_not_leak_data_through_group_without_member_rights() {
     for p in [&Principal::anonymous(), &principal(&[])] {
         let visible = env
             .rbac
-            .filter_visible_members(p, Action::Write, RepoFormat::Maven2, &members, "/a", None)
+            .filter_visible_members(p, Action::Write, &members, "/a", None)
             .await
             .unwrap();
         assert_eq!(visible.len(), 0);
@@ -645,33 +617,16 @@ async fn must_not_leak_data_through_group_when_the_member_selector_does_not_matc
         )
         .await;
     let user = principal(&[(role, "open-reader")]);
-    let members = vec![
-        RepoName::parse("m1").unwrap(),
-        RepoName::parse("m2").unwrap(),
-    ];
+    let members = vec![repo("m1", RepoFormat::Raw), repo("m2", RepoFormat::Raw)];
     let open = env
         .rbac
-        .filter_visible_members(
-            &user,
-            Action::Read,
-            RepoFormat::Raw,
-            &members,
-            "/open/a",
-            None,
-        )
+        .filter_visible_members(&user, Action::Read, &members, "/open/a", None)
         .await
         .unwrap();
-    assert_eq!(open, vec![&members[1]]);
+    assert_eq!(names(&open), ["m2"]);
     let closed = env
         .rbac
-        .filter_visible_members(
-            &user,
-            Action::Read,
-            RepoFormat::Raw,
-            &members,
-            "/closed/a",
-            None,
-        )
+        .filter_visible_members(&user, Action::Read, &members, "/closed/a", None)
         .await
         .unwrap();
     assert_eq!(closed.len(), 0);
@@ -681,11 +636,40 @@ async fn must_not_leak_data_through_group_when_the_member_selector_does_not_matc
 async fn must_not_return_group_members_when_the_store_fails() {
     let env = Env::new();
     let dev = builtin_principal(ROLE_NX_DEVELOPER);
-    let members = vec![RepoName::parse("m1").unwrap()];
+    let members = vec![open_repo("m1", RepoFormat::Raw)];
     env.store.inner.set_unavailable(true);
     let result = env
         .rbac
-        .filter_visible_members(&dev, Action::Read, RepoFormat::Raw, &members, "/x", None)
+        .filter_visible_members(&dev, Action::Read, &members, "/x", None)
+        .await;
+    assert!(
+        matches!(result, Err(AuthError::Backend { .. })),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn must_not_return_group_members_when_a_selector_lookup_fails_midway() {
+    // The first member is decided from a plain privilege, the second needs the selector
+    // store, which is down: the whole call fails instead of returning the members decided so
+    // far, because a caller that serves from a partial list would serve from a wrong one.
+    let env = Env::new();
+    let selector = env.selector("any", "true").await;
+    let plain = env
+        .privilege("plain", view("m1", None), &[Action::Read])
+        .await;
+    let narrow = env
+        .privilege("narrow", selector_grant("m2", selector), &[Action::Read])
+        .await;
+    let role = env.role("both", &[plain, narrow], &[]).await;
+    let user = principal(&[(role, "both")]);
+    let members = vec![repo("m1", RepoFormat::Raw), repo("m2", RepoFormat::Raw)];
+    env.store
+        .fail_selectors
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let result = env
+        .rbac
+        .filter_visible_members(&user, Action::Read, &members, "/x", None)
         .await;
     assert!(
         matches!(result, Err(AuthError::Backend { .. })),

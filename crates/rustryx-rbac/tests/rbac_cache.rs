@@ -11,13 +11,13 @@
 mod common;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use async_trait::async_trait;
-use common::{Env, SpyStore, builtin_principal, principal, resource, selector_grant, view};
-use rustryx_core::error::StoreError;
-use rustryx_core::identity::{Action, Principal, Privilege, ROLE_NX_DEVELOPER, Role};
+use common::{
+    Env, SlowFirstLoad, anonymous_config, builtin_principal, open_resource, principal, resource,
+    selector_grant, view,
+};
+use rustryx_core::identity::{Action, Principal, ROLE_NX_DEVELOPER};
 use rustryx_core::ids::{RoleId, UserId};
 use rustryx_core::model::RepoFormat;
 use rustryx_core::ports::auth::{Decision, RbacChecker, ResourceRef};
@@ -25,7 +25,6 @@ use rustryx_core::ports::{InvalidationBus, InvalidationEvent, RoleRepo, Selector
 use rustryx_rbac::{InvalidationListener, Rbac, RbacConfig};
 use rustryx_testkit::MemInvalidationBus;
 use time::OffsetDateTime;
-use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 async fn allowed(env: &Env, p: &Principal, action: Action, r: &ResourceRef) -> bool {
@@ -99,7 +98,7 @@ async fn the_order_of_roles_does_not_split_the_cache() {
 #[tokio::test]
 async fn anonymous_checks_share_one_cache_entry() {
     let env = Env::new();
-    let res = resource("r", RepoFormat::Raw, "/x");
+    let res = open_resource("r", RepoFormat::Raw, "/x");
     for _ in 0..3 {
         assert!(allowed(&env, &Principal::anonymous(), Action::Read, &res).await);
     }
@@ -260,6 +259,43 @@ async fn a_message_about_an_unknown_user_changes_nothing() {
 }
 
 #[tokio::test]
+async fn project_and_config_messages_leave_the_privilege_caches_alone() {
+    // Nothing cached here depends on projects or settings yet; dropping the privileges for
+    // them would only turn every project change into a wave of store reads.
+    let env = Env::new();
+    let (listener, cancel) = start_listener(&env);
+    let dev = builtin_principal(ROLE_NX_DEVELOPER);
+    let res = resource("r", RepoFormat::Raw, "/x");
+    assert!(allowed(&env, &dev, Action::Read, &res).await);
+    for event in [InvalidationEvent::Projects, InvalidationEvent::Config(42)] {
+        env.bus.publish(event).await.unwrap();
+    }
+    settle().await;
+    env.rbac.invalidate(&InvalidationEvent::Projects);
+    env.rbac.invalidate(&InvalidationEvent::Config(43));
+    assert!(allowed(&env, &dev, Action::Read, &res).await);
+    assert_eq!(env.store.privilege_reads(), 1);
+    assert_eq!(env.store.role_name_reads(), 1);
+    cancel.cancel();
+    listener.join().await.unwrap();
+}
+
+#[tokio::test]
+async fn the_privilege_caches_still_drop_for_the_messages_that_concern_them() {
+    // The counterpart of the test above: the new arms did not swallow the old ones.
+    let env = Env::new();
+    let dev = builtin_principal(ROLE_NX_DEVELOPER);
+    let res = resource("r", RepoFormat::Raw, "/x");
+    assert!(allowed(&env, &dev, Action::Read, &res).await);
+    env.rbac.invalidate(&InvalidationEvent::Rbac);
+    assert!(allowed(&env, &dev, Action::Read, &res).await);
+    assert_eq!(env.store.privilege_reads(), 2);
+    env.rbac.invalidate(&InvalidationEvent::Reset);
+    assert!(allowed(&env, &dev, Action::Read, &res).await);
+    assert_eq!(env.store.privilege_reads(), 3);
+}
+
+#[tokio::test]
 async fn reset_drops_everything() {
     let env = Env::new();
     let selector = env.selector("any", "true").await;
@@ -396,61 +432,15 @@ async fn an_edited_selector_is_seen_after_the_ttl_without_any_message() {
     assert!(!allowed(&env, &user, Action::Read, &docs).await);
 }
 
-/// Role store whose first `effective_privileges` call reads the data, then
-/// parks until released: a load that is still running when a change arrives.
-struct SlowFirstLoad {
-    inner: SpyStore,
-    park_next: AtomicBool,
-    parked: Arc<Notify>,
-    release: Arc<Notify>,
-}
-
-#[async_trait]
-impl RoleRepo for SlowFirstLoad {
-    async fn get(&self, id: RoleId) -> Result<Option<Role>, StoreError> {
-        RoleRepo::get(&self.inner, id).await
-    }
-    async fn get_by_name(&self, name: &str) -> Result<Option<Role>, StoreError> {
-        self.inner.get_by_name(name).await
-    }
-    async fn list(&self) -> Result<Vec<Role>, StoreError> {
-        RoleRepo::list(&self.inner).await
-    }
-    async fn create(&self, role: &Role) -> Result<(), StoreError> {
-        RoleRepo::create(&self.inner, role).await
-    }
-    async fn update(&self, role: &Role) -> Result<(), StoreError> {
-        RoleRepo::update(&self.inner, role).await
-    }
-    async fn delete(&self, id: RoleId) -> Result<(), StoreError> {
-        RoleRepo::delete(&self.inner, id).await
-    }
-    async fn effective_privileges(&self, roles: &[RoleId]) -> Result<Vec<Privilege>, StoreError> {
-        let snapshot = self.inner.effective_privileges(roles).await;
-        if self.park_next.swap(false, Ordering::SeqCst) {
-            self.parked.notify_one();
-            self.release.notified().await;
-        }
-        snapshot
-    }
-}
-
 #[tokio::test]
 async fn a_load_that_straddles_an_invalidation_cannot_poison_the_cache() {
     let env = Env::new();
-    let parked = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    let slow = SlowFirstLoad {
-        inner: env.store.clone(),
-        park_next: AtomicBool::new(false),
-        parked: parked.clone(),
-        release: release.clone(),
-    };
-    slow.park_next.store(true, Ordering::SeqCst);
+    let slow = SlowFirstLoad::parking(env.store.clone());
+    let (parked, release) = (slow.parked.clone(), slow.release.clone());
     let rbac = Rbac::new(
         Arc::new(slow),
         Arc::new(env.store.clone()),
-        &RbacConfig::default(),
+        &anonymous_config(),
     );
 
     let role = env

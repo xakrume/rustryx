@@ -131,11 +131,7 @@ fn oversized_inputs_are_evaluation_errors() {
     );
     let at_limit = "a".repeat(8192);
     assert_eq!(eval_with(&engine, "true", &at_limit, None), Ok(true));
-    let coordinate = Coordinate {
-        group: Some(huge.clone()),
-        name: None,
-        version: None,
-    };
+    let coordinate = Coordinate::new(Some(huge.clone()), None, None);
     let err = eval_with(&engine, "true", "/x", Some(&coordinate)).unwrap_err();
     assert!(matches!(
         err,
@@ -203,11 +199,7 @@ fn default_step_budget_is_out_of_reach_of_a_maximal_expression() {
 #[test]
 fn unknown_coordinate_parts_name_what_is_missing() {
     let engine = RestrictedEngine::default();
-    let partial = Coordinate {
-        group: None,
-        name: Some("n".into()),
-        version: None,
-    };
+    let partial = Coordinate::new(None, Some("n".into()), None);
     assert_eq!(
         eval_with(&engine, "coordinate.group == \"g\"", "/x", Some(&partial)),
         Err(SelectorEvalError::MissingInput("coordinate.group"))
@@ -315,7 +307,7 @@ fn non_ascii_text_is_handled_by_characters_not_bytes() {
 #[test]
 fn every_repository_format_label_is_visible_to_selectors() {
     let engine = RestrictedEngine::default();
-    for format in RepoFormat::ALL {
+    for &format in RepoFormat::ALL {
         let program = engine
             .compile(&format!("format == \"{}\"", format.as_str()))
             .unwrap();
@@ -361,8 +353,8 @@ fn error_messages_are_readable_and_carry_positions() {
         ("path.trim() == \"x\"", "unsupported method 'trim'"),
         ("path == 1", "unexpected character '1'"),
         (
-            "coordinate.extension == \"jar\"",
-            "unknown coordinate field 'extension'",
+            "coordinate.packaging == \"jar\"",
+            "unknown coordinate field 'packaging'",
         ),
         ("unknown", "unknown identifier 'unknown'"),
         ("path && true", "must be a boolean"),

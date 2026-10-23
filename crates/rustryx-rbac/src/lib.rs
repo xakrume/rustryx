@@ -14,10 +14,11 @@
 //! use std::sync::Arc;
 //!
 //! use rustryx_core::identity::{Action, Principal};
-//! use rustryx_core::model::RepoFormat;
+//! use rustryx_core::model::{RepoFormat, RepoType};
 //! use rustryx_core::ports::RbacChecker;
 //! use rustryx_core::ports::auth::{Decision, ResourceRef};
 //! use rustryx_rbac::{Rbac, RbacConfig};
+//! use rustryx_testkit::fixtures::repository;
 //! use rustryx_testkit::{MemInvalidationBus, MemStore};
 //! use tokio_util::sync::CancellationToken;
 //!
@@ -25,23 +26,21 @@
 //! # async fn main() {
 //! let store = MemStore::with_builtin_roles();
 //! let bus = MemInvalidationBus::new();
-//! let rbac = Rbac::new(
-//!     Arc::new(store.clone()),
-//!     Arc::new(store),
-//!     &RbacConfig::default(),
-//! );
+//! // Anonymous access needs the global switch (here: the config) and the repository flag.
+//! let config = RbacConfig {
+//!     anonymous_enabled: true,
+//!     ..RbacConfig::default()
+//! };
+//! let rbac = Rbac::new(Arc::new(store.clone()), Arc::new(store), &config);
 //!
 //! // Keep the handle and await it on shutdown.
 //! let shutdown = CancellationToken::new();
 //! let listener = rbac.spawn_invalidation_listener(&bus, shutdown.child_token());
 //!
 //! let checker: Arc<dyn RbacChecker> = Arc::new(rbac);
-//! let resource = ResourceRef {
-//!     repository: "public".into(),
-//!     format: RepoFormat::Raw,
-//!     path: "docs/readme.txt".into(),
-//!     coordinate: None,
-//! };
+//! let mut public = repository("public", RepoFormat::Raw, RepoType::Hosted);
+//! public.allow_anonymous = true;
+//! let resource = ResourceRef::for_repository(&public, "docs/readme.txt");
 //! // `nx-anonymous` may read but never write.
 //! let anonymous = Principal::anonymous();
 //! assert_eq!(
@@ -66,15 +65,18 @@
 // Tests may unwrap and expect: a panic is the failure signal there.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod anonymous;
 mod cache;
 mod config;
 mod invalidation;
+pub mod metrics;
 mod path;
 mod rbac;
 pub mod scope;
 pub mod selector;
 mod state;
 
+pub use anonymous::AnonymousSwitch;
 pub use cache::MAX_DECISION_TTL;
 pub use config::RbacConfig;
 pub use invalidation::InvalidationListener;

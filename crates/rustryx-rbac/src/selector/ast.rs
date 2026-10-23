@@ -27,6 +27,10 @@ pub(super) enum CoordField {
     Name,
     /// `coordinate.version`.
     Version,
+    /// `coordinate.extension` (maven: the file extension).
+    Extension,
+    /// `coordinate.classifier` (maven: `sources`, `javadoc`, ...).
+    Classifier,
 }
 
 /// A string valued expression.

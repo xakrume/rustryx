@@ -87,6 +87,14 @@ fn check_input_sizes(
             "coordinate.version",
             coordinate.and_then(|c| c.version.as_deref()),
         ),
+        (
+            "coordinate.extension",
+            coordinate.and_then(|c| c.extension.as_deref()),
+        ),
+        (
+            "coordinate.classifier",
+            coordinate.and_then(|c| c.classifier.as_deref()),
+        ),
     ];
     for (field, value) in fields {
         let len = value.map_or(0, str::len);
@@ -140,6 +148,8 @@ impl<'a> Evaluator<'a> {
             CoordField::Group => (coordinate.group.as_deref(), "coordinate.group"),
             CoordField::Name => (coordinate.name.as_deref(), "coordinate.name"),
             CoordField::Version => (coordinate.version.as_deref(), "coordinate.version"),
+            CoordField::Extension => (coordinate.extension.as_deref(), "coordinate.extension"),
+            CoordField::Classifier => (coordinate.classifier.as_deref(), "coordinate.classifier"),
         };
         value.map_or(StrVal::Missing(name), StrVal::Known)
     }
