@@ -13,6 +13,7 @@
 #![allow(clippy::missing_errors_doc)] // errors are `AuthError` variants documented on the type
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use rustryx_core::error::AuthError;
@@ -48,37 +49,37 @@ impl LocalPasswordAuthenticator {
     /// argon2id parameters) after a successful login.
     ///
     /// Best effort: a login must not fail because the upgrade did. The write is a
-    /// plain `set_password_hash`, so it could overwrite a password changed after
-    /// this login verified the old one. To make that window as small as possible the
-    /// row is re-read and the write skipped when the stored hash is no longer the one
-    /// that was just verified. A compare-and-set in the repository would close it
-    /// completely (reported as a core gap).
-    async fn rehash(&self, user: &User, verified_hash: &str, password: &rustryx_core::Secret) {
-        let fresh = match self.passwords.hash(password).await {
+    /// compare and set on the hash that was just verified
+    /// (`UserRepo::set_password_hash_if`), so a password changed after this login read its
+    /// row is never overwritten with a hash of the OLD password: the swap simply does not
+    /// happen and the change wins. The phase 1 code re-read the row first, which narrowed
+    /// the window but could not close it.
+    async fn rehash(
+        &self,
+        user: &User,
+        verified_hash: &str,
+        password: &rustryx_core::Secret,
+        deadline: Option<Instant>,
+    ) {
+        let fresh = match self.passwords.hash_before(password, deadline).await {
             Ok(hash) => hash,
             Err(error) => {
                 tracing::debug!(user_id = %user.id, %error, "password rehash skipped");
                 return;
             }
         };
-        match self.users.get(user.id).await {
-            Ok(Some(current))
-                if current
-                    .password_hash
-                    .as_ref()
-                    .map(rustryx_core::Secret::expose)
-                    == Some(verified_hash) => {}
-            Ok(_) => {
+        match self
+            .users
+            .set_password_hash_if(user.id, verified_hash, fresh.expose())
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
                 tracing::debug!(user_id = %user.id, "password changed during login, rehash dropped");
-                return;
             }
             Err(error) => {
-                tracing::warn!(user_id = %user.id, %error, "password rehash skipped");
-                return;
+                tracing::warn!(user_id = %user.id, %error, "could not store the upgraded password hash");
             }
-        }
-        if let Err(error) = self.users.set_password_hash(user.id, fresh.expose()).await {
-            tracing::warn!(user_id = %user.id, %error, "could not store the upgraded password hash");
         }
     }
 }
@@ -88,7 +89,7 @@ impl Authenticator for LocalPasswordAuthenticator {
     async fn authenticate(
         &self,
         credentials: &Credentials,
-        _context: &AuthContext,
+        context: &AuthContext,
     ) -> Result<Option<Principal>, AuthError> {
         let Credentials::Basic { username, password } = credentials else {
             return Ok(None);
@@ -115,7 +116,10 @@ impl Authenticator for LocalPasswordAuthenticator {
             .as_ref()
             .map(|hash| hash.expose().to_owned())
             .unwrap_or_default();
-        let verification = self.passwords.verify(password, &stored).await?;
+        let verification = self
+            .passwords
+            .verify_before(password, &stored, context.deadline)
+            .await?;
         let Verification::Valid { needs_rehash } = verification else {
             return Err(AuthError::InvalidCredentials);
         };
@@ -125,28 +129,26 @@ impl Authenticator for LocalPasswordAuthenticator {
             return Err(AuthError::AccountDisabled);
         }
         if needs_rehash {
-            self.rehash(&user, &stored, password).await;
+            self.rehash(&user, &stored, password, context.deadline)
+                .await;
         }
-        Ok(Some(Principal {
-            user_id: Some(user.id),
-            username: user.username,
-            source: UserSource::Local,
-            issuer: None,
-            subject: None,
-            roles: Vec::new(),
-            external_groups: Vec::new(),
-            groups_confirmed_at: None,
-            token_scopes: None,
-            token_id: None,
-            auth_method: AuthMethod::BasicLocal,
-        }))
+        let mut principal =
+            Principal::new(user.username, UserSource::Local, AuthMethod::BasicLocal);
+        principal.user_id = Some(user.id);
+        principal.email = user.email;
+        principal.display_name = user.display_name;
+        Ok(Some(principal))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use rustryx_core::Secret;
+    use rustryx_core::identity::{NewUser, RoleOrigin, RoleRef};
+    use rustryx_core::ids::{RoleId, UserId};
+    use rustryx_core::ports::{Page, PageRequest};
+    use rustryx_core::{Secret, StoreError};
     use rustryx_testkit::{MemStore, fixtures};
+    use time::OffsetDateTime;
 
     use super::*;
     use crate::passwords::{BlockingGate, GateConfig, PasswordConfig};
@@ -353,75 +355,85 @@ mod tests {
         assert_eq!(stored.password_hash.unwrap().expose(), bcrypt_hash);
     }
 
+    struct Racy {
+        inner: MemStore,
+        replace_with: String,
+        writes_seen: std::sync::atomic::AtomicUsize,
+        /// The compare and set itself fails, as a store outage during the upgrade would.
+        fail_the_write: bool,
+    }
+    #[async_trait]
+    impl UserRepo for Racy {
+        async fn get(&self, id: UserId) -> Result<Option<User>, StoreError> {
+            self.inner.get(id).await
+        }
+        async fn find_by_username(&self, u: &str) -> Result<Option<User>, StoreError> {
+            self.inner.find_by_username(u).await
+        }
+        async fn find_external(
+            &self,
+            s: UserSource,
+            i: Option<&str>,
+            sub: Option<&str>,
+        ) -> Result<Option<User>, StoreError> {
+            self.inner.find_external(s, i, sub).await
+        }
+        async fn create(&self, n: &NewUser) -> Result<User, StoreError> {
+            UserRepo::create(&self.inner, n).await
+        }
+        async fn list(&self, p: &PageRequest) -> Result<Page<User>, StoreError> {
+            UserRepo::list(&self.inner, p).await
+        }
+        async fn set_password_hash(&self, id: UserId, h: &str) -> Result<(), StoreError> {
+            self.inner.set_password_hash(id, h).await
+        }
+        async fn set_password_hash_if(
+            &self,
+            id: UserId,
+            old_hash: &str,
+            new_hash: &str,
+        ) -> Result<bool, StoreError> {
+            self.writes_seen
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.fail_the_write {
+                return Err(StoreError::Unavailable("store went away".into()));
+            }
+            // Someone changes the password just before the compare and set arrives.
+            self.inner.set_password_hash(id, &self.replace_with).await?;
+            self.inner
+                .set_password_hash_if(id, old_hash, new_hash)
+                .await
+        }
+        async fn set_enabled(&self, id: UserId, e: bool) -> Result<(), StoreError> {
+            self.inner.set_enabled(id, e).await
+        }
+        async fn set_tokens_valid_after(
+            &self,
+            id: UserId,
+            at: OffsetDateTime,
+        ) -> Result<(), StoreError> {
+            self.inner.set_tokens_valid_after(id, at).await
+        }
+        async fn roles_of(&self, id: UserId) -> Result<Vec<(RoleRef, RoleOrigin)>, StoreError> {
+            self.inner.roles_of(id).await
+        }
+        async fn replace_roles_for_origin(
+            &self,
+            id: UserId,
+            o: RoleOrigin,
+            r: &[RoleId],
+        ) -> Result<(), StoreError> {
+            self.inner.replace_roles_for_origin(id, o, r).await
+        }
+        async fn delete(&self, id: UserId) -> Result<(), StoreError> {
+            UserRepo::delete(&self.inner, id).await
+        }
+    }
+
     #[tokio::test]
     async fn must_not_overwrite_a_password_changed_during_the_login() {
-        // A store that swaps the password between the verification and the rehash.
-        use rustryx_core::StoreError;
-        use rustryx_core::identity::{NewUser, RoleOrigin, RoleRef};
-        use rustryx_core::ids::{RoleId, UserId};
-        use rustryx_core::ports::{Page, PageRequest};
-        use time::OffsetDateTime;
-
-        struct Racy {
-            inner: MemStore,
-            replace_with: String,
-            gets: std::sync::atomic::AtomicUsize,
-        }
-        #[async_trait]
-        impl UserRepo for Racy {
-            async fn get(&self, id: UserId) -> Result<Option<User>, StoreError> {
-                // The first `get` is the rehash re-read: change the password just before it.
-                if self.gets.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-                    self.inner.set_password_hash(id, &self.replace_with).await?;
-                }
-                self.inner.get(id).await
-            }
-            async fn find_by_username(&self, u: &str) -> Result<Option<User>, StoreError> {
-                self.inner.find_by_username(u).await
-            }
-            async fn find_external(
-                &self,
-                s: UserSource,
-                i: Option<&str>,
-                sub: Option<&str>,
-            ) -> Result<Option<User>, StoreError> {
-                self.inner.find_external(s, i, sub).await
-            }
-            async fn create(&self, n: &NewUser) -> Result<User, StoreError> {
-                UserRepo::create(&self.inner, n).await
-            }
-            async fn list(&self, p: &PageRequest) -> Result<Page<User>, StoreError> {
-                UserRepo::list(&self.inner, p).await
-            }
-            async fn set_password_hash(&self, id: UserId, h: &str) -> Result<(), StoreError> {
-                self.inner.set_password_hash(id, h).await
-            }
-            async fn set_enabled(&self, id: UserId, e: bool) -> Result<(), StoreError> {
-                self.inner.set_enabled(id, e).await
-            }
-            async fn set_tokens_valid_after(
-                &self,
-                id: UserId,
-                at: OffsetDateTime,
-            ) -> Result<(), StoreError> {
-                self.inner.set_tokens_valid_after(id, at).await
-            }
-            async fn roles_of(&self, id: UserId) -> Result<Vec<(RoleRef, RoleOrigin)>, StoreError> {
-                self.inner.roles_of(id).await
-            }
-            async fn replace_roles_for_origin(
-                &self,
-                id: UserId,
-                o: RoleOrigin,
-                r: &[RoleId],
-            ) -> Result<(), StoreError> {
-                self.inner.replace_roles_for_origin(id, o, r).await
-            }
-            async fn delete(&self, id: UserId) -> Result<(), StoreError> {
-                UserRepo::delete(&self.inner, id).await
-            }
-        }
-
+        // A store that swaps the password between the verification and the rehash write, the
+        // exact window the phase 1 re-read could not close.
         let env = env();
         let mut new = fixtures::user("gina", UserSource::Local);
         new.password_hash = Some(Secret::new(bcrypt::hash("old secret", 4).unwrap()));
@@ -431,21 +443,96 @@ mod tests {
             .hash(&Secret::new("brand new secret"))
             .await
             .unwrap();
-        let racy = Racy {
+        let racy = Arc::new(Racy {
             inner: env.store.clone(),
             replace_with: changed.expose().to_owned(),
-            gets: std::sync::atomic::AtomicUsize::new(0),
-        };
-        let auth = LocalPasswordAuthenticator::new(Arc::new(racy), Arc::clone(&env.passwords));
+            writes_seen: std::sync::atomic::AtomicUsize::new(0),
+            fail_the_write: false,
+        });
+        let auth = LocalPasswordAuthenticator::new(racy.clone(), Arc::clone(&env.passwords));
         auth.authenticate(&basic("gina", "old secret"), &AuthContext::default())
             .await
             .unwrap()
             .unwrap();
+        assert_eq!(
+            racy.writes_seen.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the upgrade was attempted exactly once, as a compare and set"
+        );
         let stored = UserRepo::get(&env.store, gina.id).await.unwrap().unwrap();
         assert_eq!(
             stored.password_hash.unwrap().expose(),
             changed.expose(),
             "the concurrently set password must survive the rehash"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_upgrade_write_never_fails_the_login() {
+        let env = env();
+        let mut new = fixtures::user("hank", UserSource::Local);
+        let bcrypt_hash = bcrypt::hash("imported secret", 4).unwrap();
+        new.password_hash = Some(Secret::new(bcrypt_hash.clone()));
+        let hank = UserRepo::create(&env.store, &new).await.unwrap();
+        let failing = Arc::new(Racy {
+            inner: env.store.clone(),
+            replace_with: String::new(),
+            writes_seen: std::sync::atomic::AtomicUsize::new(0),
+            fail_the_write: true,
+        });
+        let auth = LocalPasswordAuthenticator::new(failing.clone(), Arc::clone(&env.passwords));
+        let principal = auth
+            .authenticate(&basic("hank", "imported secret"), &AuthContext::default())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(principal.user_id, Some(hank.id));
+        assert_eq!(
+            failing
+                .writes_seen
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        let stored = UserRepo::get(&env.store, hank.id).await.unwrap().unwrap();
+        assert_eq!(
+            stored.password_hash.unwrap().expose(),
+            bcrypt_hash,
+            "the old hash stays and the next login tries again"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_principal_carries_the_profile_of_the_account() {
+        let env = env();
+        add_user(&env, "alice", UserSource::Local, Some("correct horse")).await;
+        let principal = login(&env, "alice", "correct horse")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(principal.email.as_deref(), Some("alice@example.test"));
+        assert_eq!(principal.display_name.as_deref(), Some("alice"));
+        assert!(principal.expires_at.is_none() && principal.external_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn must_not_start_a_hash_after_the_request_deadline() {
+        let env = env();
+        add_user(&env, "alice", UserSource::Local, Some("correct horse")).await;
+        let expired = AuthContext::new().with_deadline(Instant::now());
+        let error = env
+            .auth
+            .authenticate(&basic("alice", "correct horse"), &expired)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AuthError::Overloaded), "{error:?}");
+        let alive =
+            AuthContext::new().with_deadline(Instant::now() + std::time::Duration::from_secs(30));
+        assert!(
+            env.auth
+                .authenticate(&basic("alice", "correct horse"), &alive)
+                .await
+                .unwrap()
+                .is_some()
         );
     }
 

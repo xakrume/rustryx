@@ -688,19 +688,7 @@ pub(crate) fn basic(user: &str, password: &str) -> Credentials {
 
 /// A principal as the chain would hand it to the resolver.
 pub(crate) fn ldap_principal(username: &str) -> Principal {
-    Principal {
-        user_id: None,
-        username: username.to_owned(),
-        source: UserSource::Ldap,
-        issuer: None,
-        subject: None,
-        roles: Vec::new(),
-        external_groups: Vec::new(),
-        groups_confirmed_at: None,
-        token_scopes: None,
-        token_id: None,
-        auth_method: AuthMethod::BasicLdap,
-    }
+    Principal::new(username, UserSource::Ldap, AuthMethod::BasicLdap)
 }
 
 /// A transport whose searches return canned answers in order, for response shapes the

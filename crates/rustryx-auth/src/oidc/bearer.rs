@@ -18,9 +18,13 @@ use super::claims::OidcIdentity;
 use super::validator::{TokenError, TokenValidator, VerifiedToken};
 
 /// A verified access token: the identity plus the instant the token stops being valid.
+///
+/// [`Principal`] now carries the e-mail, the display name and the expiry itself, so the chain
+/// no longer needs this type. It stays for a caller that wants the whole identity (issuer,
+/// subject and groups together) without going through the chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedBearer {
-    /// Identity from the token, including the email that [`Principal`] has no field for.
+    /// Identity from the token.
     pub identity: OidcIdentity,
     /// `exp` of the token. A cache keyed by the token must not outlive this.
     pub expires_at: OffsetDateTime,
@@ -45,9 +49,8 @@ impl OidcBearerAuthenticator {
         Self { validator, clock }
     }
 
-    /// Fully validates an access token and returns its identity. For callers that need more
-    /// than a [`Principal`] (just-in-time provisioning stores the email). A token that is not
-    /// an OIDC access token at all is an error here, unlike in [`Authenticator::authenticate`].
+    /// Fully validates an access token and returns its identity. A token that is not an OIDC
+    /// access token at all is an error here, unlike in [`Authenticator::authenticate`].
     pub async fn validate(&self, token: &str) -> Result<VerifiedBearer, AuthError> {
         let VerifiedToken {
             identity,
@@ -61,21 +64,20 @@ impl OidcBearerAuthenticator {
         })
     }
 
-    fn principal(&self, identity: OidcIdentity) -> Principal {
-        Principal {
-            user_id: None,
-            username: identity.username,
-            source: UserSource::Oidc,
-            issuer: Some(identity.issuer),
-            subject: Some(identity.subject),
-            roles: Vec::new(),
-            external_groups: identity.groups,
-            // The groups come from a token verified a moment ago, so they are confirmed now.
-            groups_confirmed_at: Some(self.clock.now()),
-            token_scopes: None,
-            token_id: None,
-            auth_method: AuthMethod::OidcBearer,
-        }
+    fn principal(&self, identity: OidcIdentity, expires_at: OffsetDateTime) -> Principal {
+        let mut principal =
+            Principal::new(identity.username, UserSource::Oidc, AuthMethod::OidcBearer);
+        principal.issuer = Some(identity.issuer);
+        principal.subject = Some(identity.subject);
+        principal.external_groups = identity.groups;
+        // The groups come from a token verified a moment ago, so they are confirmed now.
+        principal.groups_confirmed_at = Some(self.clock.now());
+        // Both are informational: JIT stores them on a new account, nothing decides on them.
+        principal.email = identity.email;
+        principal.display_name = identity.display_name;
+        // The token's `exp` bounds how long a cache may keep this principal.
+        principal.expires_at = Some(expires_at);
+        principal
     }
 }
 
@@ -92,7 +94,11 @@ impl Authenticator for OidcBearerAuthenticator {
             return Ok(None);
         };
         match self.validator.validate_access(token.expose()).await {
-            Ok(verified) => Ok(Some(self.principal(verified.identity))),
+            Ok(verified) => {
+                let expires_at = OffsetDateTime::from_unix_timestamp(verified.expires_at)
+                    .map_err(|_| AuthError::InvalidToken(TokenError::Claims.reason()))?;
+                Ok(Some(self.principal(verified.identity, expires_at)))
+            }
             // Not a JWT of ours (API token, internal JWT, other issuer): let the chain go on.
             Err(TokenError::NotApplicable) => Ok(None),
             Err(error) => {
@@ -126,9 +132,19 @@ impl GroupResolver for OidcGroupResolver {
                 "principal does not come from oidc".to_owned(),
             ));
         }
-        Ok(ExternalGroups {
-            provider: IdpProvider::Oidc,
-            groups: principal.external_groups.clone(),
-        })
+        // The groups are the ones of the token this request presented, so the confirmation
+        // time is the one the authenticator stamped when it verified that token. A principal
+        // without one was not built from a verified token, and its groups cannot be aged:
+        // fail closed instead of stamping "now" on them.
+        let Some(confirmed_at) = principal.groups_confirmed_at else {
+            return Err(AuthError::GroupLookupFailed(
+                "principal carries no group confirmation".to_owned(),
+            ));
+        };
+        Ok(ExternalGroups::new(
+            IdpProvider::Oidc,
+            principal.external_groups.clone(),
+            confirmed_at,
+        ))
     }
 }

@@ -109,8 +109,11 @@ impl JitProvisioner {
     }
 
     /// Returns the account of an externally authenticated principal, creating it when
-    /// the mode allows. Fails with `AccountDisabled` for a disabled account or an
-    /// identity that may not be provisioned, and `UsernameConflict` on a name clash.
+    /// the mode allows. A new account stores the e-mail address and display name the
+    /// principal carries (informational, never used to find or link an account). Fails with
+    /// `AccountDisabled` for a disabled account, `AccessDenied` for an identity that may not
+    /// be provisioned (no account is the answer, not a disabled one), and `UsernameConflict`
+    /// on a name clash.
     pub async fn provision(&self, principal: &Principal) -> Result<User, AuthError> {
         match principal.source {
             UserSource::Oidc => self.provision_oidc(principal).await,
@@ -154,8 +157,8 @@ impl JitProvisioner {
             source: UserSource::Oidc,
             issuer: Some(issuer.to_owned()),
             subject: Some(subject.to_owned()),
-            email: None,
-            display_name: None,
+            email: principal.email.clone(),
+            display_name: principal.display_name.clone(),
             password_hash: None,
         };
         match self.users.create(&new).await {
@@ -193,8 +196,8 @@ impl JitProvisioner {
             source: UserSource::Ldap,
             issuer: None,
             subject: None,
-            email: None,
-            display_name: None,
+            email: principal.email.clone(),
+            display_name: principal.display_name.clone(),
             password_hash: None,
         };
         match self.users.create(&new).await {
@@ -234,7 +237,7 @@ impl JitProvisioner {
             mode = ?self.config.mode,
             "external login refused: the account is not provisioned"
         );
-        Err(AuthError::AccountDisabled)
+        Err(AuthError::AccessDenied("account is not provisioned"))
     }
 
     /// Roles of origin `manual` assigned to the user.

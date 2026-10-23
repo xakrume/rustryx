@@ -21,8 +21,12 @@ use super::net::NetTransport;
 use super::pool::{PooledConnection, ServicePool};
 use super::stats::{Counter, LdapStats};
 use super::tls::TlsSetupError;
-use super::transport::{LdapConnection, LdapTransport, SearchRequest, SearchScope, TransportError};
+use super::transport::{
+    LdapConnection, LdapTransport, SearchRequest, SearchResponse, SearchScope, TransportError,
+    result_code,
+};
 use super::user::{DirectoryUser, UserLookup};
+use crate::telemetry::{self, RequestResult};
 
 /// RDN of the account the decoy bind targets. It is never expected to exist, and the
 /// result of that bind is ignored even if it does.
@@ -63,6 +67,9 @@ pub(crate) struct Active {
 /// [`LdapGroupResolver::new`](super::LdapGroupResolver::new).
 pub struct LdapService {
     stats: Arc<LdapStats>,
+    /// The injected clock, kept even by a disabled service: the resolver stamps the
+    /// confirmation time of the (empty) answer for a principal that is not an LDAP one.
+    pub(crate) clock: Arc<dyn Clock>,
     pub(crate) active: Option<Active>,
 }
 
@@ -78,7 +85,7 @@ impl LdapService {
     ) -> Result<Arc<Self>, LdapInitError> {
         config.validate()?;
         if !config.enabled {
-            return Ok(Arc::new(Self::disabled()));
+            return Ok(Arc::new(Self::disabled(clock)));
         }
         let settings = config.settings()?;
         let transport = NetTransport::from_settings(&settings).await?;
@@ -98,15 +105,16 @@ impl LdapService {
     ) -> Result<Arc<Self>, LdapConfigError> {
         config.validate()?;
         if !config.enabled {
-            return Ok(Arc::new(Self::disabled()));
+            return Ok(Arc::new(Self::disabled(clock)));
         }
         let settings = config.settings()?;
         Ok(Arc::new(Self::enabled(settings, transport, clock)))
     }
 
-    fn disabled() -> Self {
+    fn disabled(clock: Arc<dyn Clock>) -> Self {
         Self {
             stats: Arc::new(LdapStats::default()),
+            clock,
             active: None,
         }
     }
@@ -130,6 +138,7 @@ impl LdapService {
         let user_binds = Semaphore::new(settings.max_user_binds);
         Self {
             stats: Arc::clone(&stats),
+            clock: Arc::clone(&clock),
             active: Some(Active {
                 settings,
                 transport,
@@ -175,40 +184,80 @@ impl Active {
         conn: &mut PooledConnection,
         login: &str,
     ) -> Result<UserLookup, LdapError> {
+        let request = self.user_request(
+            self.settings.user_base_dn.clone(),
+            SearchScope::Subtree,
+            login,
+        );
+        let response = conn.search(&request).await?;
+        Ok(self.interpret_user_response(response, login))
+    }
+
+    /// Reads the user entry at a DN learned earlier (a login, or the last refresh) instead of
+    /// searching the subtree for it.
+    ///
+    /// The DN is only a hint and the filter still decides: the request is the very same user
+    /// filter, rendered with this login, but with the entry as the base and the scope `Base`.
+    /// An account that was disabled, deleted or renamed since, or an entry that never was this
+    /// user's (a forged hint), therefore answers `NotFound` exactly like a subtree search
+    /// would, and "the user search is the place to exclude disabled accounts" (docs/ldap.md)
+    /// keeps holding at every refresh. `noSuchObject` is the same answer. The caller falls
+    /// back to the subtree search on `NotFound`, because a moved entry is not a gone user.
+    pub(crate) async fn find_user_at(
+        &self,
+        conn: &mut PooledConnection,
+        dn: &str,
+        login: &str,
+    ) -> Result<UserLookup, LdapError> {
+        let request = self.user_request(dn.to_owned(), SearchScope::Base, login);
+        match conn.search(&request).await {
+            Ok(response) => Ok(self.interpret_user_response(response, login)),
+            Err(LdapError::Transport(TransportError::Server { code, .. }))
+                if code == result_code::NO_SUCH_OBJECT =>
+            {
+                Ok(UserLookup::NotFound)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn user_request(&self, base: String, scope: SearchScope, login: &str) -> SearchRequest {
         let settings = &self.settings;
         let mut attributes = vec![settings.username_attribute.clone()];
         if settings.groups.strategy == LdapGroupStrategy::MemberOf {
             attributes.push(settings.groups.member_of_attribute.clone());
         }
-        let request = SearchRequest {
-            base: settings.user_base_dn.clone(),
-            scope: SearchScope::Subtree,
+        SearchRequest {
+            base,
+            scope,
             filter: settings.user_filter.render(Substitution {
                 username: login,
                 dn: "",
             }),
             attributes,
             size_limit: Some(2),
-        };
-        let response = conn.search(&request).await?;
+        }
+    }
+
+    fn interpret_user_response(&self, response: SearchResponse, login: &str) -> UserLookup {
         if response.entries.is_empty() {
-            return Ok(UserLookup::NotFound);
+            return UserLookup::NotFound;
         }
         if response.entries.len() != 1 || response.size_limit_exceeded {
             self.stats.bump(Counter::AmbiguousUser);
-            return Ok(UserLookup::Ambiguous);
+            return UserLookup::Ambiguous;
         }
         let entry = response.entries.into_iter().next().unwrap_or_default();
         // An entry without a DN cannot be bound as, and an empty DN plus a password is
         // the shape of an anonymous bind: treat it as no user.
         if entry.dn.trim().is_empty() {
-            return Ok(UserLookup::NotFound);
+            return UserLookup::NotFound;
         }
-        Ok(UserLookup::Found(DirectoryUser::from_entry(
+        UserLookup::Found(DirectoryUser::from_entry(
             entry,
             login,
-            &settings.username_attribute,
-        )))
+            &self.settings.username_attribute,
+        ))
     }
 
     /// Verifies a password by binding as `dn` on a brand new connection.
@@ -230,6 +279,22 @@ impl Active {
             .acquire()
             .await
             .map_err(|_| LdapError::PoolClosed)?;
+        let verdict = self.bind_on_new_connection(dn, password).await;
+        // A refused password is the directory doing its job: only a failure to get an answer
+        // counts as an error.
+        telemetry::ldap_request(
+            verdict
+                .as_ref()
+                .map_or_else(LdapError::request_result, |_| RequestResult::Ok),
+        );
+        verdict
+    }
+
+    async fn bind_on_new_connection(
+        &self,
+        dn: &str,
+        password: &str,
+    ) -> Result<BindVerdict, LdapError> {
         let mut conn = self.connect().await?;
         let outcome = timeout(self.settings.timeouts.bind, conn.simple_bind(dn, password)).await;
         self.close(conn).await;

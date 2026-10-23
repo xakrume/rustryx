@@ -8,7 +8,8 @@ use std::fmt;
 
 use rustryx_core::AuthError;
 
-use super::transport::TransportError;
+use super::transport::{TransportError, result_code};
+use crate::telemetry::RequestResult;
 
 /// A network operation that has its own timeout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +50,24 @@ pub(crate) enum LdapError {
 }
 
 impl LdapError {
+    /// How this failure counts in `ldap_requests_total`. A server answer that only says "there
+    /// is no such entry" is the directory working, and so is a refused password (that case
+    /// never becomes an `LdapError`); a timeout and every transport failure are what
+    /// `RustryxLdapErrors` counts.
+    pub(crate) fn request_result(&self) -> RequestResult {
+        match self {
+            Self::Timeout(_) => RequestResult::Timeout,
+            Self::Transport(TransportError::Server { code, .. })
+                if *code == result_code::NO_SUCH_OBJECT =>
+            {
+                RequestResult::Ok
+            }
+            Self::Transport(_) | Self::ServiceBind(_) | Self::PoolClosed | Self::CircuitOpen => {
+                RequestResult::Error
+            }
+        }
+    }
+
     /// The error a caller of `Authenticator` is allowed to see.
     pub(crate) fn into_provider_error(self) -> AuthError {
         let message = match self {

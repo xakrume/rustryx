@@ -1,7 +1,7 @@
 //! Group handling end to end: from the token claim to the principal and the resolver.
 
 use rustryx_core::AuthError;
-use rustryx_core::identity::{IdpProvider, UserSource};
+use rustryx_core::identity::{IdpProvider, ROLE_NX_ADMIN, UserSource};
 use rustryx_core::ports::GroupResolver;
 use serde_json::{Value, json};
 
@@ -60,7 +60,7 @@ async fn must_not_derive_groups_from_realm_or_client_roles() {
         .unwrap();
     assert_empty(&principal.external_groups);
     assert_empty(&principal.roles);
-    assert!(!principal.is_admin());
+    assert!(!principal.has_role(ROLE_NX_ADMIN));
 }
 
 #[tokio::test]

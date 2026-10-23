@@ -33,6 +33,7 @@ use super::stats::{Counter, LdapStats};
 use super::transport::{
     LdapConnection, LdapTransport, SearchRequest, SearchResponse, TransportError,
 };
+use crate::telemetry::{self, RequestResult};
 
 struct IdleConnection {
     conn: Box<dyn LdapConnection>,
@@ -150,6 +151,11 @@ impl ServicePool {
             return Err(LdapError::CircuitOpen);
         };
         let result = self.open_unguarded().await;
+        telemetry::ldap_request(
+            result
+                .as_ref()
+                .map_or_else(LdapError::request_result, |_| RequestResult::Ok),
+        );
         match &result {
             Ok(_) => ticket.succeed(),
             Err(error) => {
@@ -216,7 +222,7 @@ impl PooledConnection {
             return Err(LdapError::Transport(TransportError::Closed));
         };
         self.broken = true;
-        match timeout(limit, conn.search(request)).await {
+        let outcome = match timeout(limit, conn.search(request)).await {
             Ok(Ok(response)) => {
                 self.broken = false;
                 Ok(response)
@@ -226,7 +232,13 @@ impl PooledConnection {
                 Err(LdapError::Transport(error))
             }
             Err(_) => Err(LdapError::Timeout(Operation::Search)),
-        }
+        };
+        telemetry::ldap_request(
+            outcome
+                .as_ref()
+                .map_or_else(LdapError::request_result, |_| RequestResult::Ok),
+        );
+        outcome
     }
 }
 

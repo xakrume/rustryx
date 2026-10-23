@@ -101,12 +101,15 @@ fn now_seconds(env: &Env) -> i64 {
     env.clock.now().unix_timestamp()
 }
 
+/// A well formed `tid` that this service never issued.
+const FORGED_TID: &str = "0197f2c2-0000-7000-8000-000000000001";
+
 fn claims_for(env: &Env) -> Value {
     let now = now_seconds(env);
     json!({
         "iss": DEFAULT_ISSUER,
         "sub": env.user.id.to_string(),
-        "tid": "forged-tid",
+        "tid": FORGED_TID,
         "iat": now,
         "exp": now + 600,
     })
@@ -517,6 +520,36 @@ async fn must_not_accept_a_revoked_tid() {
 }
 
 #[tokio::test]
+async fn must_not_leave_a_session_alive_when_its_tid_is_respelled_for_revocation() {
+    // The list is keyed by `Uuid`, so the hyphenated, upper case and urn spellings of one id
+    // are the same revocation and none of them can slip past it.
+    let env = env().await;
+    let issued = issue(&env);
+    let respelled = format!("urn:uuid:{}", issued.tid.to_uppercase());
+    env.service
+        .revoke(&respelled, issued.expires_at)
+        .await
+        .unwrap();
+    let error = authenticate(&env, issued.token.expose()).await.unwrap_err();
+    assert!(matches!(error, AuthError::TokenRevoked), "{error:?}");
+}
+
+#[tokio::test]
+async fn must_not_revoke_under_a_tid_that_is_not_a_uuid() {
+    let env = env().await;
+    let until = now_seconds(&env) + 60;
+    let until = OffsetDateTime::from_unix_timestamp(until).unwrap();
+    for bad in ["", "not-a-uuid", "x".repeat(65).as_str()] {
+        let error = env.service.revoke(bad, until).await.unwrap_err();
+        assert!(
+            matches!(error, AuthError::InvalidToken("malformed tid")),
+            "{bad:?}: {error:?}"
+        );
+    }
+    assert!(env.revoked.is_empty(), "nothing was stored for a bad id");
+}
+
+#[tokio::test]
 async fn must_fail_closed_when_the_revocation_list_or_store_is_down() {
     let env = env().await;
     let issued = issue(&env);
@@ -526,7 +559,12 @@ async fn must_fail_closed_when_the_revocation_list_or_store_is_down() {
         matches!(error, AuthError::ProviderUnavailable(_)),
         "{error:?}"
     );
-    assert!(env.service.revoke("x", issued.expires_at).await.is_err());
+    assert!(
+        env.service
+            .revoke(&issued.tid, issued.expires_at)
+            .await
+            .is_err()
+    );
     env.revoked.set_unavailable(false);
     authenticate(&env, issued.token.expose())
         .await
@@ -643,6 +681,7 @@ async fn must_not_accept_malformed_claims() {
         ("sub", json!("not-a-uuid"), "malformed subject"),
         ("tid", json!(""), "malformed tid"),
         ("tid", json!("t".repeat(65)), "malformed tid"),
+        ("tid", json!("forged-tid"), "malformed tid"),
         ("exp", json!(now), "exp is not after iat"),
         ("iat", json!(now + 6), "iat is in the future"),
         ("iat", json!(i64::MAX), "timestamp out of range"),
@@ -730,36 +769,6 @@ async fn must_not_leak_token_or_key_material_in_debug_output() {
     assert!(!rendered.contains(issued.token.expose().split('.').nth(2).unwrap()));
     assert!(rendered.contains("REDACTED"));
     assert!(rendered.contains(KID));
-}
-
-#[test]
-fn unverified_expiry_reads_exp_only_when_present_and_sane() {
-    let token = format!(
-        "{}.{}.sig",
-        segment(&json!({"alg": "RS256"})),
-        segment(&json!({"exp": 1_800_000_000}))
-    );
-    assert_eq!(
-        unverified_expiry(&token),
-        Some(OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap())
-    );
-    for bad in [
-        String::new(),
-        "only-one".to_owned(),
-        format!(
-            "{}.{}.sig",
-            segment(&json!({})),
-            segment(&json!({"exp": "soon"}))
-        ),
-        format!("{}.{}.sig", segment(&json!({})), segment(&json!({}))),
-        format!(
-            "{}.{}.sig",
-            segment(&json!({})),
-            segment(&json!({"exp": i64::MAX}))
-        ),
-    ] {
-        assert_eq!(unverified_expiry(&bad), None, "{bad}");
-    }
 }
 
 #[test]

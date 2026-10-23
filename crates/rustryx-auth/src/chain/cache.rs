@@ -140,19 +140,9 @@ mod tests {
     use super::*;
 
     fn principal(user: UserId) -> Principal {
-        Principal {
-            user_id: Some(user),
-            username: "u".into(),
-            source: UserSource::Local,
-            issuer: None,
-            subject: None,
-            roles: Vec::new(),
-            external_groups: Vec::new(),
-            groups_confirmed_at: None,
-            token_scopes: None,
-            token_id: None,
-            auth_method: AuthMethod::InternalJwt,
-        }
+        let mut principal = Principal::new("u", UserSource::Local, AuthMethod::InternalJwt);
+        principal.user_id = Some(user);
+        principal
     }
 
     fn now() -> OffsetDateTime {

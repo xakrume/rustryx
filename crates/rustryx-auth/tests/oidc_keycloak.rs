@@ -23,7 +23,7 @@ use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair};
 use reqwest::header::{COOKIE, LOCATION, SET_COOKIE};
 use reqwest::{Client, Response, StatusCode};
 use rustryx_auth::oidc::{OidcConfig, OidcProvider, UiClientConfig};
-use rustryx_core::identity::{AuthContext, AuthMethod, Credentials, UserSource};
+use rustryx_core::identity::{AuthContext, AuthMethod, Credentials, ROLE_NX_ADMIN, UserSource};
 use rustryx_core::ports::Authenticator;
 use rustryx_core::{AuthError, Secret};
 use serde_json::Value;
@@ -395,7 +395,7 @@ async fn run_steps(keycloak: &Keycloak, realm: &Value, tls: &Tls) {
     );
     assert_eq!(principal.external_groups, ["/rustryx/ci/demo"]);
     assert!(
-        !principal.is_admin(),
+        !principal.has_role(ROLE_NX_ADMIN),
         "roles are not decided by the authenticator"
     );
 

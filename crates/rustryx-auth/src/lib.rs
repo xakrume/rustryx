@@ -15,4 +15,5 @@ pub mod ldap;
 pub mod login_guard;
 pub mod oidc;
 pub mod passwords;
+pub mod telemetry;
 pub mod tokens;

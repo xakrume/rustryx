@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use rustryx_core::error::AuthError;
-use rustryx_core::identity::{IdpProvider, RoleOrigin, UserSource};
+use rustryx_core::identity::{IdpProvider, ROLE_NX_ADMIN, RoleOrigin, UserSource};
 use rustryx_core::ports::UserRepo;
 use rustryx_testkit::fixtures;
 
@@ -67,7 +67,7 @@ async fn must_not_grant_nx_admin_through_near_miss_groups_in_a_bearer_token() {
         );
         let error = h.bearer(&token).await.unwrap_err();
         assert!(
-            matches!(error, AuthError::GroupLookupFailed(_)),
+            matches!(error, AuthError::AccessDenied(_)),
             "{near_miss}: {error:?}"
         );
     }
@@ -80,7 +80,7 @@ async fn must_not_grant_nx_admin_through_near_miss_groups_in_a_bearer_token() {
         ))
         .await
         .unwrap();
-    assert!(admin.is_admin());
+    assert!(admin.has_role(ROLE_NX_ADMIN));
     assert_eq!(admin.external_groups, [ADMIN_PATH]);
 }
 
@@ -103,10 +103,7 @@ async fn must_not_treat_realm_or_client_roles_as_groups() {
         parts[1] = engine.encode(serde_json::to_vec(&claims).unwrap());
     }
     let error = h.bearer(&parts.join(".")).await.unwrap_err();
-    assert!(
-        matches!(error, AuthError::GroupLookupFailed(_)),
-        "{error:?}"
-    );
+    assert!(matches!(error, AuthError::AccessDenied(_)), "{error:?}");
 }
 
 #[tokio::test]
@@ -127,7 +124,7 @@ async fn empty_groups_remove_oidc_roles_for_that_request_and_do_not_fall_back_to
     let without = oidc_token("carol", "sub-c", &[], h.exp_in(300));
     let error = h.bearer(&without).await.unwrap_err();
     assert!(
-        matches!(error, AuthError::GroupLookupFailed(_)),
+        matches!(error, AuthError::AccessDenied(_)),
         "the stored `readers` row must not be read back as a grant: {error:?}"
     );
 }
@@ -172,10 +169,7 @@ async fn must_not_read_persisted_oidc_rows_as_roles() {
         ))
         .await
         .unwrap_err();
-    assert!(
-        matches!(error, AuthError::GroupLookupFailed(_)),
-        "{error:?}"
-    );
+    assert!(matches!(error, AuthError::AccessDenied(_)), "{error:?}");
     // The denial also cleared the stale row.
     assert_eq!(stored_origins(&h, "carol").await.len(), 0);
 }
@@ -241,7 +235,7 @@ async fn manual_roles_supplement_external_ones_only_when_enabled_and_never_with_
             &["readers"]
         };
         assert_eq!(names(&principal), expected, "supplement = {supplement}");
-        assert!(!principal.is_admin());
+        assert!(!principal.has_role(ROLE_NX_ADMIN));
         // Persisting the external rows leaves the manual ones alone.
         let origins = stored_origins(&h, "carol").await;
         assert!(origins.contains(&("extra".to_owned(), RoleOrigin::Manual)));
@@ -265,13 +259,15 @@ async fn ldap_roles_follow_the_directory_on_every_login() {
     h.ldap_resolver
         .set(Answer::Groups(vec!["cn=other,ou=groups".into()]));
     let error = h.basic("bob", "ldap secret").await.unwrap_err();
-    assert!(
-        matches!(error, AuthError::GroupLookupFailed(_)),
-        "{error:?}"
-    );
+    assert!(matches!(error, AuthError::AccessDenied(_)), "{error:?}");
 
     h.ldap_resolver.set(Answer::Groups(vec![ADMIN_DN.into()]));
-    assert!(h.basic("bob", "ldap secret").await.unwrap().is_admin());
+    assert!(
+        h.basic("bob", "ldap secret")
+            .await
+            .unwrap()
+            .has_role(ROLE_NX_ADMIN)
+    );
 }
 
 #[tokio::test]
@@ -286,7 +282,7 @@ async fn must_not_grant_nx_admin_for_near_miss_ldap_dns() {
         h.ldap_resolver.set(Answer::Groups(vec![near_miss.into()]));
         let error = h.basic("bob", "ldap secret").await.unwrap_err();
         assert!(
-            matches!(error, AuthError::GroupLookupFailed(_)),
+            matches!(error, AuthError::AccessDenied(_)),
             "{near_miss}: {error:?}"
         );
     }
@@ -330,7 +326,10 @@ async fn an_empty_ldap_group_list_is_a_valid_answer_and_is_denied_by_the_mapping
     h.add_ldap_user("bob", "ldap secret");
     h.ldap_resolver.set(Answer::Groups(Vec::new()));
     let error = h.basic("bob", "ldap secret").await.unwrap_err();
-    assert!(matches!(error, AuthError::GroupLookupFailed(msg) if msg.contains("access denied")));
+    assert!(
+        matches!(error, AuthError::AccessDenied(reason) if reason.contains("no mapped group")),
+        "{error:?}"
+    );
 }
 
 #[tokio::test]
@@ -478,10 +477,10 @@ async fn manual_provisioning_mode_refuses_unknown_external_identities() {
         .bearer(&oidc_token("carol", "sub-c", &[ADMIN_PATH], h.exp_in(300)))
         .await
         .unwrap_err();
-    assert!(matches!(error, AuthError::AccountDisabled), "{error:?}");
+    assert!(matches!(error, AuthError::AccessDenied(_)), "{error:?}");
     h.add_ldap_user("bob", "ldap secret");
     let error = h.basic("bob", "ldap secret").await.unwrap_err();
-    assert!(matches!(error, AuthError::AccountDisabled), "{error:?}");
+    assert!(matches!(error, AuthError::AccessDenied(_)), "{error:?}");
 }
 
 #[tokio::test]

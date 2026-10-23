@@ -44,13 +44,13 @@ use rustryx_core::identity::{
     API_TOKEN_PREFIX, AuthContext, AuthMethod, Credentials, Principal, User,
 };
 use rustryx_core::ids::UserId;
-use rustryx_core::ports::{Authenticator, Clock, UserRepo};
+use rustryx_core::ports::{Authenticator, Clock, RevokedTokenRepo, UserRepo};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 pub use self::keys::{KeyError, KeyRing, MAX_PREVIOUS_KEYS};
-pub use self::revocation::{MemRevokedTokens, RevokedTokenStore};
+pub use self::revocation::MemRevokedTokens;
 use crate::passwords::errmap::store_failure;
 
 /// Absolute session maximum (security spec: 8 hours). No token is signed or
@@ -65,7 +65,8 @@ pub const DEFAULT_ISSUER: &str = "rustryx";
 pub const DEFAULT_CLOCK_SKEW: Duration = Duration::from_secs(5);
 /// Longest token inspected at all. The HTTP layer caps header size far below this.
 const MAX_TOKEN_BYTES: usize = 16 * 1024;
-/// Longest `tid`.
+/// Longest `tid` text accepted before parsing (a hyphenated UUID is 36 characters; the
+/// longest spelling `Uuid::parse_str` accepts is the 45 character `urn:uuid:` form).
 const MAX_TID_CHARS: usize = 64;
 
 /// Settings of the internal JWT.
@@ -165,6 +166,15 @@ struct Claims {
     gat: Option<i64>,
 }
 
+/// The revocation list is keyed by `Uuid`. Every `tid` this service signs is a UUID, so a
+/// signed token whose `tid` is something else was not issued by this code and is refused.
+fn parse_tid(tid: &str) -> Result<Uuid, AuthError> {
+    if tid.is_empty() || tid.chars().count() > MAX_TID_CHARS {
+        return Err(AuthError::InvalidToken("malformed tid"));
+    }
+    Uuid::parse_str(tid).map_err(|_| AuthError::InvalidToken("malformed tid"))
+}
+
 fn timestamp(seconds: i64) -> Result<OffsetDateTime, AuthError> {
     OffsetDateTime::from_unix_timestamp(seconds)
         .map_err(|_| AuthError::InvalidToken("timestamp out of range"))
@@ -181,7 +191,7 @@ pub struct InternalJwtService {
     config: InternalJwtConfig,
     clock: Arc<dyn Clock>,
     users: Arc<dyn UserRepo>,
-    revoked: Arc<dyn RevokedTokenStore>,
+    revoked: Arc<dyn RevokedTokenRepo>,
 }
 
 impl std::fmt::Debug for InternalJwtService {
@@ -201,7 +211,7 @@ impl InternalJwtService {
         config: InternalJwtConfig,
         clock: Arc<dyn Clock>,
         users: Arc<dyn UserRepo>,
-        revoked: Arc<dyn RevokedTokenStore>,
+        revoked: Arc<dyn RevokedTokenRepo>,
     ) -> Self {
         Self {
             ring: ArcSwap::from_pointee(ring),
@@ -269,7 +279,12 @@ impl InternalJwtService {
     }
 
     /// Ends one session: its `tid` is refused from now on, until `until` (its `exp`).
+    ///
+    /// `tid` is the id [`IssuedJwt::tid`] returned. A value that is not a UUID is refused:
+    /// the revocation list is keyed by `Uuid`, and a malformed id that was silently stored
+    /// under some other key would leave the session alive while the caller believes it ended.
     pub async fn revoke(&self, tid: &str, until: OffsetDateTime) -> Result<(), AuthError> {
+        let tid = parse_tid(tid)?;
         self.revoked
             .revoke(tid, until)
             .await
@@ -298,7 +313,7 @@ impl InternalJwtService {
         }
         let revoked = self
             .revoked
-            .is_revoked(&claims.tid)
+            .is_revoked(facts.tid)
             .await
             .map_err(|error| store_failure("jwt revocation lookup", error))?;
         if revoked {
@@ -376,9 +391,7 @@ impl InternalJwtService {
             .sub
             .parse::<UserId>()
             .map_err(|_| AuthError::InvalidToken("malformed subject"))?;
-        if claims.tid.is_empty() || claims.tid.chars().count() > MAX_TID_CHARS {
-            return Err(AuthError::InvalidToken("malformed tid"));
-        }
+        let tid = parse_tid(&claims.tid)?;
         let groups = match (&claims.grp, claims.gat) {
             (None, None) => None,
             (Some(groups), Some(confirmed)) => {
@@ -400,6 +413,7 @@ impl InternalJwtService {
         };
         Ok(ClaimFacts {
             user_id,
+            tid,
             issued_at,
             expires_at,
             groups,
@@ -409,6 +423,7 @@ impl InternalJwtService {
 
 struct ClaimFacts {
     user_id: UserId,
+    tid: Uuid,
     issued_at: OffsetDateTime,
     expires_at: OffsetDateTime,
     groups: Option<GroupSnapshot>,
@@ -446,13 +461,6 @@ fn peek(token: &str) -> Option<Peek> {
 fn decode_json(segment: &str) -> Option<serde_json::Value> {
     let bytes = URL_SAFE_NO_PAD.decode(segment).ok()?;
     serde_json::from_slice(&bytes).ok()
-}
-
-/// `exp` of a JWT that something else already verified, for sizing a cache entry.
-pub(crate) fn unverified_expiry(token: &str) -> Option<OffsetDateTime> {
-    let payload = decode_json(token.split('.').nth(1)?)?;
-    let seconds = payload.get("exp")?.as_i64()?;
-    OffsetDateTime::from_unix_timestamp(seconds).ok()
 }
 
 /// `Authenticator` for `Bearer` internal JWTs.
@@ -502,19 +510,17 @@ impl Authenticator for InternalJwtAuthenticator {
             Some(snapshot) => (snapshot.groups, Some(snapshot.confirmed_at)),
             None => (Vec::new(), None),
         };
-        Ok(Some(Principal {
-            user_id: Some(user.id),
-            username: user.username,
-            source: user.source,
-            issuer: user.issuer,
-            subject: user.subject,
-            roles: Vec::new(),
-            external_groups,
-            groups_confirmed_at,
-            token_scopes: None,
-            token_id: None,
-            auth_method: AuthMethod::InternalJwt,
-        }))
+        let mut principal = Principal::new(user.username, user.source, AuthMethod::InternalJwt);
+        principal.user_id = Some(user.id);
+        principal.issuer = user.issuer;
+        principal.subject = user.subject;
+        principal.external_groups = external_groups;
+        principal.groups_confirmed_at = groups_confirmed_at;
+        principal.email = user.email;
+        principal.display_name = user.display_name;
+        // The session's own `exp` bounds how long a cache may keep this principal.
+        principal.expires_at = Some(verified.expires_at);
+        Ok(Some(principal))
     }
 }
 

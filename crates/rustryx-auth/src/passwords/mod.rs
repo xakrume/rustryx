@@ -38,6 +38,7 @@ use rustryx_core::identity::API_TOKEN_PREFIX;
 use self::errmap::backend_failure;
 pub use self::gate::{BlockingGate, GateClass, GateConfig, LaneLimits};
 use std::sync::Arc;
+use std::time::Instant;
 
 /// Longest password (in bytes) the service hashes or verifies. Bounds the work one
 /// request can ask for; it is also the policy limit for new passwords.
@@ -244,6 +245,16 @@ impl Passwords {
 
     /// Hashes a NEW password with argon2id. Blank passwords are refused before any work.
     pub async fn hash(&self, password: &Secret) -> Result<Secret, AuthError> {
+        self.hash_before(password, None).await
+    }
+
+    /// Like [`Self::hash`], with the request deadline (`AuthContext::deadline`) bounding the
+    /// wait for a permit.
+    pub async fn hash_before(
+        &self,
+        password: &Secret,
+        deadline: Option<Instant>,
+    ) -> Result<Secret, AuthError> {
         if !is_usable_password(password.expose()) {
             return Err(AuthError::InvalidCredentials);
         }
@@ -251,7 +262,7 @@ impl Passwords {
         let params = self.params.clone();
         let hashed = self
             .gate
-            .run(GateClass::Password, move || {
+            .run_before(GateClass::Password, deadline, move || {
                 hash_blocking(password.expose().as_bytes(), &params)
             })
             .await?;
@@ -266,6 +277,18 @@ impl Passwords {
     /// gate. An unparsable stored hash still pays one dummy verification so that
     /// "this account has no usable hash" is not visible in the response time.
     pub async fn verify(&self, password: &Secret, stored: &str) -> Result<Verification, AuthError> {
+        self.verify_before(password, stored, None).await
+    }
+
+    /// Like [`Self::verify`], with the request deadline bounding the wait for a permit: a
+    /// request that is already out of time gets `AuthError::Overloaded` instead of a queued
+    /// hash that nobody will read.
+    pub async fn verify_before(
+        &self,
+        password: &Secret,
+        stored: &str,
+        deadline: Option<Instant>,
+    ) -> Result<Verification, AuthError> {
         if !is_usable_password(password.expose()) || password.expose().len() > MAX_PASSWORD_BYTES {
             return Err(AuthError::InvalidCredentials);
         }
@@ -274,7 +297,7 @@ impl Passwords {
         let target = self.params.clone();
         let dummy = self.dummy_hash.clone();
         self.gate
-            .run(GateClass::Password, move || {
+            .run_before(GateClass::Password, deadline, move || {
                 verify_blocking(password.expose().as_bytes(), &stored, &target, &dummy)
             })
             .await
@@ -283,11 +306,20 @@ impl Passwords {
     /// Runs a verification that cannot succeed, for credentials that name no
     /// account. Same cost, same semaphore, no information in the result.
     pub async fn verify_dummy(&self, password: &Secret) -> Result<(), AuthError> {
+        self.verify_dummy_before(password, None).await
+    }
+
+    /// Like [`Self::verify_dummy`], with the request deadline bounding the wait.
+    pub async fn verify_dummy_before(
+        &self,
+        password: &Secret,
+        deadline: Option<Instant>,
+    ) -> Result<(), AuthError> {
         let password = password.clone();
         let target = self.params.clone();
         let dummy = self.dummy_hash.clone();
         self.gate
-            .run(GateClass::Password, move || {
+            .run_before(GateClass::Password, deadline, move || {
                 // The result is discarded on purpose: only the cost matters.
                 let _ = verify_argon2(password.expose().as_bytes(), &dummy, &target);
             })
@@ -367,6 +399,56 @@ mod tests {
 
     fn bcrypt_hash(password: &str) -> String {
         bcrypt::hash(password, 4).unwrap()
+    }
+
+    #[tokio::test]
+    async fn every_blocking_call_honours_the_request_deadline() {
+        let service = passwords();
+        let hash = service
+            .hash(&Secret::new("correct horse battery"))
+            .await
+            .unwrap();
+        let expired = Some(Instant::now());
+        let password = Secret::new("correct horse battery");
+        assert!(matches!(
+            service.hash_before(&password, expired).await.unwrap_err(),
+            AuthError::Overloaded
+        ));
+        assert!(matches!(
+            service
+                .verify_before(&password, hash.expose(), expired)
+                .await
+                .unwrap_err(),
+            AuthError::Overloaded
+        ));
+        assert!(matches!(
+            service
+                .verify_dummy_before(&password, expired)
+                .await
+                .unwrap_err(),
+            AuthError::Overloaded
+        ));
+        // Blank input is still refused first, before the gate looks at the clock.
+        assert!(matches!(
+            service
+                .verify_before(&Secret::new(" "), hash.expose(), expired)
+                .await
+                .unwrap_err(),
+            AuthError::InvalidCredentials
+        ));
+
+        let open = Some(Instant::now() + std::time::Duration::from_secs(30));
+        assert!(service.hash_before(&password, open).await.is_ok());
+        assert_eq!(
+            service
+                .verify_before(&password, hash.expose(), open)
+                .await
+                .unwrap(),
+            Verification::Valid {
+                needs_rehash: false
+            }
+        );
+        service.verify_dummy_before(&password, open).await.unwrap();
     }
 
     #[tokio::test]

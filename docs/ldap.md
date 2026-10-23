@@ -116,8 +116,10 @@ For `Credentials::Basic` (anything else is `Ok(None)`):
    DN that was found, on a NEW connection that is closed on every path and never pooled.
 4. On success the groups are looked up once (so the following `GroupResolver` call is a cache
    hit) and the principal is returned with `external_groups` and `groups_confirmed_at`, or with
-   neither when the groups could not be had in the time left. The call never takes longer than
-   `auth_deadline_secs`.
+   neither when the groups could not be had in the time left. The principal also carries the DN of
+   the entry that was bound as in `external_id`. The call never takes longer than
+   `auth_deadline_secs`, nor than the request deadline of `AuthContext` when that is shorter: a login
+   whose request has run out of time must not keep a directory connection busy.
 
 Everything that is the user's doing (no such user, ambiguous user, wrong password, refused
 account, unusable input) is `AuthError::InvalidCredentials` with identical text. A failure of the
@@ -150,8 +152,21 @@ shorter or empty list. Particular cases:
   answer is incomplete, which fails the lookup.
 
 DNs are returned exactly as the directory sent them (first spelling kept, discovery order) in
-`ExternalGroups { provider: Ldap, groups }`. No folding, trimming or sorting happens: the match with
-`admin_groups` is exact.
+`ExternalGroups { provider: Ldap, groups, confirmed_at }`. No folding, trimming or sorting happens: the
+match with `admin_groups` is exact.
+
+The user DN as a hint (`Principal::external_id`). A refresh that finds the user's DN known (the
+principal carries it after an LDAP login, and the resolver remembers the DN of the last lookup next to
+the cached groups) reads that entry with scope `base` instead of searching the subtree for the user.
+The DN is only a hint and the user filter still decides: the request is the same `search_filter`
+rendered with this login, so an account that was disabled, deleted or renamed, or an entry that never
+was this user's (a forged hint), answers "nothing" exactly as the subtree search would. Only then is the
+subtree searched, because a moved entry is not a gone user; if that finds nothing the user is gone.
+Disabled accounts therefore stay excluded at every refresh (see "Directory notes"). A failure other than
+`noSuchObject` on the base read is a failed lookup, never a gone user. For `member_of` the base read also
+returns the `memberOf` values, so the refresh costs one operation either way, but it is an indexed read
+of one entry instead of a subtree search with a filter, it cannot be ambiguous, and `reverse_member`
+saves the subtree search for the user as well.
 
 Freshness (README 8.5, the five minute rule):
 
@@ -160,19 +175,23 @@ Freshness (README 8.5, the five minute rule):
 | A confirmed set younger than `groups_cache_ttl_secs` exists | served without asking the directory |
 | Otherwise, the directory answers | new set and new timestamp |
 | The directory cannot answer | `Err(GroupLookupFailed)` (default) |
-| ... and `groups_stale_on_error` is on, last success at most 300 s ago | the old set, `StaleWithinWindow`, with the time of the last SEARCH |
+| ... and `groups_stale_on_error` is on, last success at most 300 s ago | the old set, `StaleWithinWindow`, with `confirmed_at` of the last SEARCH |
 | ... and it is older | `Err(GroupLookupFailed)`: roles of origin `ldap` are dropped, 403 |
 | The directory says the user is gone | the cached set is deleted, `Err` at once, stale mode or not |
 
-`LdapGroupResolver::resolve_detailed` returns the same with the true `confirmed_at` and a
-`GroupFreshness`. The only state used for these decisions is the resolver's own cache, measured with
-the injected `Clock`. The principal's `groups_confirmed_at` is never trusted, and a timestamp in the
-future after a clock step is treated as unusable, not as new.
+`ExternalGroups::confirmed_at` is the time of the directory's answer, also for a set served from the
+cache: it is what the chain times its five minute window from. `LdapGroupResolver::resolve_detailed`
+returns the same with a `GroupFreshness`. The only state used for these decisions is the resolver's own
+cache, measured with the injected `Clock`. The principal's `groups_confirmed_at` is never trusted, and a
+timestamp in the future after a clock step is treated as unusable, not as new (the chain applies the same
+rule to what the resolver returns, with a 5 second allowance). A principal that is not an LDAP one gets
+the empty list confirmed now.
 
 ## Directory notes
 
-- Disabled or locked accounts: the user search is the place to exclude them, and the same search
-  is repeated at every group refresh. For AD use for example
+- Disabled or locked accounts: the user filter is the place to exclude them, and the same filter
+  is applied at every group refresh (as a base scope read of the known entry, or as the subtree search
+  when the DN is not known). For AD use for example
   `(&(objectClass=user)(sAMAccountName={username})(!(userAccountControl:1.2.840.113556.1.4.803:=2)))`.
 - `username_attribute` should be an attribute that `search_filter` matches (`sAMAccountName` in
   the example). The principal gets the directory's spelling when it equals the typed login apart
@@ -204,6 +223,13 @@ future after a clock step is treated as unusable, not as new.
 | `breaker_trips` | times the circuit breaker opened |
 | `breaker_rejections` | service connection attempts refused at once by the open breaker |
 
+The series `ldap_requests_total{result}` goes through the `metrics` facade (`crate::telemetry`, tests in
+`hint_tests.rs`): one count per service connection open (connect and service bind), per search and per
+user bind. `result` is `ok` when the directory answered (a refused password and `noSuchObject` are
+answers), `timeout` when the operation ran into its timeout, `error` for every other failure. A
+connection refused at once by the open circuit breaker is not a request and is not counted.
+`RustryxLdapErrors` reads `result=~"error|timeout"`.
+
 Logs go through `tracing`. Passwords (the user's and the service account's) are never logged,
 never in `Debug` (`Secret` redacts), and server diagnostics stay in the log: the error returned to
 a caller is a fixed string. `log_tests.rs` drives every logging path with recognisable secrets and
@@ -223,6 +249,9 @@ RUSTRYX_IT=1 cargo test -p rustryx-auth --lib ldap::integration_tests -- --nocap
 - `proptest` covers escaping (RFC 4515 and RFC 4514 round trips, the `ldap3` parser as reference for
   "still one equality filter with this value"), password and login validation, and arbitrary logins
   through the whole login path.
+- `hint_tests.rs` covers the user DN hint (base read instead of the subtree search, a forged or stale
+  hint, a moved or disabled user), the confirmation time of the resolver, the request deadline and the
+  `ldap_requests_total` series.
 - `wire_tests.rs` runs the real `ldap3` transport against a small in-process LDAP server over real
   TLS (certificates from `rcgen`): trust, host name, StartTLS, refused StartTLS, bind and search
   result mapping, a malformed entry, a dead connection, and a whole `LdapService::new` login.
@@ -253,15 +282,17 @@ to a DN that does not exist, with the password it was given, and ignores the res
 "no such user" answers one connect and one bind sooner than "wrong password", and the difference
 is measurable. The decoy can never authenticate: its result is discarded.
 
-**ADR-LDAP-4. Where the five minute window lives.** The authentication chain already reuses its
-previous LDAP result for five minutes when the resolver fails, and it stamps "now" on every `Ok`,
-because `ExternalGroups` has no timestamp. A stale answer from this module would therefore be stamped
-as new there and the graces would add up to ten minutes. So the resolver is strict by default: an
-answer is either confirmed within `groups_cache_ttl_secs` or an error. With the default the bound
-the caller sees is `groups_cache_ttl_secs + groups_max_age` of the chain: set the chain's maximum age
-to `300 - groups_cache_ttl_secs` to keep it at five minutes, or have the chain use
-`resolve_detailed().confirmed_at` instead of "now". `groups_stale_on_error` moves the window into
-this module for callers that have no grace of their own.
+**ADR-LDAP-4. Where the five minute window lives.** The authentication chain keeps its own copy of the
+last successful answer per user and reuses it for at most five minutes when the resolver fails.
+`ExternalGroups::confirmed_at` (Core revision 2, gap 23 closed) makes both timelines run from the
+directory's answer: the chain stamps the confirmation time of the answer, not the time it received it, so
+a set served from the resolver's 60 second cache is already as old as it is, and the two graces cannot add
+up. The total staleness of a group set is at most five minutes from the directory's answer, whichever
+layer serves it (the resolver cache, the chain's copy, the principal cache). The resolver stays strict by
+default (`groups_stale_on_error` off, `groups_cache_ttl_secs` 60): a stale `Ok` from here would hide the
+outage from the chain's failure handling and log, and the chain's copy already gives the grace. Tests:
+`chain/tests_window.rs` (the window never exceeds five minutes in total, an older answer or one from the
+future is refused). `groups_stale_on_error` remains for callers that have no grace of their own.
 
 **ADR-LDAP-5. Limits are partial, failures are errors.** Depth and count limits return what was
 found and are logged and counted. A failed, timed out, ranged or server truncated search fails the
@@ -298,23 +329,30 @@ Only the creation of a connection passes through it: warm, healthy pooled connec
 thresholds are constants (`breaker.rs`), not configuration, because a wrong value is worse than the default
 for every deployment this module has to serve. A cancelled trial counts as a failure.
 
+**ADR-LDAP-11. The DN is a hint, the filter decides.** Core revision 2 gave `Principal` an `external_id`
+(gap 25 closed), and the LDAP authenticator puts the DN of the bound entry there. The refresh reads that
+entry directly (scope `base`) with the same user filter, remembers the DN of the last lookup next to the
+cached groups so that a session that no longer carries the principal still benefits, and falls back to the
+subtree search when the hint does not lead to the user. Trusting the DN alone would save one more
+operation but would end the exclusion of disabled accounts at refresh, which docs/ldap.md section
+"Directory notes" relies on; a forged DN could not read another user's groups either way, because the
+filter pins the login.
+
 ## Gaps in `rustryx-core` and open points
 
-1. `ExternalGroups` has no `confirmed_at`. Any caller that stamps "now" on `Ok` loses the true age of
-   a cached or stale set (see ADR-LDAP-4). Adding `confirmed_at: OffsetDateTime` (or a `stale` flag)
-   to it would let the chain keep exact five minute accounting. `resolve_detailed` is the workaround.
-2. `Principal` has no user DN. The resolver searches the user again at every refresh (one extra
-   search). A `user_dn` field would save it.
-3. `AuthError::Overloaded` ("503, no permit before the deadline") is not produced: exhaustion of the
+Closed by Core revision 2: `ExternalGroups::confirmed_at` (ADR-LDAP-4) and the user DN on the principal
+(ADR-LDAP-11).
+
+1. `AuthError::Overloaded` ("503, no permit before the deadline") is not produced: exhaustion of the
    service pool or the user bind cap ends in the authentication deadline, `ProviderUnavailable`. If the
    HTTP layer should answer 503 with `Retry-After` for it, the mapping belongs there.
-4. `rustryx-config` differs in three places: `ca_file` semantics (ADR-LDAP-6), the default of
+2. `rustryx-config` differs in three places: `ca_file` semantics (ADR-LDAP-6), the default of
    `groups_cache_ttl_secs` (300 there, 60 here; with 300 and strict mode an outage fails closed right
    after the TTL, and the chain's own grace is the only one), and the strategy name `member_search`
    (accepted as an alias).
-5. No fuzz target exists for the filter builder (`02-rust-engineering` section 6). The inputs are
+3. No fuzz target exists for the filter builder (`02-rust-engineering` section 6). The inputs are
    `rustryx_auth::ldap::escape_filter_value` and `filter::FilterTemplate::render`; a target in the
    workspace `fuzz` directory is a few lines.
-6. Not done: paged search for answers above a server page size, referral following, several URLs for
+4. Not done: paged search for answers above a server page size, referral following, several URLs for
    failover. The circuit breaker is per process: with N nodes the directory sees up to N trial attempts per
    cooldown.

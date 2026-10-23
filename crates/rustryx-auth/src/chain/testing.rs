@@ -12,13 +12,13 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rustryx_core::Secret;
 use rustryx_core::error::AuthError;
 use rustryx_core::identity::{
-    AuthContext, AuthMethod, Credentials, IdpGroupMapping, IdpProvider, Principal, Role,
-    RoleOrigin, RoleRef, User, UserSource,
+    AuthContext, AuthFailure, AuthMethod, Credentials, IdpGroupMapping, IdpProvider, Principal,
+    Role, RoleOrigin, RoleRef, User, UserSource,
 };
 use rustryx_core::ids::{IdpGroupMappingId, RoleId};
 use rustryx_core::ports::{
-    Authenticator, ExternalGroups, GroupResolver, IdpMappingRepo, LoginAttemptRepo, RoleRepo,
-    UserRepo,
+    Authenticator, Clock, ExternalGroups, GroupResolver, IdpMappingRepo, LoginAttemptRepo,
+    RoleRepo, UserRepo,
 };
 use rustryx_testkit::{FixedClock, MemStore, fixtures};
 use serde_json::{Value, json};
@@ -38,7 +38,8 @@ pub(crate) const ADMIN_PATH: &str = "/rustryx/admins";
 pub(crate) const ADMIN_DN: &str = "cn=rustryx-admins,ou=groups,dc=example,dc=test";
 pub(crate) const OIDC_ISSUER: &str = fixtures::OIDC_ISSUER;
 
-type Handler = Box<dyn Fn(&Credentials) -> Result<Option<Principal>, AuthError> + Send + Sync>;
+pub(crate) type Handler =
+    Box<dyn Fn(&Credentials) -> Result<Option<Principal>, AuthError> + Send + Sync>;
 
 /// An authenticator whose answer is a function of the credentials, counting calls.
 pub(crate) struct ScriptedAuthenticator {
@@ -74,12 +75,21 @@ impl Authenticator for ScriptedAuthenticator {
 /// What a scripted resolver answers.
 #[derive(Debug, Clone)]
 pub(crate) enum Answer {
-    /// The groups already on the principal (what the OIDC resolver does).
+    /// The groups already on the principal (what the OIDC resolver does), confirmed now.
     Echo,
-    /// A fixed list.
+    /// A fixed list, confirmed now.
     Groups(Vec<String>),
+    /// A fixed list the directory confirmed `age` ago (a resolver that serves its cache).
+    GroupsConfirmed { groups: Vec<String>, age: Duration },
+    /// A fixed list "confirmed" `ahead` in the future (a clock that was stepped back).
+    GroupsFromTheFuture {
+        groups: Vec<String>,
+        ahead: Duration,
+    },
     /// A failed lookup.
     Fail,
+    /// A lookup that ended because the pool was exhausted.
+    Overloaded,
     /// An answer labelled with the wrong provider.
     WrongProvider(Vec<String>),
 }
@@ -88,14 +98,16 @@ pub(crate) struct ScriptedResolver {
     provider: IdpProvider,
     answer: Mutex<Answer>,
     calls: AtomicUsize,
+    clock: FixedClock,
 }
 
 impl ScriptedResolver {
-    fn new(provider: IdpProvider, answer: Answer) -> Arc<Self> {
+    fn new(provider: IdpProvider, answer: Answer, clock: FixedClock) -> Arc<Self> {
         Arc::new(Self {
             provider,
             answer: Mutex::new(answer),
             calls: AtomicUsize::new(0),
+            clock,
         })
     }
 
@@ -117,24 +129,36 @@ impl GroupResolver for ScriptedResolver {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
+        let now = self.clock.now();
+        let provider = self.provider;
         match answer {
-            Answer::Echo => Ok(ExternalGroups {
-                provider: self.provider,
-                groups: principal.external_groups.clone(),
-            }),
-            Answer::Groups(groups) => Ok(ExternalGroups {
-                provider: self.provider,
+            Answer::Echo => Ok(ExternalGroups::new(
+                provider,
+                principal.external_groups.clone(),
+                now,
+            )),
+            Answer::Groups(groups) => Ok(ExternalGroups::new(provider, groups, now)),
+            Answer::GroupsConfirmed { groups, age } => Ok(ExternalGroups::new(
+                provider,
                 groups,
-            }),
+                now - time::Duration::try_from(age).unwrap(),
+            )),
+            Answer::GroupsFromTheFuture { groups, ahead } => Ok(ExternalGroups::new(
+                provider,
+                groups,
+                now + time::Duration::try_from(ahead).unwrap(),
+            )),
             Answer::Fail => Err(AuthError::GroupLookupFailed("scripted failure".into())),
-            Answer::WrongProvider(groups) => Ok(ExternalGroups {
-                provider: if self.provider == IdpProvider::Oidc {
+            Answer::Overloaded => Err(AuthError::Overloaded),
+            Answer::WrongProvider(groups) => Ok(ExternalGroups::new(
+                if provider == IdpProvider::Oidc {
                     IdpProvider::Ldap
                 } else {
                     IdpProvider::Oidc
                 },
                 groups,
-            }),
+                now,
+            )),
         }
     }
 }
@@ -149,6 +173,9 @@ pub(crate) struct Options {
     /// Counters in a different store than the users, so one can fail without the other.
     pub(crate) separate_guard_store: bool,
     pub(crate) service: AuthServiceConfig,
+    /// Replaces the scripted OIDC authenticator, to hand the chain principals no real
+    /// authenticator produces yet (robot and scan tokens, unknown methods).
+    pub(crate) oidc_handler: Option<Handler>,
 }
 
 impl Default for Options {
@@ -171,6 +198,7 @@ impl Default for Options {
             gate: None,
             separate_guard_store: false,
             service: AuthServiceConfig::default(),
+            oidc_handler: None,
         }
     }
 }
@@ -204,7 +232,6 @@ fn segment(value: &Value) -> String {
 /// from the payload; nothing here is signed, which is fine because the real
 /// validation lives in the OIDC module, not in the chain.
 pub(crate) fn oidc_token(username: &str, subject: &str, groups: &[&str], exp: i64) -> String {
-    let header = json!({"alg": "RS256", "kid": "kc-1", "typ": "JWT"});
     let payload = json!({
         "iss": OIDC_ISSUER,
         "sub": subject,
@@ -213,7 +240,14 @@ pub(crate) fn oidc_token(username: &str, subject: &str, groups: &[&str], exp: i6
         "exp": exp,
         "jti": format!("{username}-{subject}-{exp}"),
     });
-    format!("{}.{}.c2ln", segment(&header), segment(&payload))
+    oidc_token_from(&payload)
+}
+
+/// Like [`oidc_token`] with the whole payload given, for claims the helper does not know
+/// (`email`, `name`) or a payload without `exp`.
+pub(crate) fn oidc_token_from(payload: &Value) -> String {
+    let header = json!({"alg": "RS256", "kid": "kc-1", "typ": "JWT"});
+    format!("{}.{}.c2ln", segment(&header), segment(payload))
 }
 
 fn oidc_handler() -> Handler {
@@ -249,22 +283,24 @@ fn oidc_handler() -> Handler {
                     .collect()
             })
             .unwrap_or_default();
-        Ok(Some(Principal {
-            user_id: None,
-            username: claims["preferred_username"]
+        let mut principal = Principal::new(
+            claims["preferred_username"]
                 .as_str()
                 .unwrap_or_default()
                 .to_owned(),
-            source: UserSource::Oidc,
-            issuer: Some(OIDC_ISSUER.to_owned()),
-            subject: claims["sub"].as_str().map(str::to_owned),
-            roles: Vec::new(),
-            external_groups: groups,
-            groups_confirmed_at: None,
-            token_scopes: None,
-            token_id: None,
-            auth_method: AuthMethod::OidcBearer,
-        }))
+            UserSource::Oidc,
+            AuthMethod::OidcBearer,
+        );
+        principal.issuer = Some(OIDC_ISSUER.to_owned());
+        principal.subject = claims["sub"].as_str().map(str::to_owned);
+        principal.external_groups = groups;
+        principal.email = claims["email"].as_str().map(str::to_owned);
+        principal.display_name = claims["name"].as_str().map(str::to_owned);
+        // Real OIDC tokens always carry `exp`; the chain caches no principal without one.
+        principal.expires_at = claims["exp"]
+            .as_i64()
+            .and_then(|exp| time::OffsetDateTime::from_unix_timestamp(exp).ok());
+        Ok(Some(principal))
     })
 }
 
@@ -275,19 +311,11 @@ fn ldap_handler(users: Arc<Mutex<HashMap<String, String>>>) -> Handler {
         };
         let directory = users.lock().unwrap_or_else(PoisonError::into_inner);
         match directory.get(username) {
-            Some(expected) if expected == password.expose() => Ok(Some(Principal {
-                user_id: None,
-                username: username.clone(),
-                source: UserSource::Ldap,
-                issuer: None,
-                subject: None,
-                roles: Vec::new(),
-                external_groups: Vec::new(),
-                groups_confirmed_at: None,
-                token_scopes: None,
-                token_id: None,
-                auth_method: AuthMethod::BasicLdap,
-            })),
+            Some(expected) if expected == password.expose() => Ok(Some(Principal::new(
+                username.clone(),
+                UserSource::Ldap,
+                AuthMethod::BasicLdap,
+            ))),
             // A failed bind, whether the user exists or not.
             _ => Err(AuthError::InvalidCredentials),
         }
@@ -332,10 +360,11 @@ pub(crate) fn harness_with(options: Options) -> Harness {
         options.jit,
     ));
     let ldap_users = Arc::new(Mutex::new(HashMap::new()));
-    let oidc_auth = ScriptedAuthenticator::new(oidc_handler());
-    let oidc_resolver = ScriptedResolver::new(IdpProvider::Oidc, Answer::Echo);
+    let oidc_auth = ScriptedAuthenticator::new(options.oidc_handler.unwrap_or_else(oidc_handler));
+    let oidc_resolver = ScriptedResolver::new(IdpProvider::Oidc, Answer::Echo, clock.clone());
     let ldap_auth = ScriptedAuthenticator::new(ldap_handler(Arc::clone(&ldap_users)));
-    let ldap_resolver = ScriptedResolver::new(IdpProvider::Ldap, Answer::Groups(Vec::new()));
+    let ldap_resolver =
+        ScriptedResolver::new(IdpProvider::Ldap, Answer::Groups(Vec::new()), clock.clone());
     let guard_repo: Arc<dyn LoginAttemptRepo> = Arc::new(guard_store.clone());
     let service = AuthService::new(
         AuthServiceDeps {
@@ -448,12 +477,20 @@ impl Harness {
         credentials: &Credentials,
         client_ip: Option<std::net::IpAddr>,
     ) -> Result<Principal, AuthError> {
-        let context = AuthContext {
-            client_ip,
-            request_id: None,
-        };
+        let mut context = AuthContext::new();
+        if let Some(address) = client_ip {
+            context = context.with_client_ip(address);
+        }
         let principal = self.service.authenticate(credentials, &context).await?;
         Ok(principal.expect("the chain never returns Ok(None)"))
+    }
+
+    /// The failing side of `authenticate_detailed`: which method refused.
+    pub(crate) async fn refusal(&self, credentials: &Credentials) -> AuthFailure {
+        self.service
+            .authenticate_detailed(credentials, &AuthContext::new())
+            .await
+            .expect_err("the credentials must be refused")
     }
 
     pub(crate) async fn basic(&self, user: &str, password: &str) -> Result<Principal, AuthError> {
@@ -466,7 +503,7 @@ impl Harness {
     }
 
     pub(crate) fn clock_now(&self) -> time::OffsetDateTime {
-        rustryx_core::ports::Clock::now(&self.clock)
+        self.clock.now()
     }
 
     /// Token expiry `seconds` from the harness clock.
@@ -507,7 +544,7 @@ trait ClockSeconds {
 
 impl ClockSeconds for FixedClock {
     fn now_seconds(&self) -> i64 {
-        rustryx_core::ports::Clock::now(self).unix_timestamp()
+        self.now().unix_timestamp()
     }
 }
 

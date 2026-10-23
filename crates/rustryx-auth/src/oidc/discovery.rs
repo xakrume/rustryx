@@ -17,6 +17,7 @@ use url::Url;
 
 use super::config::OidcConfig;
 use super::http::{HttpError, MAX_METADATA_BYTES, OidcHttp};
+use crate::telemetry::{self, OidcOp, RequestResult};
 
 /// Why a discovery attempt failed.
 #[derive(Debug, thiserror::Error)]
@@ -27,6 +28,16 @@ pub(crate) enum DiscoveryError {
     Invalid(String),
     #[error("issuer mismatch: configured {expected}, document says {actual}")]
     IssuerMismatch { expected: String, actual: String },
+}
+
+impl DiscoveryError {
+    /// How this failure counts in `oidc_requests_total`.
+    pub(crate) fn request_result(&self) -> RequestResult {
+        match self {
+            Self::Http(error) => error.request_result(),
+            Self::Invalid(_) | Self::IssuerMismatch { .. } => RequestResult::Error,
+        }
+    }
 }
 
 /// Endpoints taken from a validated discovery document.
@@ -127,7 +138,14 @@ impl Discovery {
     /// One discovery attempt. A failure keeps the previous endpoints: they stay usable and
     /// a Keycloak outage must not make a node forget where the token endpoint is.
     pub(crate) async fn refresh(&self) -> Result<(), DiscoveryError> {
-        match self.fetch().await {
+        let outcome = self.fetch().await;
+        telemetry::oidc_request(
+            OidcOp::Discovery,
+            outcome
+                .as_ref()
+                .map_or_else(DiscoveryError::request_result, |_| RequestResult::Ok),
+        );
+        match outcome {
             Ok(found) => {
                 self.current.store(Some(Arc::new(found)));
                 self.reachable.store(true, Ordering::Relaxed);

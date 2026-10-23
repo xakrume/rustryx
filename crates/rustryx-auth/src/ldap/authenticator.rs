@@ -126,7 +126,12 @@ impl Authenticator for LdapAuthenticator {
 
         // One deadline for the whole call, group warm-up included: `authenticate` never
         // takes longer than `auth_deadline_secs`, whatever the directory does.
-        let deadline = Instant::now() + active.settings.timeouts.auth_deadline;
+        // The shorter of the module's own bound and the request deadline: a login whose request
+        // has run out of time must not keep a directory connection busy.
+        let own = Instant::now() + active.settings.timeouts.auth_deadline;
+        let deadline = context
+            .deadline
+            .map_or(own, |request| own.min(Instant::from_std(request)));
         let verified = timeout_at(deadline, active.verify(username, password)).await;
         let user = match verified {
             Ok(Ok(user)) => user,
@@ -151,7 +156,7 @@ impl Authenticator for LdapAuthenticator {
         // resolver (which fails closed) is asked again on the next step.
         let warm_up = timeout_at(
             deadline,
-            active.groups_for_user(&user.username, Some(&user)),
+            active.groups_for_user(&user.username, Some(&user), None),
         )
         .await;
         let (external_groups, groups_confirmed_at) = match warm_up {
@@ -168,18 +173,12 @@ impl Authenticator for LdapAuthenticator {
                 (Vec::new(), None)
             }
         };
-        Ok(Some(Principal {
-            user_id: None,
-            username: user.username,
-            source: UserSource::Ldap,
-            issuer: None,
-            subject: None,
-            roles: Vec::new(),
-            external_groups,
-            groups_confirmed_at,
-            token_scopes: None,
-            token_id: None,
-            auth_method: AuthMethod::BasicLdap,
-        }))
+        let mut principal = Principal::new(user.username, UserSource::Ldap, AuthMethod::BasicLdap);
+        principal.external_groups = external_groups;
+        principal.groups_confirmed_at = groups_confirmed_at;
+        // The DN lets the group refresh read this entry instead of searching for the user
+        // again. It is a hint only: the refresh still applies the user filter to it.
+        principal.external_id = Some(user.dn);
+        Ok(Some(principal))
     }
 }

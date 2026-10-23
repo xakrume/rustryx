@@ -28,9 +28,14 @@ Handlers of `rustryx-api` use the flow like this:
 - error mapping: `InvalidToken` (cookie, state, ID token) is a 400, `InvalidCredentials`
   (Keycloak refused the code) a 401, `ProviderUnavailable` a 503.
 
-For just-in-time provisioning the `Principal` has no email field. Call
-`OidcBearerAuthenticator::validate(token)` (returns `VerifiedBearer { identity, expires_at }`)
-when the email or the token expiry is needed; `authenticate` stays the chain entry point.
+The `Principal` carries what just-in-time provisioning and the principal cache need: `email` and
+`display_name` (the `email` and `name` claims, informational only, never used to find or link an
+account) and `expires_at` (the token `exp`, which bounds how long the chain may cache the principal).
+`OidcBearerAuthenticator::validate(token)` (returns `VerifiedBearer { identity, expires_at }`) stays for
+a caller that wants the whole identity without the chain; `authenticate` is the chain entry point.
+`OidcGroupResolver` reports the groups of the principal together with `ExternalGroups::confirmed_at`,
+the confirmation time the authenticator stamped when it verified the token; a principal without one was
+not built from a verified token and is refused (`GroupLookupFailed`), never stamped with "now".
 
 ## Configuration
 
@@ -43,13 +48,13 @@ clamped.
 | `issuer_url` | required | HTTPS only. Realm URL the node calls (discovery). |
 | `public_issuer_url` | none | Split horizon. When set, `iss` must equal this exact string. |
 | `audience` | required | Product client id that `aud` must contain. `account` is refused. |
-| `authorized_parties` | empty | Accepted `azp` values; empty means only `audience`. |
+| `authorized_parties` | empty | The allow list of `azp` values: the whole list, compared byte for byte; empty means only `audience`. No empty value, no whitespace, no wildcard. A token without `azp` is not checked against it. |
 | `clock_skew` | 60 s | At most 60 s. Applies to `exp`, `nbf`, `iat`. |
 | `jwks_ttl` | 10 min | 30 s to 1 h. `Cache-Control: max-age` wins, clamped to the same range. |
 | `jwks_min_refresh_interval` | 30 s | At least 30 s. Window of forced refreshes (unknown `kid`). |
 | `discovery_refresh` / `discovery_retry` | 1 h / 15 s | Background loop periods. |
 | `connect_timeout` / `request_timeout` | 3 s / 5 s | Every outgoing call to Keycloak. |
-| `groups_claim` | `groups` | Top-level claim with the group paths. Role claims and claims read for other purposes are refused. |
+| `groups_claim` | `groups` | Top-level claim with the group paths. Role claims and claims read for other purposes (`name` included) are refused. |
 | `max_groups` / `max_group_bytes` | 256 / 512 | Caps on the groups claim. |
 | `max_token_bytes` | 32 KiB | Longer bearer values are "not ours". |
 | `extra_root_certs_pem` | empty | Corporate CA, merged with the platform roots. |
@@ -74,9 +79,16 @@ Mapping from `rustryx-config` (`auth.oidc.*`):
 | `clock_skew_secs` | `clock_skew` |
 | `auth.cookie_key` | `ui.cookie_key` |
 | `server.base_url` + callback path | `ui.redirect_url` |
+| `authorized_parties` (default `[client_id]`) | `authorized_parties` (copied as is) |
 
-`authorized_parties` has no key in `rustryx-config` yet. Tokens of the CLI client carry
-`azp: rustryx-cli`, so without it they are refused by the `azp` rule.
+`auth.oidc.authorized_parties` is the allow list of the `azp` claim (docs/wave2-design.md, gap 17). Its
+default is only the product client id, so the second client is always an explicit entry: tokens of the CLI
+client carry `azp: rustryx-cli` and are refused until the operator writes
+`authorized_parties: [rustryx-ui, rustryx-cli]`. The list is the whole list, not "the client plus these":
+an operator who writes only `[rustryx-cli]` refuses the product client's own tokens. `OidcConfig`
+(`authorized_parties`, validated by `OidcConfig::validate`) already takes the value; the `rustryx-config`
+key, its table entry and `config.example.yaml` are the config owner's, and the composition root copies
+the list field for field.
 
 Keycloak must be reachable over HTTPS. There is no plaintext switch: the JWKS decides who may
 sign tokens. A private CA goes into `extra_root_certs_pem` or the platform trust store.
@@ -88,7 +100,7 @@ sign tokens. A private CA goes into `extra_root_certs_pem` or the platform trust
 | Startup does not fail when Keycloak is down; state is a flag | `OidcProvider::new`, `Discovery`, `OidcStatus` | `startup_without_keycloak_is_a_state_not_an_error`, `background_task_recovers_when_keycloak_appears` |
 | `iss` equals the configured issuer exactly | `TokenValidator::peek` and `Validation::set_issuer` | `must_not_accept_wrong_issuer` |
 | `aud` contains the client id; `account` alone does not authorize | `Validation::set_audience`, `OidcConfig::validate` | `must_not_accept_wrong_audience_or_account_alone` |
-| `azp` equals the client when present | `check_access_token` | `must_not_accept_authorized_party_other_than_the_client` |
+| `azp` is on the allow list when present | `check_access_token`, `OidcConfig::azp_allowed` | `must_not_accept_authorized_party_other_than_the_client`, `must_not_accept_an_authorized_party_outside_the_allow_list`, `must_not_accept_a_malformed_allow_list` |
 | `exp` required, `nbf`/`iat` with 60 s skew | `Validation`, `check_issued_at` | `must_not_accept_expired_token_but_tolerates_the_skew`, `must_not_accept_future_nbf_beyond_skew`, `must_not_accept_future_iat_beyond_skew`, `must_not_accept_token_without_exp` |
 | Only RS256 and ES256; `none` and HS* never verified | `peek`, `parse_jwks` | `must_not_accept_alg_none`, `must_not_accept_hs256_signed_with_the_public_key_as_secret`, `must_not_accept_algorithms_outside_the_allowlist`, `must_not_accept_key_published_for_another_algorithm` |
 | `kid` required | `verify` | `must_not_accept_token_without_kid` |
@@ -149,10 +161,16 @@ Keycloak plus the PKCE verifier that exists only in the cookie.
 ## Status and metrics
 
 `OidcProvider::status()` returns `OidcStatus`: `discovery_loaded`, `reachable`,
-`discovery_failures`, `discovery_last_success`, `jwks_keys`, `jwks_age` (source of
-`oidc_jwks_age_seconds`), `jwks_refresh_ok`, `jwks_refresh_err`, `jwks_forced_refreshes`,
-`jwks_forced_throttled`, `jwks_keys_skipped`, `groups_truncated`, `groups_malformed`.
-None of it gates `/readyz`.
+`discovery_failures`, `discovery_last_success`, `jwks_keys`, `jwks_age`, `jwks_refresh_ok`,
+`jwks_refresh_err`, `jwks_forced_refreshes`, `jwks_forced_throttled`, `jwks_keys_skipped`,
+`groups_truncated`, `groups_malformed`. None of it gates `/readyz`.
+
+Two series go through the `metrics` facade (`crate::telemetry`, tests `oidc/tests/telemetry.rs`):
+
+| Series | Labels | Meaning |
+|---|---|---|
+| `oidc_requests_total` | `op` (`discovery`, `jwks`), `result` (`ok`, `error`, `timeout`) | One count per fetch of Keycloak, whoever started it (background loop, unknown `kid`, `refresh_now`). `RustryxOidcRefreshFailures` reads `result!="ok"`. |
+| `oidc_jwks_age_seconds` | none | 0 right after a good JWKS fetch. The background task republishes it at every pass (at least every `discovery_retry`), so it grows while fetches fail. While there has never been a good fetch it counts from the start of the node, so `RustryxOidcJwksStale` can fire on a node that never reached Keycloak. The gauge exists only while `spawn_background` runs. |
 
 ## Decisions
 
@@ -201,6 +219,5 @@ None of it gates `/readyz`.
 
 ## Open points
 
-- `Principal` has no email or display name; see "Wiring".
 - Back-channel logout is out of phase 1 scope; the 5 minute access token bounds the exposure.
 - The replay memory of used `state` values is per node.

@@ -48,6 +48,7 @@ const RESERVED_CLAIMS: &[&str] = &[
     "nonce",
     "preferred_username",
     "email",
+    "name",
     "realm_access",
     "resource_access",
     "roles",
@@ -109,7 +110,15 @@ pub struct OidcConfig {
     pub public_issuer_url: Option<String>,
     /// Client id of the product, which `aud` must contain. The single value `account` is refused.
     pub audience: String,
-    /// Values accepted for `azp` when the claim is present. Empty means only [`Self::audience`].
+    /// The allow list of `azp` values: the clients whose access tokens this service accepts.
+    /// A token without `azp` is not checked against it (Keycloak always sets the claim).
+    ///
+    /// The list is the WHOLE list, compared byte for byte: an operator who adds `rustryx-cli`
+    /// next to the product client writes both. Empty means only [`Self::audience`], which is
+    /// the default of `auth.oidc.authorized_parties` in `rustryx-config` (`[client_id]`), so a
+    /// second client is always an explicit entry and never implied. Entries are client ids:
+    /// no empty value, no whitespace, no wildcard (a `*` would be compared as the literal
+    /// text `*` and match nothing, which is a misconfiguration worth refusing at startup).
     pub authorized_parties: Vec<String>,
     /// Skew for `exp`, `nbf` and `iat`, at most [`MAX_CLOCK_SKEW`].
     pub clock_skew: Duration,
@@ -197,9 +206,7 @@ impl OidcConfig {
                     .to_owned(),
             );
         }
-        if self.authorized_parties.iter().any(|p| p.trim().is_empty()) {
-            problems.push("authorized_parties must not contain empty values".to_owned());
-        }
+        self.validate_authorized_parties(&mut problems);
         self.validate_groups_claim(&mut problems);
         self.validate_durations(&mut problems);
         if self.max_groups == 0 || self.max_group_bytes == 0 || self.max_token_bytes == 0 {
@@ -214,6 +221,25 @@ impl OidcConfig {
             Ok(())
         } else {
             Err(OidcConfigError { problems })
+        }
+    }
+
+    fn validate_authorized_parties(&self, problems: &mut Vec<String>) {
+        if self.authorized_parties.iter().any(|p| p.trim().is_empty()) {
+            problems.push("authorized_parties must not contain empty values".to_owned());
+        }
+        if self
+            .authorized_parties
+            .iter()
+            .any(|p| !p.trim().is_empty() && p.contains(char::is_whitespace))
+        {
+            problems.push(
+                "authorized_parties entries are client ids and must not contain whitespace"
+                    .to_owned(),
+            );
+        }
+        if self.authorized_parties.iter().any(|p| p.contains('*')) {
+            problems.push("authorized_parties does not support wildcards".to_owned());
         }
     }
 

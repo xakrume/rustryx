@@ -16,6 +16,7 @@ use super::http::OidcHttp;
 use super::jwks::JwksCache;
 use super::login_flow::{FlowParts, OidcLoginFlow};
 use super::validator::TokenValidator;
+use crate::telemetry;
 
 /// Why the provider could not be built. Contacting Keycloak is never part of it.
 #[derive(Debug, thiserror::Error)]
@@ -178,13 +179,17 @@ impl OidcProvider {
     }
 
     /// Starts the background loop: retries discovery until it works, then keeps discovery and
-    /// the JWKS fresh. Stops when `shutdown` is cancelled.
+    /// the JWKS fresh, and publishes `oidc_jwks_age_seconds` (the gauge exists only while this
+    /// task runs). Stops when `shutdown` is cancelled.
     #[must_use = "keep the handle to await the task at shutdown"]
     pub fn spawn_background(&self, shutdown: CancellationToken) -> JoinHandle<()> {
         let this = self.clone();
         tokio::spawn(async move {
             loop {
                 let wait = this.tick().await;
+                // Published at every pass, so the gauge keeps growing while the fetches fail
+                // (a fetch that works sets it to zero on its own).
+                telemetry::oidc_jwks_age(this.inner.jwks.age_for_metrics().as_secs_f64());
                 // Never sleep longer than the retry period: a fetch made on behalf of a request
                 // can flip `reachable` to false at any moment, and the loop has to notice that
                 // soon, or new logins would stay refused long after Keycloak is back.

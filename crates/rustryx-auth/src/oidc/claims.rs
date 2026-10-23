@@ -1,6 +1,6 @@
 //! Claims of Keycloak tokens and their mapping to a product identity.
 //!
-//! Only `sub`, `preferred_username`, `email` and `groups` feed the identity.
+//! Only `sub`, `preferred_username`, `email`, `name` and `groups` feed the identity.
 //! `realm_access`, `resource_access` and client roles are never read: every Keycloak
 //! user holds `offline_access` and `default-roles-*` there, and README 8.5 forbids
 //! them as a source of product roles. Group strings are passed on byte for byte:
@@ -22,6 +22,8 @@ pub struct OidcIdentity {
     pub username: String,
     /// Contact address, informational only. Never used to link accounts.
     pub email: Option<String>,
+    /// Human readable name (`name`), informational only.
+    pub display_name: Option<String>,
     /// The `groups` claim: full group paths, unmodified. Empty when absent or empty.
     pub groups: Vec<String>,
 }
@@ -62,6 +64,7 @@ pub(crate) struct RawClaims {
     pub(crate) sub: Option<String>,
     pub(crate) preferred_username: Option<String>,
     pub(crate) email: Option<String>,
+    pub(crate) name: Option<String>,
     pub(crate) azp: Option<String>,
     pub(crate) typ: Option<String>,
     pub(crate) scope: Option<String>,
@@ -113,11 +116,19 @@ pub(crate) fn identity_from(
         }
         None => None,
     };
+    let display_name = match claims.name.as_deref().filter(|n| !n.is_empty()) {
+        Some(name) => {
+            check_text(name, MAX_NAME_BYTES)?;
+            Some(name.to_owned())
+        }
+        None => None,
+    };
     Ok(OidcIdentity {
         issuer: issuer.to_owned(),
         subject: subject.to_owned(),
         username: username.to_owned(),
         email,
+        display_name,
         groups: extract_groups(claims.rest.get(&policy.claim), policy, stats),
     })
 }

@@ -9,13 +9,17 @@
 //! | OIDC session (internal JWT) | stored | the snapshot inside the JWT, at most 5 minutes old | mapped |
 //! | OIDC owner of an API token | stored | none can be confirmed | `manual` rows only if supplement is on |
 //! | LDAP (Basic, token, JWT) | JIT by username | the LDAP resolver, per request | mapped |
+//! | robot or scan token | none | none | none: rights are the token scopes alone |
 //!
 //! Roles are computed from what the current request proves. Persisted `user_roles`
 //! rows are written for the UI and audit and are never read back as a grant.
 
+use std::time::Duration;
+
 use rustryx_core::error::AuthError;
 use rustryx_core::identity::{AuthMethod, IdpProvider, Principal, UserSource};
 use rustryx_core::ids::UserId;
+use rustryx_core::ports::ExternalGroups;
 use time::OffsetDateTime;
 
 use super::AuthService;
@@ -29,6 +33,11 @@ pub(super) struct ConfirmedGroups {
     at: OffsetDateTime,
 }
 
+/// How far ahead of this node's clock a confirmation time may lie. A confirmation from the
+/// future (another node's clock runs ahead, or this one was stepped back) cannot be aged, and
+/// an unaged group set must not grant anything; the allowance only absorbs ordinary skew.
+const GROUPS_CLOCK_SKEW: Duration = Duration::from_secs(5);
+
 /// What a request proved about group membership.
 struct Membership {
     groups: Vec<String>,
@@ -38,6 +47,29 @@ struct Membership {
 impl AuthService {
     /// Provisions the account when needed and fills in `roles` and `external_groups`.
     pub(super) async fn finish(&self, mut principal: Principal) -> Result<Principal, AuthError> {
+        match principal.auth_method {
+            AuthMethod::BasicLocal
+            | AuthMethod::BasicLdap
+            | AuthMethod::ApiToken
+            | AuthMethod::InternalJwt
+            | AuthMethod::OidcBearer => {}
+            // Robot and scan tokens have no account and no roles: their rights are their scopes
+            // and nothing else (decision order rule 4 of rbac), so there is nothing to
+            // provision and nothing to map.
+            AuthMethod::RobotToken | AuthMethod::ScanToken => {
+                return Self::finish_scoped(principal);
+            }
+            // `Anonymous` never reaches here (the service answers it itself), and a method
+            // this build does not know cannot be given roles safely. Both are refused rather
+            // than treated as "an account without roles", which a caller could read as a
+            // valid, merely unprivileged identity.
+            _ => {
+                return Err(backend_failure(
+                    "role resolution",
+                    "authentication method cannot be resolved to roles",
+                ));
+            }
+        }
         if principal.user_id.is_none() {
             let user = self.jit.provision(&principal).await?;
             principal.user_id = Some(user.id);
@@ -64,6 +96,23 @@ impl AuthService {
                     .await
             }
         }
+    }
+
+    /// A robot or scan principal: no roles, no groups, and the scopes it was authenticated
+    /// with are mandatory. A token principal without `token_scopes` would read as an
+    /// unrestricted personal token to the authorizer, so it is refused here, where the broken
+    /// authenticator is still identifiable.
+    fn finish_scoped(mut principal: Principal) -> Result<Principal, AuthError> {
+        if principal.token_scopes.is_none() {
+            return Err(backend_failure(
+                "role resolution",
+                "robot or scan principal without token scopes",
+            ));
+        }
+        principal.roles = Vec::new();
+        principal.external_groups = Vec::new();
+        principal.groups_confirmed_at = None;
+        Ok(principal)
     }
 
     async fn external_roles(
@@ -108,8 +157,8 @@ impl AuthService {
                 self.jit
                     .persist_external_roles(user_id, provider, &[])
                     .await;
-                Err(AuthError::GroupLookupFailed(
-                    "access denied: no mapped group and no default role".into(),
+                Err(AuthError::AccessDenied(
+                    "no mapped group and no default role",
                 ))
             }
         }
@@ -130,15 +179,13 @@ impl AuthService {
                     ));
                 };
                 let external = idp.resolver.external_groups(principal).await?;
-                if external.provider != IdpProvider::Oidc {
-                    return Err(backend_failure(
-                        "group resolution",
-                        "resolver answered for another provider",
-                    ));
-                }
+                Self::ensure_provider(&external, IdpProvider::Oidc)?;
+                // The resolver says when the groups were confirmed (the verification of this
+                // request's token); the same age rule applies to every source.
+                self.ensure_fresh(external.confirmed_at, now)?;
                 Ok(Some(Membership {
                     groups: external.groups,
-                    confirmed_at: now,
+                    confirmed_at: external.confirmed_at,
                 }))
             }
             AuthMethod::InternalJwt => {
@@ -160,12 +207,30 @@ impl AuthService {
         }
     }
 
+    fn ensure_provider(external: &ExternalGroups, expected: IdpProvider) -> Result<(), AuthError> {
+        if external.provider == expected {
+            return Ok(());
+        }
+        Err(backend_failure(
+            "group resolution",
+            "resolver answered for another provider",
+        ))
+    }
+
+    /// A confirmation counts while it is at most `groups_max_age` old at `now` and does not
+    /// lie in the future beyond the clock skew allowance.
     fn ensure_fresh(
         &self,
         confirmed_at: OffsetDateTime,
         now: OffsetDateTime,
     ) -> Result<(), AuthError> {
         let max = time::Duration::try_from(self.groups_max_age).unwrap_or(time::Duration::ZERO);
+        let skew = time::Duration::try_from(GROUPS_CLOCK_SKEW).unwrap_or(time::Duration::ZERO);
+        if confirmed_at > now.saturating_add(skew) {
+            return Err(AuthError::GroupLookupFailed(
+                "group confirmation lies in the future".into(),
+            ));
+        }
         if now - confirmed_at > max {
             return Err(AuthError::GroupLookupFailed(
                 "group confirmation is older than the allowed maximum".into(),
@@ -174,9 +239,16 @@ impl AuthService {
         Ok(())
     }
 
-    /// LDAP: a fresh search per request. When the search fails, the last successful
-    /// result is reused only while it is younger than the maximum age; past that the
-    /// request is refused. A failed lookup is never an empty group list.
+    /// LDAP: the resolver per request. Its answer carries the time the DIRECTORY confirmed
+    /// it, and every age decision here is made from that time, never from the time the answer
+    /// was received: a set served from the resolver's 60 second cache is already up to 60
+    /// seconds old when it arrives, and stamping "now" on it would let the two graces add up.
+    ///
+    /// When the lookup fails, the last successful result is reused only while it is at most
+    /// the maximum age old, counted from ITS confirmation; past that the request is refused.
+    /// The total staleness of a group set is therefore at most five minutes from the
+    /// directory's answer, whichever layer serves it (README 8.5). A failed lookup is never an
+    /// empty group list.
     async fn ldap_membership(
         &self,
         principal: &Principal,
@@ -190,48 +262,73 @@ impl AuthService {
         let now = self.clock.now();
         match idp.resolver.external_groups(principal).await {
             Ok(external) => {
-                if external.provider != IdpProvider::Ldap {
-                    return Err(backend_failure(
-                        "group resolution",
-                        "resolver answered for another provider",
-                    ));
-                }
-                self.ldap_confirmed
-                    .insert(
-                        user_id,
-                        ConfirmedGroups {
-                            groups: external.groups.clone(),
-                            at: now,
-                        },
-                    )
-                    .await;
-                Ok(Membership {
-                    groups: external.groups,
-                    confirmed_at: now,
-                })
-            }
-            Err(AuthError::Overloaded) => Err(AuthError::Overloaded),
-            Err(error) => {
-                let earlier = self.ldap_confirmed.get(&user_id).await;
-                match earlier {
-                    Some(previous) if self.ensure_fresh(previous.at, now).is_ok() => {
-                        tracing::warn!(
-                            user_id = %user_id,
-                            %error,
-                            "LDAP group search failed, reusing the previous result within its maximum age"
-                        );
+                Self::ensure_provider(&external, IdpProvider::Ldap)?;
+                match self.ensure_fresh(external.confirmed_at, now) {
+                    Ok(()) => {
+                        self.remember_ldap(user_id, &external).await;
                         Ok(Membership {
-                            groups: previous.groups,
-                            confirmed_at: previous.at,
+                            groups: external.groups,
+                            confirmed_at: external.confirmed_at,
                         })
                     }
-                    _ => {
-                        tracing::warn!(user_id = %user_id, %error, "LDAP group search failed and no recent result exists");
-                        Err(AuthError::GroupLookupFailed(
-                            "group lookup failed and no recent confirmation exists".into(),
-                        ))
-                    }
+                    // An answer older than the window (a resolver that serves stale sets for
+                    // too long) or from the future is as good as no answer.
+                    Err(error) => self.reuse_ldap(user_id, now, &error).await,
                 }
+            }
+            Err(AuthError::Overloaded) => Err(AuthError::Overloaded),
+            Err(error) => self.reuse_ldap(user_id, now, &error).await,
+        }
+    }
+
+    /// Keeps the newest confirmed set of a user. An answer that is not newer than the one
+    /// held (the resolver served its cache again) does not replace it, so the stored
+    /// confirmation time never moves backwards and never forwards without the directory.
+    async fn remember_ldap(&self, user_id: UserId, external: &ExternalGroups) {
+        let newer = self
+            .ldap_confirmed
+            .get(&user_id)
+            .await
+            .is_none_or(|held| held.at < external.confirmed_at);
+        if newer {
+            self.ldap_confirmed
+                .insert(
+                    user_id,
+                    ConfirmedGroups {
+                        groups: external.groups.clone(),
+                        at: external.confirmed_at,
+                    },
+                )
+                .await;
+        }
+    }
+
+    /// The directory could not answer: serve the last confirmed set if it is still inside
+    /// the window, otherwise fail closed.
+    async fn reuse_ldap(
+        &self,
+        user_id: UserId,
+        now: OffsetDateTime,
+        cause: &AuthError,
+    ) -> Result<Membership, AuthError> {
+        match self.ldap_confirmed.get(&user_id).await {
+            Some(previous) if self.ensure_fresh(previous.at, now).is_ok() => {
+                tracing::warn!(
+                    user_id = %user_id,
+                    error = %cause,
+                    confirmed_at = %previous.at,
+                    "LDAP group search failed, reusing the previous result within its maximum age"
+                );
+                Ok(Membership {
+                    groups: previous.groups,
+                    confirmed_at: previous.at,
+                })
+            }
+            _ => {
+                tracing::warn!(user_id = %user_id, error = %cause, "LDAP group search failed and no recent result exists");
+                Err(AuthError::GroupLookupFailed(
+                    "group lookup failed and no recent confirmation exists".into(),
+                ))
             }
         }
     }

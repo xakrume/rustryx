@@ -23,7 +23,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rustryx_core::error::AuthError;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -155,10 +155,36 @@ impl BlockingGate {
         self.lane(class).semaphore.available_permits()
     }
 
+    /// `acquire_before` without a request deadline, the spelling the tests use.
+    #[cfg(test)]
     pub(crate) async fn acquire(
         &self,
         class: GateClass,
     ) -> Result<OwnedSemaphorePermit, AuthError> {
+        self.acquire_before(class, None).await
+    }
+
+    /// Like `acquire`, but no wait outlives `deadline` (the request deadline of
+    /// `AuthContext`). A deadline that has already passed refuses the call before it takes a
+    /// permit, even a free one: the request is dead, and hashing for it would only occupy a
+    /// core that a live request needs.
+    pub(crate) async fn acquire_before(
+        &self,
+        class: GateClass,
+        deadline: Option<Instant>,
+    ) -> Result<OwnedSemaphorePermit, AuthError> {
+        let wait = match deadline {
+            None => self.permit_wait,
+            Some(deadline) => {
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    return Err(Self::reject(class, "request deadline passed"));
+                }
+                // The shorter of the two bounds wins: `permit_wait` keeps the wait finite
+                // for a caller whose deadline is far away.
+                left.min(self.permit_wait)
+            }
+        };
         let lane = self.lane(class);
         // Fast path: a free permit costs no queueing and no timer.
         if let Ok(permit) = lane.semaphore.clone().try_acquire_owned() {
@@ -169,7 +195,7 @@ impl BlockingGate {
         if queued >= lane.max_waiting {
             return Err(Self::reject(class, "queue full"));
         }
-        match tokio::time::timeout(self.permit_wait, lane.semaphore.clone().acquire_owned()).await {
+        match tokio::time::timeout(wait, lane.semaphore.clone().acquire_owned()).await {
             Ok(Ok(permit)) => Ok(permit),
             Ok(Err(_closed)) => Err(Self::reject(class, "gate closed")),
             Err(_elapsed) => Err(Self::reject(class, "no permit before the deadline")),
@@ -196,7 +222,22 @@ impl BlockingGate {
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
     {
-        let permit = self.acquire(class).await?;
+        self.run_before(class, None, work).await
+    }
+
+    /// Like [`Self::run`], with the request deadline bounding the wait for a permit (the
+    /// job itself cannot be interrupted once it runs, see invariant 2).
+    pub async fn run_before<T, F>(
+        &self,
+        class: GateClass,
+        deadline: Option<Instant>,
+        work: F,
+    ) -> Result<T, AuthError>
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        let permit = self.acquire_before(class, deadline).await?;
         let handle = tokio::task::spawn_blocking(move || {
             let output = work();
             drop(permit);
@@ -234,6 +275,70 @@ mod tests {
             },
             permit_wait: Duration::from_millis(wait_ms),
         })
+    }
+
+    #[tokio::test]
+    async fn must_not_wait_past_the_request_deadline() {
+        // The configured wait is five seconds; the request has 60 ms left. The caller must be
+        // refused after about 60 ms, not after five seconds.
+        let gate = tiny(1, 4, 5_000);
+        let _held = gate.acquire(GateClass::Password).await.unwrap();
+        let started = Instant::now();
+        let deadline = started + Duration::from_millis(60);
+        let error = gate
+            .acquire_before(GateClass::Password, Some(deadline))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AuthError::Overloaded), "{error:?}");
+        let waited = started.elapsed();
+        assert!(
+            waited >= Duration::from_millis(50) && waited < Duration::from_secs(2),
+            "{waited:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn must_not_take_a_free_permit_for_a_request_whose_deadline_has_passed() {
+        let gate = tiny(2, 2, 100);
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&ran);
+        let error = gate
+            .run_before(GateClass::Password, Some(Instant::now()), move || {
+                flag.store(true, Ordering::SeqCst);
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AuthError::Overloaded), "{error:?}");
+        assert!(!ran.load(Ordering::SeqCst), "the job must not start");
+        assert_eq!(gate.available(GateClass::Password), 2);
+    }
+
+    #[tokio::test]
+    async fn a_far_deadline_does_not_lengthen_the_configured_wait() {
+        let gate = tiny(1, 4, 40);
+        let _held = gate.acquire(GateClass::Password).await.unwrap();
+        let started = Instant::now();
+        let far = started + Duration::from_secs(600);
+        let error = gate
+            .acquire_before(GateClass::Password, Some(far))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AuthError::Overloaded), "{error:?}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn a_deadline_that_is_still_open_lets_work_through() {
+        let gate = tiny(1, 1, 100);
+        let value = gate
+            .run_before(
+                GateClass::General,
+                Some(Instant::now() + Duration::from_secs(30)),
+                || 7,
+            )
+            .await
+            .unwrap();
+        assert_eq!(value, 7);
     }
 
     #[tokio::test]

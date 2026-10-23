@@ -40,6 +40,8 @@ mod config_tests;
 #[cfg(test)]
 mod group_tests;
 #[cfg(test)]
+mod hint_tests;
+#[cfg(test)]
 mod integration_tests;
 #[cfg(test)]
 mod log_tests;

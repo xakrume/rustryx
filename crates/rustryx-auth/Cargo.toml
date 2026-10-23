@@ -21,6 +21,7 @@ bcrypt.workspace = true
 bytes.workspace = true
 futures.workspace = true
 hex.workspace = true
+hmac.workspace = true
 http.workspace = true
 jsonwebtoken.workspace = true
 ldap3.workspace = true

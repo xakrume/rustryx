@@ -266,6 +266,15 @@ impl TokenAuthenticator {
         }
     }
 
+    /// Finds the PERSONAL token record of `token`.
+    ///
+    /// Robot tokens and scan tokens share the `ryx_` shape and live in other tables
+    /// (`robot_tokens`, `scan_access_tokens`), so a token cannot be classified by its text:
+    /// the kind is whichever table knows the hash. Their authenticators come with the streams
+    /// that own those tables and produce `AuthMethod::RobotToken` and `AuthMethod::ScanToken`
+    /// principals; until then a hash that no table knows is refused here as "unknown API
+    /// token", with the same answer for every unknown kind. Nothing falls back to a default
+    /// identity, and the chain refuses a robot or scan principal that carries no scopes.
     async fn lookup(&self, token: &str, via_basic: bool) -> Result<ApiToken, AuthError> {
         if !is_well_formed_token(token) {
             return Err(Self::reject(via_basic, "malformed API token"));
@@ -322,19 +331,17 @@ impl Authenticator for TokenAuthenticator {
                 tracing::warn!(token_id = %record.id, %error, "could not record API token use");
             }
         }
-        Ok(Some(Principal {
-            user_id: Some(owner.id),
-            username: owner.username,
-            source: owner.source,
-            issuer: owner.issuer,
-            subject: owner.subject,
-            roles: Vec::new(),
-            external_groups: Vec::new(),
-            groups_confirmed_at: None,
-            token_scopes: Some(record.scopes),
-            token_id: Some(record.id),
-            auth_method: AuthMethod::ApiToken,
-        }))
+        let mut principal = Principal::new(owner.username, owner.source, AuthMethod::ApiToken);
+        principal.user_id = Some(owner.id);
+        principal.issuer = owner.issuer;
+        principal.subject = owner.subject;
+        principal.token_scopes = Some(record.scopes);
+        principal.token_id = Some(record.id);
+        principal.email = owner.email;
+        principal.display_name = owner.display_name;
+        // The credential's own expiry bounds how long a cache may keep this principal.
+        principal.expires_at = record.expires_at;
+        Ok(Some(principal))
     }
 }
 

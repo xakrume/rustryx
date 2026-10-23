@@ -30,6 +30,10 @@ pub(crate) struct CachedGroups {
     pub(crate) groups: Vec<String>,
     /// When the directory last confirmed this set.
     pub(crate) confirmed_at: OffsetDateTime,
+    /// DN of the user entry this set was read for. It is only a hint for the next refresh,
+    /// which reads that entry directly (still through the user filter) instead of searching
+    /// the subtree for the user again.
+    pub(crate) user_dn: Option<String>,
 }
 
 pub(crate) struct GroupCache {
@@ -71,6 +75,12 @@ impl GroupCache {
         (age(now, entry.confirmed_at)? <= MAX_GROUP_STALENESS).then_some(entry)
     }
 
+    /// The DN remembered for `username`, whatever the age of the entry: a hint outlives the
+    /// freshness of the groups next to it, which is exactly when it is needed.
+    pub(crate) async fn known_dn(&self, username: &str) -> Option<String> {
+        self.entries.get(username).await?.user_dn
+    }
+
     pub(crate) async fn put(&self, username: &str, entry: CachedGroups) {
         self.entries.insert(username.to_owned(), entry).await;
     }
@@ -91,6 +101,7 @@ mod tests {
         CachedGroups {
             groups: vec!["cn=a,dc=x".into()],
             confirmed_at: at,
+            user_dn: None,
         }
     }
 
@@ -143,6 +154,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_remembered_dn_outlives_the_freshness_of_the_groups() {
+        let cache = GroupCache::new(Duration::from_secs(60));
+        let mut remembered = entry(T0);
+        remembered.user_dn = Some("uid=alice,ou=people,dc=x".into());
+        cache.put("alice", remembered).await;
+        assert!(cache.fresh("alice", T0 + secs(120)).await.is_none());
+        assert_eq!(
+            cache.known_dn("alice").await.as_deref(),
+            Some("uid=alice,ou=people,dc=x")
+        );
+        assert_eq!(cache.known_dn("bob").await, None);
+        cache.remove("alice").await;
+        assert_eq!(
+            cache.known_dn("alice").await,
+            None,
+            "a gone user keeps no hint"
+        );
+    }
+
+    #[tokio::test]
     async fn removal_drops_the_entry() {
         let cache = GroupCache::new(Duration::from_secs(60));
         cache.put("alice", entry(T0)).await;
@@ -160,6 +191,7 @@ mod tests {
                 CachedGroups {
                     groups,
                     confirmed_at: T0,
+                    user_dn: None,
                 },
             )
             .await;

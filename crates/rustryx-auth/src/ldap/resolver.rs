@@ -15,13 +15,19 @@
 //!    confirmed set is deleted and the lookup fails at once, stale mode or not: "the
 //!    user does not exist" is an answer, not an outage.
 //!
-//! Why (4) is off by default: the authentication chain already reuses its previous
-//! result for five minutes when a lookup fails, and `ExternalGroups` carries no
-//! timestamp, so the chain stamps "now" on every `Ok`. A stale answer from here would
-//! be stamped as new there and the two graces would add up. The only state used to
-//! decide (4) is this resolver's own cache; the principal's `groups_confirmed_at` is
-//! never trusted for it. Callers that want the true timestamp use
-//! [`LdapGroupResolver::resolve_detailed`].
+//! Why (4) is off by default: the authentication chain keeps its own copy of the last
+//! successful answer and reuses it for at most five minutes when a lookup fails. Both
+//! timelines are measured from the directory's answer (`ExternalGroups::confirmed_at`), so
+//! the two graces no longer add up whichever one serves the stale set, and the chain's copy
+//! alone already bounds the total at five minutes. The resolver stays strict anyway: a
+//! stale `Ok` from here would hide the outage from the chain's failure handling and log.
+//! The only state used to decide (4) is this resolver's own cache; the principal's
+//! `groups_confirmed_at` is never trusted for it. Callers that want the freshness class as
+//! well use [`LdapGroupResolver::resolve_detailed`].
+//!
+//! The user search of a refresh is skipped when the user's DN is known (`Principal::external_id`,
+//! or the DN this cache remembers from the last lookup): the entry is read directly, through
+//! the same user filter, see [`Active::find_user_at`](super::service::Active::find_user_at).
 
 use std::sync::Arc;
 
@@ -33,7 +39,9 @@ use time::OffsetDateTime;
 use tokio::time::timeout;
 
 use super::cache::CachedGroups;
+use super::error::LdapError;
 use super::groups::{self, WalkOutcome};
+use super::pool::PooledConnection;
 use super::service::{Active, LdapService};
 use super::stats::Counter;
 use super::user::{DirectoryUser, UserLookup};
@@ -74,25 +82,32 @@ impl Active {
     /// Applies the policy described in the module documentation.
     ///
     /// `known` is the user entry when the caller has just found it (login), which
-    /// saves one search.
+    /// saves one search. `dn_hint` is the DN of the user when it is known from earlier
+    /// (`Principal::external_id`), which turns the subtree search into a read of that entry.
     pub(crate) async fn groups_for_user(
         &self,
         username: &str,
         known: Option<&DirectoryUser>,
+        dn_hint: Option<&str>,
     ) -> Result<ResolvedGroups, AuthError> {
         if let Some(entry) = self.cache.fresh(username, self.clock.now()).await {
             return Ok(resolved(entry, GroupFreshness::Cached));
         }
+        let hint = match dn_hint {
+            Some(dn) => Some(dn.to_owned()),
+            None => self.cache.known_dn(username).await,
+        };
         let attempt = timeout(
             self.settings.timeouts.group_deadline,
-            self.search_groups(username, known),
+            self.search_groups(username, known, hint.as_deref()),
         )
         .await;
         match attempt {
-            Ok(Ok(groups)) => {
+            Ok(Ok((groups, user_dn))) => {
                 let entry = CachedGroups {
                     groups,
                     confirmed_at: self.clock.now(),
+                    user_dn: Some(user_dn),
                 };
                 self.cache.put(username, entry.clone()).await;
                 Ok(resolved(entry, GroupFreshness::Fresh))
@@ -119,11 +134,13 @@ impl Active {
         }
     }
 
+    /// The groups of the user and the DN of the entry they were read for.
     async fn search_groups(
         &self,
         username: &str,
         known: Option<&DirectoryUser>,
-    ) -> Result<Vec<String>, GroupFailure> {
+        dn_hint: Option<&str>,
+    ) -> Result<(Vec<String>, String), GroupFailure> {
         let mut conn = self
             .pool
             .checkout()
@@ -133,23 +150,38 @@ impl Active {
         let user = if let Some(user) = known {
             user
         } else {
-            match self
-                .find_user(&mut conn, username)
-                .await
-                .map_err(|error| GroupFailure::Failed(error.to_string()))?
-            {
-                UserLookup::Found(user) => {
-                    found = user;
-                    &found
-                }
-                UserLookup::NotFound | UserLookup::Ambiguous => return Err(GroupFailure::UserGone),
-            }
+            found = self.locate_user(&mut conn, username, dn_hint).await?;
+            &found
         };
         let outcome = groups::walk(&mut conn, &self.settings.groups, user)
             .await
             .map_err(|error| GroupFailure::Failed(error.to_string()))?;
         self.report_limits(&outcome, username);
-        Ok(outcome.groups)
+        Ok((outcome.groups, user.dn.clone()))
+    }
+
+    /// Finds the user for a refresh: the entry at the remembered DN when there is one, the
+    /// subtree search when there is none or when the hint no longer leads to the user (the
+    /// entry moved, or the account is gone or disabled, and then the subtree search says so).
+    async fn locate_user(
+        &self,
+        conn: &mut PooledConnection,
+        username: &str,
+        dn_hint: Option<&str>,
+    ) -> Result<DirectoryUser, GroupFailure> {
+        let failed = |error: LdapError| GroupFailure::Failed(error.to_string());
+        if let Some(dn) = dn_hint
+            && let UserLookup::Found(user) = self
+                .find_user_at(conn, dn, username)
+                .await
+                .map_err(failed)?
+        {
+            return Ok(user);
+        }
+        match self.find_user(conn, username).await.map_err(failed)? {
+            UserLookup::Found(user) => Ok(user),
+            UserLookup::NotFound | UserLookup::Ambiguous => Err(GroupFailure::UserGone),
+        }
     }
 
     fn report_limits(&self, outcome: &WalkOutcome, username: &str) {
@@ -248,7 +280,7 @@ impl LdapGroupResolver {
             ));
         };
         active
-            .groups_for_user(&principal.username, None)
+            .groups_for_user(&principal.username, None, principal.external_id.as_deref())
             .await
             .map(Some)
     }
@@ -263,14 +295,14 @@ impl GroupResolver for LdapGroupResolver {
     /// `Err(AuthError::GroupLookupFailed)`, never an empty list. A principal of another
     /// source has no LDAP groups: an empty list is the correct, successful answer.
     async fn external_groups(&self, principal: &Principal) -> Result<ExternalGroups, AuthError> {
-        let groups = self
-            .resolve_detailed(principal)
-            .await?
-            .map(|resolved| resolved.groups)
-            .unwrap_or_default();
-        Ok(ExternalGroups {
-            provider: IdpProvider::Ldap,
-            groups,
-        })
+        // `confirmed_at` is the time of the DIRECTORY's answer, also for a set served from the
+        // cache: the chain times its five minute window from it, never from the time it
+        // received the answer. For a principal that is not an LDAP one the empty list is
+        // true as of now.
+        let (groups, confirmed_at) = match self.resolve_detailed(principal).await? {
+            Some(resolved) => (resolved.groups, resolved.confirmed_at),
+            None => (Vec::new(), self.service.clock.now()),
+        };
+        Ok(ExternalGroups::new(IdpProvider::Ldap, groups, confirmed_at))
     }
 }

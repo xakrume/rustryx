@@ -28,29 +28,14 @@ fn env() -> Env {
 }
 
 fn oidc(username: &str, issuer: &str, subject: &str) -> Principal {
-    Principal {
-        user_id: None,
-        username: username.to_owned(),
-        source: UserSource::Oidc,
-        issuer: Some(issuer.to_owned()),
-        subject: Some(subject.to_owned()),
-        roles: Vec::new(),
-        external_groups: Vec::new(),
-        groups_confirmed_at: None,
-        token_scopes: None,
-        token_id: None,
-        auth_method: AuthMethod::OidcBearer,
-    }
+    let mut principal = Principal::new(username, UserSource::Oidc, AuthMethod::OidcBearer);
+    principal.issuer = Some(issuer.to_owned());
+    principal.subject = Some(subject.to_owned());
+    principal
 }
 
 fn ldap(username: &str) -> Principal {
-    Principal {
-        source: UserSource::Ldap,
-        issuer: None,
-        subject: None,
-        auth_method: AuthMethod::BasicLdap,
-        ..oidc(username, ISSUER, "unused")
-    }
+    Principal::new(username, UserSource::Ldap, AuthMethod::BasicLdap)
 }
 
 async fn user_count(store: &MemStore) -> usize {
@@ -248,9 +233,9 @@ async fn manual_mode_never_creates_accounts() {
         .provision(&oidc("heidi", ISSUER, "sub-h"))
         .await
         .unwrap_err();
-    assert!(matches!(error, AuthError::AccountDisabled), "{error:?}");
+    assert!(matches!(error, AuthError::AccessDenied(_)), "{error:?}");
     let error = env.jit.provision(&ldap("heidi")).await.unwrap_err();
-    assert!(matches!(error, AuthError::AccountDisabled), "{error:?}");
+    assert!(matches!(error, AuthError::AccessDenied(_)), "{error:?}");
     assert_eq!(user_count(&env.store).await, 0);
 
     // A pre-provisioned identity still logs in.
@@ -281,7 +266,7 @@ async fn allowlist_mode_creates_only_listed_usernames_exactly() {
             .await
             .unwrap_err();
         assert!(
-            matches!(error, AuthError::AccountDisabled),
+            matches!(error, AuthError::AccessDenied(_)),
             "{name:?}: {error:?}"
         );
     }
@@ -291,6 +276,38 @@ async fn allowlist_mode_creates_only_listed_usernames_exactly() {
         .await
         .unwrap();
     assert_eq!(user_count(&env.store).await, 1);
+}
+
+#[tokio::test]
+async fn a_new_account_stores_the_email_and_the_name_the_principal_carries() {
+    let env = env();
+    let mut principal = oidc("nora", ISSUER, "sub-n");
+    principal.email = Some("nora@example.test".to_owned());
+    principal.display_name = Some("Nora Quinn".to_owned());
+    let user = env.jit.provision(&principal).await.unwrap();
+    assert_eq!(user.email.as_deref(), Some("nora@example.test"));
+    assert_eq!(user.display_name.as_deref(), Some("Nora Quinn"));
+
+    let mut directory_user = ldap("omar");
+    directory_user.email = Some("omar@example.test".to_owned());
+    let user = env.jit.provision(&directory_user).await.unwrap();
+    assert_eq!(user.email.as_deref(), Some("omar@example.test"));
+    assert!(user.display_name.is_none());
+}
+
+#[tokio::test]
+async fn must_not_change_an_existing_account_from_the_claims_of_a_later_login() {
+    // The profile of an existing account is not rewritten at login: the e-mail of a token is
+    // informational and must never become a way to edit an account.
+    let env = env();
+    let mut first = oidc("pia", ISSUER, "sub-p");
+    first.email = Some("pia@example.test".to_owned());
+    let created = env.jit.provision(&first).await.unwrap();
+    let mut later = oidc("pia", ISSUER, "sub-p");
+    later.email = Some("someone.else@example.test".to_owned());
+    let again = env.jit.provision(&later).await.unwrap();
+    assert_eq!(again.id, created.id);
+    assert_eq!(again.email.as_deref(), Some("pia@example.test"));
 }
 
 #[tokio::test]

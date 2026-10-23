@@ -10,4 +10,6 @@ mod bearer;
 mod claims;
 mod flow;
 mod jwks;
+mod principal;
 mod provider;
+mod telemetry;

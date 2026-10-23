@@ -13,6 +13,7 @@ use http::{HeaderMap, HeaderValue, header};
 use openidconnect::{AsyncHttpClient, HttpRequest, HttpResponse};
 
 use super::config::OidcConfig;
+use crate::telemetry::RequestResult;
 
 /// Largest accepted discovery document or JWKS.
 pub(crate) const MAX_METADATA_BYTES: usize = 1024 * 1024;
@@ -38,6 +39,16 @@ pub(crate) enum HttpError {
     /// The HTTP client could not be configured.
     #[error("cannot configure http client: {0}")]
     Client(String),
+}
+
+impl HttpError {
+    /// How this failure counts in `oidc_requests_total`.
+    pub(crate) fn request_result(&self) -> RequestResult {
+        match self {
+            Self::Request(error) if error.is_timeout() => RequestResult::Timeout,
+            _ => RequestResult::Error,
+        }
+    }
 }
 
 /// A successful response with the headers the caches need.

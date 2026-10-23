@@ -34,6 +34,7 @@ use tokio::sync::watch;
 use super::config::{MAX_JWKS_TTL, MIN_JWKS_TTL, OidcConfig};
 use super::discovery::{Discovery, DiscoveryError};
 use super::http::{HttpError, MAX_METADATA_BYTES, OidcHttp};
+use crate::telemetry::{self, OidcOp, RequestResult};
 
 /// Smallest accepted RSA modulus. Anything weaker is skipped, not trusted.
 const MIN_RSA_BITS: usize = 2048;
@@ -56,6 +57,17 @@ pub(crate) enum JwksError {
     Invalid(String),
     #[error("jwks contains no usable signing key")]
     NoUsableKeys,
+}
+
+impl JwksError {
+    /// How this failure counts in `oidc_requests_total`.
+    fn request_result(&self) -> RequestResult {
+        match self {
+            Self::Http(error) => error.request_result(),
+            Self::Discovery(error) => error.request_result(),
+            Self::NoDiscovery | Self::Invalid(_) | Self::NoUsableKeys => RequestResult::Error,
+        }
+    }
 }
 
 /// Why no verification key could be produced for a token.
@@ -189,6 +201,14 @@ impl JwksCache {
         self.snapshot.load().fetched_at.map(|at| at.elapsed())
     }
 
+    /// The value of `oidc_jwks_age_seconds`: the age of the key set, or the time since this
+    /// cache was created while no fetch has succeeded yet. A node that cannot reach Keycloak
+    /// from its start must show a growing age too: with no series the stale alert could never
+    /// fire for exactly the node that needs it.
+    pub(crate) fn age_for_metrics(&self) -> Duration {
+        self.age().unwrap_or_else(|| self.epoch.elapsed())
+    }
+
     /// True when the key set is missing or older than its TTL.
     pub(crate) fn is_due(&self) -> bool {
         let snapshot = self.snapshot.load();
@@ -292,6 +312,12 @@ impl JwksCache {
     async fn fetch_and_store(&self) -> Result<(), JwksError> {
         let outcome = self.fetch().await;
         self.discovery.report_contact(outcome.is_ok());
+        telemetry::oidc_request(
+            OidcOp::Jwks,
+            outcome
+                .as_ref()
+                .map_or_else(JwksError::request_result, |_| RequestResult::Ok),
+        );
         match outcome {
             Ok((parsed, ttl)) => {
                 self.counters
@@ -303,6 +329,7 @@ impl JwksCache {
                     ttl,
                 }));
                 self.counters.refresh_ok.fetch_add(1, Ordering::Relaxed);
+                telemetry::oidc_jwks_age(0.0);
                 Ok(())
             }
             Err(error) => {
