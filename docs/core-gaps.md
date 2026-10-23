@@ -167,3 +167,12 @@ product.
 - `auth_attempts_total` must be emitted once: `AuthServiceConfig::record_attempt_metrics = false` while the api middleware counts.
 - Root `Cargo.toml` got `hmac = "0.13"`, `Cargo.lock` edges were added by hand: re-check `--locked`. testkit has no `RevokedTokenRepo` double (auth keeps a local fake): add one when testkit is adapted.
 - The four auth series (`oidc_requests_total`, `oidc_jwks_age_seconds`, `ldap_requests_total`, `auth_breakglass_logins_total`) must move from "not exported" to "exported" in docs/slo.md and names.rs.
+
+## DB adapted to core revision 2 (from the db agent)
+
+- 269 tests (37 unit, 232 integration on testcontainers), line coverage 93.16%. All required port methods implemented with the lead's GC order (row first under `FOR UPDATE`, then the object); `publish_with` enforces write policy, create-only mode, the repository quota (phase 1 sum under an advisory lock) and writes outbox events in the same transaction.
+- Added ports: `JobLeaseRepo`, `AuditReadRepo`, `RevokedTokenRepo`, `RoutingRuleRepo`, `SystemConfigRepo`. Migrations 0007 (projects, revoked_tokens, node_heartbeats, event_outbox with monthly partitions, outbox_cursors, task_definitions, task_runs, task_run_log, new columns and triggers) and 0008 (`routing_rules` plus a NOT VALID foreign key on `repositories.routing_rule_id`); `min_binary_schema` stays 1 and a test runs the phase 1 SQL against the new schema.
+- Guard SQLSTATEs RX004 to RX008 are mapped by `map_mutation_err`. Not done: ports for the outbox, node registry, task definitions and task runs (tables exist, wave 2 stream C0); project quotas, download counters and the immutability, hold and read-only guards wait for their stream migrations (guard tests use stand-in triggers).
+- Core problems worked around: `PolicyViolation` has no variant for RX008 (it is a `Conflict`), nothing says how RX004 to RX006 carry rule, hold or quota ids (DETAIL convention in ADR-DB-10), no blob-store invalidation variant, `WriteOptions.actor` and `request_id` unused by db, RX006 is never raised by SQL (quota is checked in Rust). `BlobStoreRepo::update` publishes `Reset` on the bus; `soft_quota` and `group` are refused with `Invalid` (no column yet).
+- `drop_old_outbox_partitions` also refuses to drop a partition with events past a consumer cursor.
+- Collision: the db agent deleted `target/llvm-cov-target` while format-core's coverage run may have been using it: rerun coverage there if it failed.
