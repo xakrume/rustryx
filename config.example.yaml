@@ -1,0 +1,345 @@
+# Rustryx example configuration.
+#
+# Every key of the schema appears below with its purpose, its environment
+# variable and its sensitivity. Values shown are illustrative where the schema has
+# no default; keys that are commented as "default" show the built-in default.
+#
+# Loading rules (full reference in docs/config.md):
+#   - Precedence, highest first: environment variable, this file, built-in default.
+#   - A key `a.b.c` is overridden by `RUSTRYX_A_B_C`. Underscores inside a key name
+#     are kept, so `auth.oidc.client_id` is `RUSTRYX_AUTH_OIDC_CLIENT_ID`.
+#   - Secrets belong in the environment or in a mounted file: set
+#     `RUSTRYX_<KEY>_FILE=/path/to/file` instead of `RUSTRYX_<KEY>`. Keys marked
+#     "secret" are written as `null` here on purpose. Do not put real secrets in
+#     a file that is committed.
+#   - Unknown keys are errors, a `null` or empty value means "use the default".
+#   - All problems are reported together and the process exits with code 78.
+#
+# Check this file: rustryx print-config --config config.example.yaml --no-validate
+
+# Deployment environment. `production` (default) refuses default, empty and
+# well-known weak credentials. Env: RUSTRYX_ENVIRONMENT (alias RUSTRYX_ENV).
+# Values: production | development.
+environment: production
+
+server:
+  # Address of the single HTTP listener. Env: RUSTRYX_SERVER_LISTEN_ADDR.
+  # Probes, metrics, the API and artifact routes share it. Default: 0.0.0.0:8081
+  listen_addr: "0.0.0.0:8081"
+  # Public base URL, no path. Required when auth.oidc.enabled (the redirect URI
+  # is derived from it); https in production. Env: RUSTRYX_SERVER_BASE_URL.
+  base_url: "https://artifacts.example.org"
+  # Drain budget after SIGTERM, seconds. Env: RUSTRYX_SERVER_SHUTDOWN_TIMEOUT_SECS.
+  # Default: 30. Set the pod terminationGracePeriodSeconds to this plus 15.
+  shutdown_timeout_secs: 30
+  # Seconds to keep serving after readiness flipped to 503 and before the listener
+  # stops, so the load balancer notices. Env: RUSTRYX_SERVER_DRAIN_DELAY_SECS.
+  # Default: 0 (rely on a preStop hook). 5 is a good value without one.
+  drain_delay_secs: 0
+  # CIDRs of peers allowed to set X-Forwarded-For (ingress, reverse proxy). The
+  # client address used by the login guard and the audit log is taken from it only
+  # when the direct peer is listed. /0 is refused.
+  # Env: RUSTRYX_SERVER_TRUSTED_PROXIES (comma separated). Default: [].
+  trusted_proxies: []
+  # Exact browser origins allowed by CORS, `scheme://host[:port]`. Empty sends no
+  # CORS headers. `*` is refused. Env: RUSTRYX_SERVER_CORS_ALLOWED_ORIGINS.
+  cors_allowed_origins: []
+
+database:
+  # PostgreSQL URL. SECRET (carries the password). Required.
+  # Env: RUSTRYX_DATABASE_URL or RUSTRYX_DATABASE_URL_FILE.
+  # Example value: postgres://rustryx:<password>@db.example.org:5432/rustryx?sslmode=verify-full
+  url: null
+  # Non-pooled URL for advisory locks, LISTEN/NOTIFY and migrations. SECRET.
+  # Needed when `url` points at a transaction-mode pooler; defaults to `url`.
+  # Env: RUSTRYX_DATABASE_DIRECT_URL or RUSTRYX_DATABASE_DIRECT_URL_FILE.
+  direct_url: null
+  # Connections per node (1 to 500). The sum over all nodes must stay below the
+  # server's max_connections. Env: RUSTRYX_DATABASE_POOL_SIZE. Default: 20.
+  pool_size: 20
+  # Wait for a free connection before the request gets 503, seconds.
+  # Env: RUSTRYX_DATABASE_ACQUIRE_TIMEOUT_SECS. Default: 5.
+  acquire_timeout_secs: 5
+  # TCP and TLS connect timeout, seconds. Env: RUSTRYX_DATABASE_CONNECT_TIMEOUT_SECS.
+  # Default: 5.
+  connect_timeout_secs: 5
+  # statement_timeout of API connections, seconds.
+  # Env: RUSTRYX_DATABASE_STATEMENT_TIMEOUT_SECS. Default: 30.
+  statement_timeout_secs: 30
+
+blob:
+  # Name of the default blob store. Env: RUSTRYX_BLOB_STORE_NAME. Default: default.
+  store_name: default
+  # local | s3. Env: RUSTRYX_BLOB_KIND. Default: local. A local store is only valid
+  # for one node or a shared ReadWriteMany volume; use s3 for HA.
+  kind: s3
+  # Root directory of a local store; absolute in production.
+  # Env: RUSTRYX_BLOB_LOCAL_PATH. Default: /var/lib/rustryx/blobs.
+  local_path: /var/lib/rustryx/blobs
+  # Free-space percent below which a local store rejects writes, 0 disables.
+  # Env: RUSTRYX_BLOB_LOCAL_MIN_FREE_PERCENT. Default: 10.
+  local_min_free_percent: 10
+  # S3 endpoint URL. Required for s3. Env: RUSTRYX_BLOB_S3_ENDPOINT.
+  s3_endpoint: "https://s3.example.org"
+  # S3 bucket. Required for s3. Env: RUSTRYX_BLOB_S3_BUCKET.
+  s3_bucket: rustryx
+  # S3 region. Required for s3. Env: RUSTRYX_BLOB_S3_REGION.
+  s3_region: us-east-1
+  # S3 access key id. SECRET. Required for s3.
+  # Env: RUSTRYX_BLOB_S3_ACCESS_KEY or RUSTRYX_BLOB_S3_ACCESS_KEY_FILE.
+  s3_access_key: null
+  # S3 secret access key. SECRET. Required for s3.
+  # Env: RUSTRYX_BLOB_S3_SECRET_KEY or RUSTRYX_BLOB_S3_SECRET_KEY_FILE.
+  s3_secret_key: null
+  # Path-style addressing (MinIO, Ceph). Env: RUSTRYX_BLOB_S3_PATH_STYLE.
+  # Default: true.
+  s3_path_style: true
+  # Multipart part size in MiB (5 to 5120). Memory per upload is bounded by one
+  # part. Env: RUSTRYX_BLOB_S3_PART_SIZE_MB. Default: 16.
+  s3_part_size_mb: 16
+
+auth:
+  # Global switch for anonymous access; a repository must also allow it.
+  # Env: RUSTRYX_AUTH_ANONYMOUS_ENABLED. Default: false.
+  anonymous_enabled: false
+  # Let roles assigned by an administrator add to roles derived from groups.
+  # Env: RUSTRYX_AUTH_ALLOW_LOCAL_ROLE_SUPPLEMENT. Default: false.
+  allow_local_role_supplement: false
+  # Account creation for identity-provider users: jit | allowlist | manual.
+  # Env: RUSTRYX_AUTH_JIT_MODE. Default: jit.
+  jit_mode: jit
+  # PEM Ed25519 private key that signs internal JWTs. SECRET. Required in
+  # production and identical on every node.
+  # Env: RUSTRYX_AUTH_INTERNAL_JWT_KEY or RUSTRYX_AUTH_INTERNAL_JWT_KEY_FILE.
+  internal_jwt_key: null
+  # Base64 of 32 random bytes sealing the OIDC state cookie (AES-256-GCM). SECRET.
+  # Required in production and identical on every node (openssl rand -base64 32).
+  # Env: RUSTRYX_AUTH_COOKIE_KEY or RUSTRYX_AUTH_COOKIE_KEY_FILE.
+  cookie_key: null
+
+  session:
+    # UI session idle timeout, seconds, at most 1800.
+    # Env: RUSTRYX_AUTH_SESSION_IDLE_TIMEOUT_SECS. Default: 1800.
+    idle_timeout_secs: 1800
+    # UI session absolute lifetime, seconds, at most 28800.
+    # Env: RUSTRYX_AUTH_SESSION_ABSOLUTE_TIMEOUT_SECS. Default: 28800.
+    absolute_timeout_secs: 28800
+
+  bootstrap_admin:
+    # Login of the local break-glass administrator (no ':' or whitespace).
+    # Env: RUSTRYX_AUTH_BOOTSTRAP_ADMIN_USERNAME. Default: admin.
+    username: admin
+    # Initial password. SECRET. Required in production: at least 12 characters and
+    # not a known weak value (admin123 and similar are refused).
+    # Env: RUSTRYX_AUTH_BOOTSTRAP_ADMIN_PASSWORD or ..._PASSWORD_FILE.
+    password: null
+
+  oidc:
+    # Keycloak login and bearer validation. Env: RUSTRYX_AUTH_OIDC_ENABLED.
+    # Default: false.
+    enabled: false
+    # Issuer URL, compared byte for byte with `iss`; https in production.
+    # Env: RUSTRYX_AUTH_OIDC_ISSUER.
+    issuer: "https://sso.example.org/realms/main"
+    # Issuer as seen by browsers when it differs from `issuer` (split horizon).
+    # Env: RUSTRYX_AUTH_OIDC_PUBLIC_ISSUER_URL. Default: unset.
+    public_issuer_url: null
+    # Client id of the confidential UI client; also the required `aud`.
+    # Env: RUSTRYX_AUTH_OIDC_CLIENT_ID.
+    client_id: rustryx-ui
+    # Client secret of the confidential UI client. SECRET.
+    # Env: RUSTRYX_AUTH_OIDC_CLIENT_SECRET or ..._CLIENT_SECRET_FILE.
+    client_secret: null
+    # Full Keycloak group paths (leading '/') granting nx-admin by exact match.
+    # Env: RUSTRYX_AUTH_OIDC_ADMIN_GROUPS (comma separated). Default: [].
+    admin_groups:
+      - /rustryx/admins
+    # Role for users without a mapped group; unset refuses them. `nx-admin` is
+    # refused. Env: RUSTRYX_AUTH_OIDC_DEFAULT_ROLE. Default: unset.
+    default_role: null
+    # Top-level claim holding group paths. Env: RUSTRYX_AUTH_OIDC_GROUPS_CLAIM.
+    # Default: groups.
+    groups_claim: groups
+    # Scopes requested at login; must include openid, must not include
+    # offline_access. Env: RUSTRYX_AUTH_OIDC_SCOPES. Default: openid, profile, email.
+    scopes:
+      - openid
+      - profile
+      - email
+    # Clock skew for exp, nbf and iat, seconds, at most 60.
+    # Env: RUSTRYX_AUTH_OIDC_CLOCK_SKEW_SECS. Default: 60.
+    clock_skew_secs: 60
+
+  ldap:
+    # LDAP login. Env: RUSTRYX_AUTH_LDAP_ENABLED. Default: false.
+    enabled: false
+    # ldaps://host[:port], or ldap://host[:port] together with starttls: true.
+    # Plain ldap:// fails validation. Env: RUSTRYX_AUTH_LDAP_URL.
+    url: "ldaps://ldap.example.org:636"
+    # Upgrade an ldap:// connection with StartTLS. Env: RUSTRYX_AUTH_LDAP_STARTTLS.
+    # Default: false.
+    starttls: false
+    # Service account DN for the user search. Env: RUSTRYX_AUTH_LDAP_BIND_DN.
+    bind_dn: "cn=rustryx,ou=service,dc=example,dc=org"
+    # Service account password. SECRET.
+    # Env: RUSTRYX_AUTH_LDAP_BIND_PASSWORD or ..._BIND_PASSWORD_FILE.
+    bind_password: null
+    # Base DN of the user search. Env: RUSTRYX_AUTH_LDAP_USER_BASE_DN.
+    user_base_dn: "ou=people,dc=example,dc=org"
+    # User search filter; {username} is replaced by the RFC 4515 escaped login.
+    # Env: RUSTRYX_AUTH_LDAP_SEARCH_FILTER. Default: (uid={username}).
+    search_filter: "(uid={username})"
+    # member_of | member_search. Env: RUSTRYX_AUTH_LDAP_GROUP_STRATEGY.
+    # Default: member_of.
+    group_strategy: member_of
+    # User attribute listing group DNs (member_of).
+    # Env: RUSTRYX_AUTH_LDAP_GROUP_ATTRIBUTE. Default: memberOf.
+    group_attribute: memberOf
+    # Base DN of the group search (member_search).
+    # Env: RUSTRYX_AUTH_LDAP_GROUP_BASE_DN. Default: unset.
+    group_base_dn: null
+    # Group search filter; {dn} is replaced by the RFC 4515 escaped user DN
+    # (member_search). Env: RUSTRYX_AUTH_LDAP_GROUP_FILTER. Default: (member={dn}).
+    group_filter: "(member={dn})"
+    # Group DNs granting nx-admin by exact match.
+    # Env: RUSTRYX_AUTH_LDAP_ADMIN_GROUPS (comma separated). Default: [].
+    admin_groups: []
+    # PEM CA bundle for the server certificate, readable when LDAP is enabled.
+    # Env: RUSTRYX_AUTH_LDAP_CA_FILE. Default: unset (system roots only).
+    ca_file: null
+    # Connect timeout, seconds. Env: RUSTRYX_AUTH_LDAP_CONNECT_TIMEOUT_SECS.
+    # Default: 5.
+    connect_timeout_secs: 5
+    # Bind timeout, seconds. Env: RUSTRYX_AUTH_LDAP_BIND_TIMEOUT_SECS. Default: 5.
+    bind_timeout_secs: 5
+    # Search timeout, seconds. Env: RUSTRYX_AUTH_LDAP_SEARCH_TIMEOUT_SECS.
+    # Default: 5.
+    search_timeout_secs: 5
+    # Lifetime of confirmed group membership, seconds, at most 300.
+    # Env: RUSTRYX_AUTH_LDAP_GROUPS_CACHE_TTL_SECS. Default: 300.
+    groups_cache_ttl_secs: 300
+    # Maximum depth when expanding nested groups.
+    # Env: RUSTRYX_AUTH_LDAP_NESTED_GROUP_DEPTH. Default: 5.
+    nested_group_depth: 5
+    # Maximum groups collected for one user. Env: RUSTRYX_AUTH_LDAP_MAX_GROUPS.
+    # Default: 1000.
+    max_groups: 1000
+
+lock:
+  # Backend for singleton jobs: postgres | redis. Fixed for the life of the process;
+  # there is no automatic switch. Env: RUSTRYX_LOCK_BACKEND. Default: postgres.
+  backend: postgres
+  # Redis URL, required for the redis backend. SECRET (may carry a password).
+  # Env: RUSTRYX_LOCK_REDIS_URL or RUSTRYX_LOCK_REDIS_URL_FILE.
+  redis_url: null
+  # Lock TTL, seconds (5 to 300), renewed every TTL/3. Env: RUSTRYX_LOCK_TTL_SECS.
+  # Default: 30.
+  ttl_secs: 30
+
+limits:
+  # Largest JSON/metadata request body, MiB. Env: RUSTRYX_LIMITS_MAX_BODY_MB.
+  # Default: 10.
+  max_body_mb: 10
+  # Largest artifact body, bytes; larger uploads get 413.
+  # Env: RUSTRYX_LIMITS_MAX_BLOB_BYTES. Default: 5368709120 (5 GiB).
+  max_blob_bytes: 5368709120
+  # Ceiling for producing the response head of one request, seconds.
+  # Env: RUSTRYX_LIMITS_REQUEST_TIMEOUT_SECS. Default: 1800.
+  request_timeout_secs: 1800
+  # Time a client may take to send request headers, seconds (slowloris guard).
+  # Env: RUSTRYX_LIMITS_HEADER_READ_TIMEOUT_SECS. Default: 10.
+  header_read_timeout_secs: 10
+  # Idle time allowed between request or response body chunks, seconds.
+  # Env: RUSTRYX_LIMITS_BODY_IDLE_TIMEOUT_SECS. Default: 60.
+  body_idle_timeout_secs: 60
+  # Open connections per node. Env: RUSTRYX_LIMITS_MAX_CONNECTIONS. Default: 20000.
+  max_connections: 20000
+  # Concurrent requests per node; beyond this requests get 503 with Retry-After.
+  # Env: RUSTRYX_LIMITS_MAX_IN_FLIGHT_REQUESTS. Default: 10000.
+  max_in_flight_requests: 10000
+  # Permits for blocking work (archives, large XML). 0 means 2 x CPUs.
+  # Env: RUSTRYX_LIMITS_BLOCKING_PERMITS. Default: 0.
+  blocking_permits: 0
+  # Permits for password hashing. 0 means physical cores.
+  # Env: RUSTRYX_LIMITS_PASSWORD_PERMITS. Default: 0.
+  password_permits: 0
+  # Wait for a blocking permit before the request gets 503, milliseconds.
+  # Env: RUSTRYX_LIMITS_PERMIT_WAIT_MS. Default: 1000.
+  permit_wait_ms: 1000
+  rate_limit:
+    # Per-client rate limiter. Env: RUSTRYX_LIMITS_RATE_LIMIT_ENABLED. Default: true.
+    enabled: true
+    # Sustained requests per second. Env: RUSTRYX_LIMITS_RATE_LIMIT_REQUESTS_PER_SECOND.
+    # Default: 50.
+    requests_per_second: 50
+    # Burst size. Env: RUSTRYX_LIMITS_RATE_LIMIT_BURST. Default: 100.
+    burst: 100
+
+upstream:
+  # Schemes a proxy remote_url may use; must include https.
+  # Env: RUSTRYX_UPSTREAM_ALLOWED_SCHEMES. Default: [https].
+  allowed_schemes:
+    - https
+  # Hosts reachable over plain http; needed when http is an allowed scheme.
+  # Env: RUSTRYX_UPSTREAM_ALLOW_INSECURE_HTTP_HOSTS. Default: [].
+  allow_insecure_http_hosts: []
+  # When not empty, only these hosts (exact or *.example.com) may be upstreams.
+  # Env: RUSTRYX_UPSTREAM_ALLOWED_HOSTS. Default: [] (any public host).
+  allowed_hosts: []
+  # Internal CIDRs allowed despite the SSRF filter, for example an internal mirror.
+  # Loopback and the metadata address 169.254.169.254 are refused.
+  # Env: RUSTRYX_UPSTREAM_ALLOW_PRIVATE_CIDRS. Default: [].
+  allow_private_cidrs: []
+  # Redirects followed per request, at most 3. Env: RUSTRYX_UPSTREAM_MAX_REDIRECTS.
+  # Default: 3.
+  max_redirects: 3
+  # Connect timeout, seconds. Env: RUSTRYX_UPSTREAM_CONNECT_TIMEOUT_SECS. Default: 3.
+  connect_timeout_secs: 3
+  # Timeout of metadata requests, seconds.
+  # Env: RUSTRYX_UPSTREAM_METADATA_TIMEOUT_SECS. Default: 30.
+  metadata_timeout_secs: 30
+  # Idle timeout of a streaming body, seconds.
+  # Env: RUSTRYX_UPSTREAM_IDLE_TIMEOUT_SECS. Default: 60.
+  idle_timeout_secs: 60
+  # Attempts for GET and HEAD including the first, at most 3.
+  # Env: RUSTRYX_UPSTREAM_MAX_ATTEMPTS. Default: 3.
+  max_attempts: 3
+
+gc:
+  # Blob garbage collection. Env: RUSTRYX_GC_ENABLED. Default: true.
+  enabled: true
+  # Seconds between runs. Env: RUSTRYX_GC_INTERVAL_SECS. Default: 3600.
+  interval_secs: 3600
+  # A blob younger than this is never deleted. Must exceed
+  # limits.request_timeout_secs, otherwise the blob of an upload in progress could
+  # be collected. Env: RUSTRYX_GC_MIN_AGE_SECS. Default: 86400.
+  min_age_secs: 86400
+  # Blobs examined per batch. Env: RUSTRYX_GC_BATCH_SIZE. Default: 1000.
+  batch_size: 1000
+
+observability:
+  # Comma separated `level` or `target=level` directives.
+  # Env: RUSTRYX_OBSERVABILITY_LOG_LEVEL. Default: info.
+  log_level: info
+  # json | text. Env: RUSTRYX_OBSERVABILITY_LOG_FORMAT. Default: json.
+  log_format: json
+  # OTLP collector endpoint; unset keeps trace export off.
+  # Env: RUSTRYX_OBSERVABILITY_OTLP_ENDPOINT. Default: unset.
+  otlp_endpoint: null
+  # grpc | http. Env: RUSTRYX_OBSERVABILITY_OTLP_PROTOCOL. Default: grpc.
+  otlp_protocol: grpc
+  # Head sampling ratio (0 to 1) for traces without a sampled parent.
+  # Env: RUSTRYX_OBSERVABILITY_OTLP_SAMPLE_RATIO. Default: 0.1.
+  otlp_sample_ratio: 0.1
+  # service.name resource attribute. Env: RUSTRYX_OBSERVABILITY_SERVICE_NAME.
+  # Default: rustryx.
+  service_name: rustryx
+  # Serve /metrics. Env: RUSTRYX_OBSERVABILITY_METRICS_ENABLED. Default: true.
+  metrics_enabled: true
+  # Serve /metrics without a token. Env: RUSTRYX_OBSERVABILITY_METRICS_PUBLIC.
+  # Default: false.
+  metrics_public: false
+  # Bearer token for /metrics. SECRET. Required unless metrics_public; at least 16
+  # characters in production.
+  # Env: RUSTRYX_OBSERVABILITY_METRICS_TOKEN or ..._METRICS_TOKEN_FILE.
+  metrics_token: null

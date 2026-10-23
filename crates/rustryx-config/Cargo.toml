@@ -6,10 +6,21 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "Rustryx: config"
+description = "Rustryx: typed configuration, layered loading and validation"
 
 [lints]
 workspace = true
 
 [dependencies]
 rustryx-core.workspace = true
+base64.workspace = true
+ipnet = { workspace = true, features = ["serde"] }
+num_cpus.workspace = true
+serde.workspace = true
+serde_path_to_error.workspace = true
+serde_yaml_ng.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
