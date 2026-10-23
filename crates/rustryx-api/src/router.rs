@@ -112,12 +112,14 @@ impl RouterBuilder {
 
         // Shares the on/off switch of the rate limit but has its own, slowly refilling
         // bucket per client address (see `auth_failure_guard`).
-        let guard = state.settings().rate_limit.map(|_| FailureGuardState {
-            limiter: Arc::new(RateLimiter::per_minute(
-                AUTH_FAILURE_PER_MINUTE,
-                AUTH_FAILURE_BURST,
-            )),
-            metrics: state.metrics().cloned(),
+        let guard = state.settings().rate_limit.map(|_| {
+            FailureGuardState::new(
+                Arc::new(RateLimiter::per_minute(
+                    AUTH_FAILURE_PER_MINUTE,
+                    AUTH_FAILURE_BURST,
+                )),
+                state.metrics().cloned(),
+            )
         });
 
         // The 405 handler is set per group, before the group's layers are applied, so

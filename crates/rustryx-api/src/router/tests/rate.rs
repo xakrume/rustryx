@@ -285,3 +285,99 @@ async fn successful_credentials_do_not_use_up_the_failure_counter() {
         assert_eq!(call(&router, req).await.status, StatusCode::OK);
     }
 }
+
+fn peer_v6(peer: std::net::Ipv6Addr, token: &str) -> http::Request<Body> {
+    let mut req = request(Method::GET, "/api/only-get")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .expect("req");
+    req.extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from((peer, 4000))));
+    req
+}
+
+#[tokio::test(start_paused = true)]
+async fn must_not_let_a_client_dodge_the_guard_by_rotating_ipv6_addresses_in_its_prefix() {
+    let auth = StubAuth::new(|_, _| Err(rustryx_core::AuthError::InvalidCredentials));
+    let router = test_router(
+        state_with_settings(|s| {
+            s.rate_limit = Some(RateLimitSettings {
+                requests_per_second: 1000,
+                burst: 1000,
+            });
+        })
+        .with_authenticator(auth),
+    );
+    for host in 0..10u16 {
+        let addr = std::net::Ipv6Addr::new(0x2001, 0xdb8, 0, 1, 0, 0, 0, host);
+        let reply = call(&router, peer_v6(addr, "ryx_guess")).await;
+        assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "host {host}");
+    }
+    let same_prefix = std::net::Ipv6Addr::new(0x2001, 0xdb8, 0, 1, 0xaaaa, 0xbbbb, 0xcccc, 0xdddd);
+    assert_eq!(
+        call(&router, peer_v6(same_prefix, "ryx_guess"))
+            .await
+            .status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "one /64 is one client"
+    );
+    let other_prefix = std::net::Ipv6Addr::new(0x2001, 0xdb8, 0, 2, 0, 0, 0, 1);
+    assert_eq!(
+        call(&router, peer_v6(other_prefix, "ryx_guess"))
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED,
+        "another /64 has its own budget"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn must_not_lock_out_credentials_that_verified_from_a_shared_address() {
+    // Behind a NAT every colleague shares one address. An attacker burning the budget
+    // must not lock out the people who are logged in from it.
+    let auth = StubAuth::new(|credentials, _| match credentials {
+        Credentials::Basic { username, password }
+            if username == "alice" && password.expose() == "pw" =>
+        {
+            Ok(Some(principal(username, AuthMethod::BasicLocal, "r")))
+        }
+        _ => Err(rustryx_core::AuthError::InvalidCredentials),
+    });
+    let router = test_router(
+        state_with_settings(|s| {
+            s.rate_limit = Some(RateLimitSettings {
+                requests_per_second: 1000,
+                burst: 1000,
+            });
+        })
+        .with_authenticator(auth),
+    );
+    let basic = |user: &str, pw: &str| {
+        let mut req = from_peer("/api/whoami", [203, 0, 113, 50], None);
+        req.headers_mut().insert(
+            "authorization",
+            format!("Basic {}", STANDARD.encode(format!("{user}:{pw}")))
+                .parse()
+                .expect("header"),
+        );
+        req
+    };
+    assert_eq!(
+        call(&router, basic("alice", "pw")).await.status,
+        StatusCode::OK
+    );
+    for attempt in 0..10 {
+        let reply = call(&router, basic("alice", &format!("wrong{attempt}"))).await;
+        assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(
+        call(&router, basic("alice", "wrong-again")).await.status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "a new guess is refused"
+    );
+    assert_eq!(
+        call(&router, basic("alice", "pw")).await.status,
+        StatusCode::OK,
+        "the verified credential still works"
+    );
+}

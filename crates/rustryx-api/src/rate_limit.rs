@@ -10,6 +10,8 @@
 //! evicted. Evicting a bucket that has been idle long enough to be full loses
 //! nothing, since a missing bucket starts full anyway.
 
+use std::collections::hash_map::RandomState;
+use std::hash::BuildHasher;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -114,7 +116,10 @@ impl RateLimiter {
         let elapsed = now.saturating_duration_since(bucket.updated).as_secs_f64();
         bucket.tokens = (bucket.tokens + elapsed * self.rate).min(self.burst);
         bucket.updated = now;
-        bucket.tokens = (bucket.tokens - 1.0).max(0.0);
+        // May go negative (down to -burst) on purpose: requests that passed `wait_time`
+        // concurrently before any of them failed are all charged, and the debt lengthens
+        // the lockout in proportion instead of being forgiven.
+        bucket.tokens = (bucket.tokens - 1.0).max(-self.burst);
     }
 
     /// Takes one token for `key`.
@@ -163,7 +168,7 @@ fn key_of(request: &Request) -> ClientKey {
             .extensions()
             .get::<ClientIp>()
             .and_then(|c| c.0)
-            .map_or(ClientKey::Unknown, ClientKey::Address),
+            .map_or(ClientKey::Unknown, address_key),
     }
 }
 
@@ -195,36 +200,79 @@ pub(crate) async fn rate_limit(
 pub(crate) struct FailureGuardState {
     pub limiter: Arc<RateLimiter>,
     pub metrics: Option<MetricsHandle>,
+    /// Credentials that recently verified from an address (fingerprint only, never the
+    /// secret), so that a shared address whose budget an attacker burned does not lock
+    /// out the people who are really logged in behind it.
+    known_good: Cache<(ClientKey, u64), ()>,
+    fingerprint: RandomState,
+}
+
+impl FailureGuardState {
+    pub(crate) fn new(limiter: Arc<RateLimiter>, metrics: Option<MetricsHandle>) -> Self {
+        Self {
+            limiter,
+            metrics,
+            known_good: Cache::builder()
+                .max_capacity(MAX_TRACKED_CLIENTS)
+                .time_to_idle(KNOWN_GOOD_TTL)
+                .build(),
+            // Random per process: a fingerprint cannot be precomputed by a client.
+            fingerprint: RandomState::new(),
+        }
+    }
 }
 
 /// Failed credential checks one address may make before it is refused (burst).
 pub(crate) const AUTH_FAILURE_BURST: u32 = 10;
 /// Failed credential checks per minute an address regains afterwards.
 pub(crate) const AUTH_FAILURE_PER_MINUTE: u32 = 10;
+/// How long a verified credential stays trusted from an address after its last use.
+const KNOWN_GOOD_TTL: Duration = Duration::from_mins(10);
+
+/// Bucket key of a client address. IPv6 clients are keyed on their /64: every host
+/// normally owns a whole /64, so keying on the full address would let one machine
+/// rotate through billions of addresses and never meet a limit. IPv4-mapped IPv6
+/// addresses count as the IPv4 address they carry.
+pub(crate) fn address_key(ip: IpAddr) -> ClientKey {
+    match ip {
+        IpAddr::V4(_) => ClientKey::Address(ip),
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                ClientKey::Address(IpAddr::V4(v4))
+            } else {
+                let prefix = u128::from(v6) & !u128::from(u64::MAX);
+                ClientKey::Address(IpAddr::V6(prefix.into()))
+            }
+        }
+    }
+}
 
 /// Wraps `authenticate` from the outside, keyed on the client address.
 ///
 /// The per-user limiter inside authentication only sees callers that already proved who
 /// they are, so a client guessing tokens or passwords was never counted. This guard
 /// charges the address for every request that carried credentials and was answered 401,
-/// and refuses further credentialed requests from it with 429 until the bucket refills.
+/// and refuses further credentialed requests from it with 429 until the bucket refills,
+/// except credentials that verified from this address within the last ten minutes.
 /// Requests without an `Authorization` header are never charged or refused: clients
-/// such as docker, maven and npm first send an anonymous request to learn the challenge,
-/// and a shared NAT address must not lock that flow out.
+/// such as docker, maven and npm first send an anonymous request to learn the challenge.
+/// Without a known peer address (in-process use) there is nothing to key on and the
+/// guard stays out of the way; the server always sets one.
 pub(crate) async fn auth_failure_guard(
     State(state): State<FailureGuardState>,
     request: Request,
     next: Next,
 ) -> Response {
-    if !request.headers().contains_key(http::header::AUTHORIZATION) {
+    let Some(credential) = request.headers().get(http::header::AUTHORIZATION) else {
         return next.run(request).await;
-    }
-    let key = request
-        .extensions()
-        .get::<ClientIp>()
-        .and_then(|c| c.0)
-        .map_or(ClientKey::Unknown, ClientKey::Address);
-    if let Some(wait) = state.limiter.wait_time(&key).await {
+    };
+    let Some(ip) = request.extensions().get::<ClientIp>().and_then(|c| c.0) else {
+        return next.run(request).await;
+    };
+    let key = address_key(ip);
+    let fingerprint = state.fingerprint.hash_one(credential.as_bytes());
+    let known = state.known_good.contains_key(&(key.clone(), fingerprint));
+    if !known && let Some(wait) = state.limiter.wait_time(&key).await {
         if let Some(metrics) = &state.metrics {
             metrics.record_shed("auth_failure_limit");
         }
@@ -237,8 +285,16 @@ pub(crate) async fn auth_failure_guard(
         .into_response();
     }
     let response = next.run(request).await;
-    if response.status() == http::StatusCode::UNAUTHORIZED {
+    let status = response.status();
+    if status == http::StatusCode::UNAUTHORIZED {
         state.limiter.charge(key).await;
+    } else if status.is_success()
+        || status.is_redirection()
+        || status == http::StatusCode::FORBIDDEN
+        || status == http::StatusCode::NOT_FOUND
+    {
+        // Authentication passed (the answer is about what the caller may do).
+        state.known_good.insert((key, fingerprint), ()).await;
     }
     response
 }
@@ -260,17 +316,40 @@ mod tests {
         assert_eq!(limiter.wait_time(&key).await, None, "one token left");
         limiter.charge(key.clone()).await;
         limiter.charge(key.clone()).await;
+        // Two tokens spent plus one overrun: the bucket is one token in debt.
         let wait = limiter.wait_time(&key).await.expect("exhausted");
         assert!(
-            wait > Duration::ZERO && wait <= Duration::from_secs(1),
+            wait > Duration::from_secs(1) && wait <= Duration::from_secs(2),
             "{wait:?}"
         );
-        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::time::advance(Duration::from_secs(2)).await;
         assert_eq!(
             limiter.wait_time(&key).await,
             None,
             "one per second refilled"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn overruns_are_a_debt_that_lengthens_the_wait_but_is_capped() {
+        // Requests that passed `wait_time` concurrently before any failed are all
+        // charged: the debt must delay the next attempt in proportion.
+        let limiter = RateLimiter::per_minute(10, 10);
+        let key = user("a");
+        for _ in 0..15 {
+            limiter.charge(key.clone()).await;
+        }
+        let wait = limiter.wait_time(&key).await.expect("in debt");
+        assert!(
+            wait > Duration::from_secs(30),
+            "five tokens of debt at 6 s each: {wait:?}"
+        );
+        // The debt is capped at one burst, so a flood cannot lock an address out forever.
+        for _ in 0..1000 {
+            limiter.charge(key.clone()).await;
+        }
+        let capped = limiter.wait_time(&key).await.expect("in debt");
+        assert!(capped <= Duration::from_secs(66 + 6), "{capped:?}");
     }
 
     #[tokio::test(start_paused = true)]
