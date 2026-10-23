@@ -39,3 +39,42 @@ pub fn rss_kib() -> u64 {
         .parse()
         .expect("ps printed an RSS number")
 }
+
+/// A disk probe that reports whatever the test says, for the free space floor.
+pub struct FakeDisk {
+    total: std::sync::atomic::AtomicU64,
+    free: std::sync::atomic::AtomicU64,
+    failing: std::sync::atomic::AtomicBool,
+}
+
+impl FakeDisk {
+    pub fn new(total: u64, free: u64) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            total: total.into(),
+            free: free.into(),
+            failing: false.into(),
+        })
+    }
+
+    pub fn set_free(&self, free: u64) {
+        self.free.store(free, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn fail(&self, failing: bool) {
+        self.failing
+            .store(failing, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl rustryx_blob::DiskProbe for FakeDisk {
+    fn usage(&self, _path: &std::path::Path) -> std::io::Result<rustryx_blob::DiskUsage> {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.failing.load(SeqCst) {
+            return Err(std::io::Error::other("probe failure injected"));
+        }
+        Ok(rustryx_blob::DiskUsage {
+            total_bytes: self.total.load(SeqCst),
+            free_bytes: self.free.load(SeqCst),
+        })
+    }
+}

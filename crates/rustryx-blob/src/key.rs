@@ -27,6 +27,10 @@ pub const MAX_KEY_BYTES: usize = 512;
 /// that no file system rejects a valid key.
 pub const MAX_COMPONENT_BYTES: usize = 200;
 
+/// Most keys one `list_keys` call returns, whatever `limit` asks for. It is S3's own page
+/// size, so one call costs one request, and it bounds the memory of a page on every store.
+pub(crate) const MAX_LIST_PAGE: u32 = 1000;
+
 /// Name of the staging directory inside a local store root. Reserved as the first
 /// component of a key so that a staging identifier can never name a stored blob.
 pub const STAGING_DIR: &str = "_staging";
@@ -58,6 +62,24 @@ pub enum KeyError {
     /// The first component is the reserved staging directory name.
     #[error("blob key uses the reserved staging component")]
     Reserved,
+}
+
+impl KeyError {
+    /// The reason as a static text, which is what `BlobError::InvalidKey` carries. It names
+    /// the rule that was broken and never echoes the key (a key may be attacker chosen).
+    #[must_use]
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::Empty => "key is empty",
+            Self::TooLong => "key is too long",
+            Self::Absolute => "key is an absolute path",
+            Self::EmptyComponent => "key has an empty component",
+            Self::DotComponent => "key has a relative component",
+            Self::ComponentTooLong => "key has a component that is too long",
+            Self::ForbiddenCharacter => "key has a forbidden character",
+            Self::Reserved => "key uses a reserved component",
+        }
+    }
 }
 
 fn is_allowed(byte: u8) -> bool {
@@ -130,6 +152,20 @@ pub fn shard_of(key: &str) -> (String, String) {
 pub(crate) fn relative_location(key: &str) -> String {
     let (first, second) = shard_of(key);
     format!("{first}/{second}/{key}")
+}
+
+/// Inverse of [`relative_location`]: the key that a `<b0>/<b1>/<key>` location names, or
+/// `None` when the text is not a location this crate would have written (a foreign object
+/// in the bucket, a stray file in a shard directory, a key filed under the wrong shard).
+/// The shard must match the key: a file under another shard cannot be reached by `get`,
+/// `head` or `delete`, so reporting it as a key would hand callers something they cannot
+/// act on.
+pub(crate) fn key_of_location(location: &str) -> Option<&str> {
+    let mut parts = location.splitn(3, '/');
+    let (first, second, key) = (parts.next()?, parts.next()?, parts.next()?);
+    validate_key(&BlobKey::new(key)).ok()?;
+    let (expected_first, expected_second) = shard_of(key);
+    (first == expected_first && second == expected_second).then_some(key)
 }
 
 #[cfg(test)]

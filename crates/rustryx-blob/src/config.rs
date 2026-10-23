@@ -29,6 +29,17 @@ pub const MAX_PARTS: usize = 10_000;
 const MAX_PART_MIB: u32 = 128;
 const MAX_CONCURRENT_UPLOADS: usize = 1024;
 
+/// Longest lifetime of a presigned download URL (`BLOB-16`). A URL is a bearer
+/// capability; the shorter it lives, the less a leaked one is worth.
+pub const MAX_PRESIGN_TTL_SECS: u32 = 900;
+
+/// Default free space floor of a local store, in percent (SRE-34).
+pub const DEFAULT_MIN_FREE_PERCENT: u8 = 10;
+
+/// The floor cannot exceed this: above it a store would refuse writes on a healthy disk.
+/// Same limit as `blob.local_min_free_percent` in `rustryx-config`.
+const MAX_MIN_FREE_PERCENT: u8 = 90;
+
 /// Why a store could not be built from its definition.
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
@@ -45,6 +56,10 @@ pub enum BuildError {
     /// The local store root could not be opened.
     #[error("could not open the local blob store")]
     Open(#[source] BlobError),
+    /// The definition names a kind this build cannot construct (Azure and groups arrive
+    /// with stream F).
+    #[error("blob store kind `{0}` is not supported by this build")]
+    UnsupportedKind(&'static str),
 }
 
 /// Parses a definition's JSON into `T`. Serde reports unknown or missing fields by
@@ -74,6 +89,14 @@ pub struct LocalConfig {
     /// Root directory. Must be absolute: a relative path would silently depend on
     /// the working directory of whichever process built the store.
     pub path: PathBuf,
+    /// Writes are refused with `InsufficientStorage` below this percentage of free space
+    /// (0 to 90, default 10; 0 switches the refusal off, the free space gauges stay on).
+    #[serde(default = "default_min_free_percent")]
+    pub min_free_percent: u8,
+}
+
+const fn default_min_free_percent() -> u8 {
+    DEFAULT_MIN_FREE_PERCENT
 }
 
 impl LocalConfig {
@@ -81,6 +104,11 @@ impl LocalConfig {
         if !self.path.is_absolute() {
             return Err(BuildError::Invalid(
                 "local: `path` must be an absolute path".into(),
+            ));
+        }
+        if self.min_free_percent > MAX_MIN_FREE_PERCENT {
+            return Err(BuildError::Invalid(
+                "local: `min_free_percent` must be between 0 and 90".into(),
             ));
         }
         Ok(())
@@ -124,6 +152,36 @@ pub struct S3Config {
     /// Maximum concurrent uploads (each may buffer one part).
     #[serde(default = "default_max_uploads")]
     pub max_concurrent_uploads: usize,
+    /// Presigned download URLs (`BLOB-16`). Off by default.
+    #[serde(default)]
+    pub presign: PresignConfig,
+}
+
+/// The `presign` block of an S3 definition: `{"enabled": false, "ttl_secs": 300}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PresignConfig {
+    /// Whether `presign_get` may return a URL. When false it answers `Ok(None)` and the
+    /// node serves the bytes itself.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Longest lifetime of a URL in seconds (1 to 900). A caller may ask for less, never
+    /// for more.
+    #[serde(default = "default_presign_ttl_secs")]
+    pub ttl_secs: u32,
+}
+
+const fn default_presign_ttl_secs() -> u32 {
+    300
+}
+
+impl Default for PresignConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ttl_secs: default_presign_ttl_secs(),
+        }
+    }
 }
 
 fn default_region() -> String {
@@ -145,6 +203,10 @@ impl S3Config {
         S3Settings {
             part_size: self.part_size_mib as usize * 1024 * 1024,
             max_concurrent_uploads: self.max_concurrent_uploads,
+            presign: PresignSettings {
+                enabled: self.presign.enabled,
+                ttl: Duration::from_secs(u64::from(self.presign.ttl_secs)),
+            },
             ..S3Settings::default()
         }
     }
@@ -166,6 +228,9 @@ impl S3Config {
         }
         if !(1..=MAX_CONCURRENT_UPLOADS).contains(&self.max_concurrent_uploads) {
             return invalid("`max_concurrent_uploads` must be between 1 and 1024");
+        }
+        if !(1..=MAX_PRESIGN_TTL_SECS).contains(&self.presign.ttl_secs) {
+            return invalid("`presign.ttl_secs` must be between 1 and 900");
         }
         if self.access_key_id_ref.is_some() != self.secret_access_key_ref.is_some() {
             return invalid(
@@ -224,6 +289,29 @@ pub struct S3Settings {
     /// upload. Streaming bodies are covered by the client's 60 s idle timeout, but a
     /// stalled upload has no idle signal, so it needs an explicit bound.
     pub part_timeout: Duration,
+    /// Presigned downloads.
+    pub presign: PresignSettings,
+    /// Value of the `store` label on every series of this store.
+    pub store_name: String,
+}
+
+/// Presigned download settings of a store. The URL lifetime is capped at
+/// [`MAX_PRESIGN_TTL_SECS`] whatever is configured here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PresignSettings {
+    /// Whether `presign_get` may return a URL.
+    pub enabled: bool,
+    /// Longest lifetime of a URL.
+    pub ttl: Duration,
+}
+
+impl Default for PresignSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ttl: Duration::from_secs(u64::from(default_presign_ttl_secs())),
+        }
+    }
 }
 
 impl Default for S3Settings {
@@ -234,6 +322,8 @@ impl Default for S3Settings {
             permit_timeout: Duration::from_secs(10),
             metadata_timeout: Duration::from_secs(30),
             part_timeout: Duration::from_secs(300),
+            presign: PresignSettings::default(),
+            store_name: "s3".to_owned(),
         }
     }
 }
@@ -375,6 +465,53 @@ mod tests {
             config.endpoint = Some(endpoint.into());
             assert!(rejected(&config).contains(needle), "{endpoint}");
         }
+    }
+
+    #[test]
+    fn presign_is_off_by_default_and_bounded() {
+        let config = valid();
+        assert_eq!(config.presign, PresignConfig::default());
+        assert!(!config.settings().presign.enabled);
+        assert_eq!(config.settings().presign.ttl, Duration::from_secs(300));
+
+        let mut config = valid();
+        config.presign = PresignConfig {
+            enabled: true,
+            ttl_secs: 900,
+        };
+        config.validate().unwrap();
+        assert!(config.settings().presign.enabled);
+        for bad in [0, 901] {
+            config.presign.ttl_secs = bad;
+            assert!(rejected(&config).contains("presign.ttl_secs"), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_presign_block_rejects_unknown_fields() {
+        let outcome = parse_config::<S3Config>(
+            "s3",
+            &json!({"bucket": "b", "presign": {"enabled": true, "secret": "x"}}),
+        );
+        assert!(outcome.unwrap_err().to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn the_free_space_floor_defaults_to_ten_percent_and_is_bounded() {
+        let config: LocalConfig = parse_config("local", &json!({"path": "/x"})).unwrap();
+        assert_eq!(config.min_free_percent, 10);
+        for ok in [0, 10, 90] {
+            let config: LocalConfig =
+                parse_config("local", &json!({"path": "/x", "min_free_percent": ok})).unwrap();
+            assert!(config.validate().is_ok(), "{ok}");
+        }
+        let too_high: LocalConfig =
+            parse_config("local", &json!({"path": "/x", "min_free_percent": 91})).unwrap();
+        assert!(too_high.validate().is_err());
+        assert!(
+            parse_config::<LocalConfig>("local", &json!({"path": "/x", "min_free_percent": 300}))
+                .is_err()
+        );
     }
 
     #[test]

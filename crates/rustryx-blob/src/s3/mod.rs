@@ -2,17 +2,20 @@
 //!
 //! Why `object_store` and not the AWS SDK: it is one small trait with multipart,
 //! streaming and retry built in, it speaks to every S3 dialect we need, and its TLS
-//! is rustls (no `openssl-sys`). The SDK would only be needed for SSE-KMS and
-//! presigned URLs, neither of which is in scope.
+//! is rustls (no `openssl-sys`). Presigned URLs, which looked like a reason to need the
+//! SDK, are covered by `Signer::signed_url_opts` (it signs the `response-*` overrides).
 //!
 //! Key layout in the bucket: `<prefix>/<b0>/<b1>/<key>` (see [`crate::key`]).
 //!
 //! **A bucket lifecycle rule for incomplete multipart uploads is required.** A
 //! process that is killed in the middle of an upload cannot abort it, and
 //! `object_store` 0.14 offers no way to list open multipart uploads, so
-//! [`BlobStore::list_stale_staging`] cannot find them. Without the rule the parts
-//! stay in the bucket (and on the bill) forever. See `docs/blob.md`.
+//! [`BlobStore::list_stale_staging`] cannot find them (`capabilities().lists_staging` is
+//! false). Without the rule the parts stay in the bucket (and on the bill) forever. See
+//! `docs/blob.md`.
 
+mod list;
+mod presign;
 mod sink;
 
 use std::sync::Arc;
@@ -23,20 +26,26 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::aws::AmazonS3Builder;
 use object_store::multipart::MultipartStore;
 use object_store::path::Path as ObjectPath;
+use object_store::signer::Signer;
 use object_store::{
-    BackoffConfig, ClientOptions, GetOptions, GetRange, ObjectStore, ObjectStoreExt, RetryConfig,
+    BackoffConfig, ClientOptions, GetOptions, GetRange, ObjectMeta, ObjectStore, ObjectStoreExt,
+    RetryConfig,
 };
 use rustryx_core::model::BlobStoreKind;
-use rustryx_core::ports::{BlobKey, BlobMeta, BlobRead, BlobStore, BlobWriter, ByteRange};
+use rustryx_core::ports::{
+    BlobKey, BlobMeta, BlobRead, BlobStore, BlobStoreCapabilities, BlobWriter, ByteRange, KeyPage,
+    PresignOptions, PresignedUrl,
+};
 use rustryx_core::{BlobError, Secret};
+use time::OffsetDateTime;
 use tokio::sync::Semaphore;
 use tokio_util::task::TaskTracker;
 
-use crate::cleanup::CleanupDrain;
 use crate::config::{BuildError, MAX_PARTS, S3Config, S3Settings};
 use crate::error::{backend, invalid_key, with_deadline};
 use crate::hashing::HashingWriter;
 use crate::key::{relative_location, validate_key, validate_prefix};
+use crate::metrics::{MeteredWriter, Op, StoreMetrics};
 use crate::read::{READ_CHUNK_BYTES, cap_chunks, resolve_range};
 use sink::S3Sink;
 
@@ -54,6 +63,10 @@ const RETRY_BUDGET: Duration = Duration::from_secs(30);
 
 /// Key probed by `health`. A missing object proves reachability and credentials.
 const HEALTH_PROBE: &str = "_rustryx/health-probe";
+
+/// The `Retry-After` hint of an exhausted upload limiter. Uploads of typical artifacts
+/// hold a slot for seconds, so a short hint spreads the retries without parking clients.
+const UPLOAD_RETRY_AFTER: Duration = Duration::from_secs(5);
 
 /// Static S3 credentials, already resolved from the secret store.
 #[derive(Debug, Clone)]
@@ -76,6 +89,10 @@ pub(crate) struct Backend {
     uploads: Arc<Semaphore>,
     /// Aborts of dropped writers run here so that shutdown can wait for them.
     pub(crate) cleanup: TaskTracker,
+    /// Signs download URLs. `None` for a backend that cannot (the in-memory test store);
+    /// together with `settings.presign.enabled` it decides `capabilities().can_presign`.
+    signer: Option<Arc<dyn Signer>>,
+    metrics: StoreMetrics,
 }
 
 /// A blob store backed by an S3-compatible bucket.
@@ -101,8 +118,13 @@ impl S3BlobStore {
     ///
     /// With `credentials == None` the client falls back to the ambient chain (web
     /// identity, container credentials, instance metadata). `object_store` is never
-    /// asked to read `AWS_*` variables for static keys.
-    pub fn new(config: &S3Config, credentials: Option<&S3Credentials>) -> Result<Self, BuildError> {
+    /// asked to read `AWS_*` variables for static keys. `name` is the value of the `store`
+    /// label of this store's metrics.
+    pub fn new(
+        name: &str,
+        config: &S3Config,
+        credentials: Option<&S3Credentials>,
+    ) -> Result<Self, BuildError> {
         config.validate()?;
         let path_style = config.path_style.unwrap_or(config.endpoint.is_some());
         let client_options = ClientOptions::new()
@@ -136,15 +158,31 @@ impl S3BlobStore {
             }
         }
         let s3 = Arc::new(builder.build().map_err(BuildError::Client)?);
-        Self::from_backends(s3.clone(), s3, &config.prefix, config.settings())
+        let settings = S3Settings {
+            store_name: name.to_owned(),
+            ..config.settings()
+        };
+        Self::from_backends_signed(s3.clone(), s3.clone(), Some(s3), &config.prefix, settings)
     }
 
-    /// Builds a store over arbitrary `object_store` backends. `AmazonS3` implements
-    /// both traits; tests pass an in-memory store and a fake multipart store.
-    /// `prefix` is validated like a key (no leading or trailing slash).
+    /// Builds a store over arbitrary `object_store` backends without a signer. `AmazonS3`
+    /// implements all three traits; tests pass an in-memory store and a fake multipart
+    /// store. `prefix` is validated like a key (no leading or trailing slash).
     pub fn from_backends(
         store: Arc<dyn ObjectStore>,
         multipart: Arc<dyn MultipartStore>,
+        prefix: &str,
+        settings: S3Settings,
+    ) -> Result<Self, BuildError> {
+        Self::from_backends_signed(store, multipart, None, prefix, settings)
+    }
+
+    /// Like [`Self::from_backends`] with a signer for presigned downloads. Without one,
+    /// `can_presign` is false whatever the settings say.
+    pub fn from_backends_signed(
+        store: Arc<dyn ObjectStore>,
+        multipart: Arc<dyn MultipartStore>,
+        signer: Option<Arc<dyn Signer>>,
         prefix: &str,
         settings: S3Settings,
     ) -> Result<Self, BuildError> {
@@ -156,6 +194,7 @@ impl S3BlobStore {
             format!("{prefix}/")
         };
         let uploads = Arc::new(Semaphore::new(settings.max_concurrent_uploads));
+        let metrics = StoreMetrics::new(settings.store_name.clone());
         Ok(Self {
             backend: Arc::new(Backend {
                 store,
@@ -164,17 +203,10 @@ impl S3BlobStore {
                 settings,
                 uploads,
                 cleanup: TaskTracker::new(),
+                signer,
+                metrics,
             }),
         })
-    }
-
-    /// Waits until every abort spawned by dropped writers has finished. Call it at
-    /// graceful shutdown (architecture 1.4: unfinished multipart uploads are aborted
-    /// before exit). Cancel safe.
-    pub async fn drain_cleanup(&self) {
-        // Left closed on purpose: see `LocalBlobStore::drain_cleanup`.
-        self.backend.cleanup.close();
-        self.backend.cleanup.wait().await;
     }
 
     /// Number of uploads that could start right now without waiting.
@@ -207,13 +239,6 @@ impl S3BlobStore {
     }
 }
 
-#[async_trait]
-impl CleanupDrain for S3BlobStore {
-    async fn drain_cleanup(&self) {
-        Self::drain_cleanup(self).await;
-    }
-}
-
 /// Maps `object_store` errors onto the port's error contract.
 ///
 /// `Generic` is what remains after the client exhausted its retries on 5xx and
@@ -236,21 +261,160 @@ impl BlobStore for S3BlobStore {
 
     /// Takes an upload slot, then returns a writer whose objects are invisible until
     /// `commit`. Waits at most `permit_timeout` for a slot and then fails with
-    /// `Unavailable` (503), so the queue of waiting uploads cannot grow without
-    /// bound. Cancel safe: waiting for the slot holds nothing, and dropping the
+    /// `Overloaded` (503 with `Retry-After`), so the queue of waiting uploads cannot grow
+    /// without bound. Cancel safe: waiting for the slot holds nothing, and dropping the
     /// writer aborts any multipart upload it started.
     async fn begin(
         &self,
         key: &BlobKey,
         size_hint: Option<u64>,
     ) -> Result<Box<dyn BlobWriter>, BlobError> {
+        match self.begin_write(key, size_hint).await {
+            Ok(writer) => Ok(Box::new(MeteredWriter::new(
+                writer,
+                self.backend.metrics.clone(),
+            ))),
+            Err(err) => {
+                self.backend.metrics.failed(Op::Put, &err);
+                Err(err)
+            }
+        }
+    }
+
+    /// Streams the object in chunks of at most 64 KiB. A ranged read costs one extra
+    /// `HEAD` because the object store reports an unsatisfiable range as an opaque
+    /// error; checking against the size first keeps `RangeNotSatisfiable` exact.
+    /// Cancel safe.
+    async fn get(&self, key: &BlobKey, range: Option<ByteRange>) -> Result<BlobRead, BlobError> {
+        let read = self.metered(Op::Get, self.open_read(key, range)).await?;
+        Ok(BlobRead {
+            total_size: read.total_size,
+            stream: self.backend.metrics.meter_read(read.stream),
+        })
+    }
+
+    /// Size and last modification time. Cancel safe.
+    async fn head(&self, key: &BlobKey) -> Result<Option<BlobMeta>, BlobError> {
+        self.metered(Op::Head, async {
+            let path = self.object_path(key)?;
+            self.stat(&path).await
+        })
+        .await
+    }
+
+    /// Deleting a missing key succeeds. Cancel safe.
+    async fn delete(&self, key: &BlobKey) -> Result<(), BlobError> {
+        self.metered(Op::Delete, async {
+            let path = self.object_path(key)?;
+            let backend_handle = Arc::clone(&self.backend);
+            let outcome = with_deadline("s3 delete", self.deadline(), async {
+                backend_handle
+                    .store
+                    .delete(&path)
+                    .await
+                    .map_err(|e| store_error("delete object", e))
+            })
+            .await;
+            match outcome {
+                Err(BlobError::NotFound) => Ok(()),
+                other => other,
+            }
+        })
+        .await
+    }
+
+    /// Always empty, and `capabilities().lists_staging` is false: an empty answer here
+    /// means "cannot tell", not "none". Incomplete multipart uploads are the S3
+    /// equivalent of staging, but `object_store` cannot list them, so they are reaped by
+    /// the bucket lifecycle rule `AbortIncompleteMultipartUpload`, which is mandatory (see
+    /// the module docs). Cancel safe.
+    async fn list_stale_staging(&self, _min_age: Duration) -> Result<Vec<BlobKey>, BlobError> {
+        Ok(Vec::new())
+    }
+
+    /// Probes a key that never exists: `NotFound` means the bucket answered and the
+    /// credentials were accepted. Needs `s3:ListBucket` on the bucket, otherwise S3
+    /// answers 403 instead of 404 and the store reports unhealthy. Cancel safe.
+    async fn health(&self) -> Result<(), BlobError> {
+        self.metered(Op::Health, async {
+            let path = ObjectPath::parse(format!("{}{HEALTH_PROBE}", self.backend.prefix))
+                .map_err(|e| backend("health probe", e))?;
+            match self.stat(&path).await {
+                Ok(_) => Ok(()),
+                Err(BlobError::Backend { source, .. }) => Err(BlobError::Unavailable(format!(
+                    "bucket probe was rejected: {source}"
+                ))),
+                Err(other) => Err(other),
+            }
+        })
+        .await
+    }
+
+    /// Listing keys is real on S3. Listing stale uploads is not (see `list_stale_staging`).
+    /// Presigning needs a signer and `presign.enabled`.
+    fn capabilities(&self) -> BlobStoreCapabilities {
+        let mut capabilities = BlobStoreCapabilities::default();
+        capabilities.lists_keys = true;
+        capabilities.can_presign =
+            self.backend.signer.is_some() && self.backend.settings.presign.enabled;
+        capabilities
+    }
+
+    /// Waits for the aborts that dropped writers left behind (architecture 1.4: unfinished
+    /// multipart uploads are aborted before exit). Idempotent. Cancel safe.
+    async fn shutdown(&self) {
+        // Left closed on purpose: a closed tracker still accepts tasks, and `wait` then
+        // resolves as soon as it is empty, so repeated or concurrent calls are safe.
+        self.backend.cleanup.close();
+        self.backend.cleanup.wait().await;
+    }
+
+    /// One page of the bucket listing in key order of the object names. Foreign objects
+    /// under the prefix are skipped. See `docs/blob.md`. Cancel safe.
+    async fn list_keys(&self, after: Option<&str>, limit: u32) -> Result<KeyPage, BlobError> {
+        self.metered(Op::List, self.list_page(after, limit)).await
+    }
+
+    /// A URL for a direct download, valid for at most the configured TTL (never above 900
+    /// seconds), or `Ok(None)` when presigning is off or this backend cannot sign. The
+    /// URL is a bearer capability: it never goes to a log or an error text. Cancel safe.
+    async fn presign_get(
+        &self,
+        key: &BlobKey,
+        ttl: Duration,
+        options: &PresignOptions,
+    ) -> Result<Option<PresignedUrl>, BlobError> {
+        self.metered(Op::Presign, self.presign(key, ttl, options))
+            .await
+    }
+}
+
+impl S3BlobStore {
+    /// Counts the result of `work` under `op` and passes it through.
+    async fn metered<T>(
+        &self,
+        op: Op,
+        work: impl std::future::Future<Output = Result<T, BlobError>>,
+    ) -> Result<T, BlobError> {
+        let result = work.await;
+        self.backend.metrics.result(op, &result);
+        result
+    }
+
+    async fn begin_write(
+        &self,
+        key: &BlobKey,
+        size_hint: Option<u64>,
+    ) -> Result<HashingWriter<S3Sink>, BlobError> {
         let path = self.object_path(key)?;
         let wait = Arc::clone(&self.backend.uploads).acquire_owned();
         let permit = match tokio::time::timeout(self.backend.settings.permit_timeout, wait).await {
             Ok(Ok(permit)) => permit,
             Ok(Err(_closed)) => return Err(BlobError::Unavailable("upload limiter closed".into())),
             Err(_elapsed) => {
-                return Err(BlobError::Unavailable("too many concurrent uploads".into()));
+                return Err(BlobError::Overloaded {
+                    retry_after: Some(UPLOAD_RETRY_AFTER),
+                });
             }
         };
         let sink = S3Sink::new(
@@ -260,18 +424,22 @@ impl BlobStore for S3BlobStore {
             size_hint,
             permit,
         );
-        Ok(Box::new(HashingWriter::new(sink)))
+        Ok(HashingWriter::new(sink))
     }
 
-    /// Streams the object in chunks of at most 64 KiB. A ranged read costs one extra
-    /// `HEAD` because the object store reports an unsatisfiable range as an opaque
-    /// error; checking against the size first keeps `RangeNotSatisfiable` exact.
-    /// Cancel safe.
-    async fn get(&self, key: &BlobKey, range: Option<ByteRange>) -> Result<BlobRead, BlobError> {
+    async fn open_read(
+        &self,
+        key: &BlobKey,
+        range: Option<ByteRange>,
+    ) -> Result<BlobRead, BlobError> {
         let path = self.object_path(key)?;
         let mut options = GetOptions::default();
         if range.is_some() {
-            let size = self.stat(&path).await?.ok_or(BlobError::NotFound)?;
+            let size = self
+                .stat(&path)
+                .await?
+                .ok_or(BlobError::NotFound)?
+                .size_bytes;
             let (start, len) = resolve_range(size, range)?;
             options = options.with_range(Some(GetRange::Bounded(start..start + len)));
         }
@@ -295,60 +463,8 @@ impl BlobStore for S3BlobStore {
         })
     }
 
-    /// Cancel safe.
-    async fn head(&self, key: &BlobKey) -> Result<Option<BlobMeta>, BlobError> {
-        let path = self.object_path(key)?;
-        Ok(self
-            .stat(&path)
-            .await?
-            .map(|size_bytes| BlobMeta { size_bytes }))
-    }
-
-    /// Deleting a missing key succeeds. Cancel safe.
-    async fn delete(&self, key: &BlobKey) -> Result<(), BlobError> {
-        let path = self.object_path(key)?;
-        let backend_handle = Arc::clone(&self.backend);
-        let outcome = with_deadline("s3 delete", self.deadline(), async {
-            backend_handle
-                .store
-                .delete(&path)
-                .await
-                .map_err(|e| store_error("delete object", e))
-        })
-        .await;
-        match outcome {
-            Err(BlobError::NotFound) => Ok(()),
-            other => other,
-        }
-    }
-
-    /// Always empty. Incomplete multipart uploads are the S3 equivalent of staging,
-    /// but `object_store` cannot list them, so they are reaped by the bucket
-    /// lifecycle rule `AbortIncompleteMultipartUpload`, which is mandatory (see the
-    /// module docs). Cancel safe.
-    async fn list_stale_staging(&self, _min_age: Duration) -> Result<Vec<BlobKey>, BlobError> {
-        Ok(Vec::new())
-    }
-
-    /// Probes a key that never exists: `NotFound` means the bucket answered and the
-    /// credentials were accepted. Needs `s3:ListBucket` on the bucket, otherwise S3
-    /// answers 403 instead of 404 and the store reports unhealthy. Cancel safe.
-    async fn health(&self) -> Result<(), BlobError> {
-        let path = ObjectPath::parse(format!("{}{HEALTH_PROBE}", self.backend.prefix))
-            .map_err(|e| backend("health probe", e))?;
-        match self.stat(&path).await {
-            Ok(_) => Ok(()),
-            Err(BlobError::Backend { source, .. }) => Err(BlobError::Unavailable(format!(
-                "bucket probe was rejected: {source}"
-            ))),
-            Err(other) => Err(other),
-        }
-    }
-}
-
-impl S3BlobStore {
-    /// `HEAD` returning the size, `None` when the object does not exist.
-    async fn stat(&self, path: &ObjectPath) -> Result<Option<u64>, BlobError> {
+    /// `HEAD` returning size and modification time, `None` when the object does not exist.
+    async fn stat(&self, path: &ObjectPath) -> Result<Option<BlobMeta>, BlobError> {
         let backend_handle = Arc::clone(&self.backend);
         let outcome = with_deadline("s3 head", self.deadline(), async {
             backend_handle
@@ -359,11 +475,20 @@ impl S3BlobStore {
         })
         .await;
         match outcome {
-            Ok(meta) => Ok(Some(meta.size)),
+            Ok(meta) => Ok(Some(blob_meta(&meta))),
             Err(BlobError::NotFound) => Ok(None),
             Err(other) => Err(other),
         }
     }
+}
+
+/// Size and last modification time of an object.
+fn blob_meta(meta: &ObjectMeta) -> BlobMeta {
+    let mut blob = BlobMeta::new(meta.size);
+    let nanos = i128::from(meta.last_modified.timestamp()) * 1_000_000_000
+        + i128::from(meta.last_modified.timestamp_subsec_nanos());
+    blob.modified = OffsetDateTime::from_unix_timestamp_nanos(nanos).ok();
+    blob
 }
 
 #[cfg(test)]

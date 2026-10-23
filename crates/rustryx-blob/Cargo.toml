@@ -18,12 +18,17 @@ bytes.workspace = true
 futures.workspace = true
 hex.workspace = true
 md-5.workspace = true
+metrics.workspace = true
 object_store.workspace = true
+# Safe statvfs wrapper for the free space floor of the local store. The workspace forbids
+# `unsafe`, and `rustix` is the safe layer that `tempfile` and the rest of the tree already use.
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha1.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+time.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
@@ -34,4 +39,3 @@ uuid.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
 testcontainers.workspace = true
-time.workspace = true

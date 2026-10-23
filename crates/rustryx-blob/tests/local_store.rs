@@ -175,7 +175,7 @@ async fn must_not_leave_a_partial_blob_after_drop() {
     let mut writer = store.begin(&key("dropped"), None).await.unwrap();
     writer.write(pattern(0, 100_000)).await.unwrap();
     drop(writer);
-    store.drain_cleanup().await;
+    store.shutdown().await;
     assert_eq!(staged(&store).await, Vec::<PathBuf>::new());
     assert_eq!(committed(&store).await, Vec::<PathBuf>::new());
 }
@@ -184,20 +184,59 @@ async fn must_not_leave_a_partial_blob_after_drop() {
 async fn must_not_leave_a_partial_blob_when_the_writing_task_is_cancelled() {
     let (_dir, store) = open().await;
     let task_store = store.clone();
+    let (writing_started, started) = tokio::sync::oneshot::channel::<()>();
     let writing = tokio::spawn(async move {
         let mut writer = task_store.begin(&key("cancelled"), None).await.unwrap();
+        let mut started = Some(writing_started);
         loop {
             writer.write(pattern(0, 64 * 1024)).await.unwrap();
+            if let Some(signal) = started.take() {
+                let _ = signal.send(());
+            }
         }
     });
-    while staged(&store).await.is_empty() {
-        tokio::task::yield_now().await;
-    }
+    // Cancel only once the task is inside its write loop: cancelling `begin` itself is
+    // covered by `must_not_leave_a_partial_blob_when_begin_is_cancelled`.
+    started.await.unwrap();
     writing.abort();
     assert!(writing.await.unwrap_err().is_cancelled());
-    store.drain_cleanup().await;
+    store.shutdown().await;
     assert_eq!(staged(&store).await, Vec::<PathBuf>::new());
     assert!(store.head(&key("cancelled")).await.unwrap().is_none());
+}
+
+/// Cancelling `begin` itself can race with the blocking file creation: the file may
+/// appear after the cancelled future's cleanup already ran. The guarantee is therefore
+/// "cleaned at once, or listed for GC", never "silently orphaned".
+#[tokio::test]
+async fn must_not_orphan_a_staging_file_when_begin_is_cancelled() {
+    let (_dir, store) = open().await;
+    for round in 0..200usize {
+        let task_store = store.clone();
+        let beginning = tokio::spawn(async move {
+            let _writer = task_store
+                .begin(&key(&format!("racing-{round}")), None)
+                .await
+                .unwrap();
+            std::future::pending::<()>().await;
+        });
+        for _ in 0..(round % 7) {
+            tokio::task::yield_now().await;
+        }
+        beginning.abort();
+        let _ = beginning.await;
+    }
+    store.shutdown().await;
+    let leaked = staged(&store).await;
+    let listed = store
+        .list_stale_staging(std::time::Duration::ZERO)
+        .await
+        .unwrap();
+    assert_eq!(
+        leaked.len(),
+        listed.len(),
+        "every leftover staging file must be listed for GC: {leaked:?}"
+    );
 }
 
 #[tokio::test]
@@ -262,13 +301,23 @@ async fn must_not_escape_the_root_with_hostile_keys() {
     ];
     for bad in hostile {
         let k = key(bad);
+        // The refusal is the typed `InvalidKey`, never `NotFound` and never a backend error.
         assert!(
-            store.begin(&k, None).await.is_err(),
+            matches!(store.begin(&k, None).await, Err(BlobError::InvalidKey(_))),
             "begin accepted {bad:?}"
         );
-        assert!(store.get(&k, None).await.is_err(), "get accepted {bad:?}");
-        assert!(store.head(&k).await.is_err(), "head accepted {bad:?}");
-        assert!(store.delete(&k).await.is_err(), "delete accepted {bad:?}");
+        assert!(
+            matches!(store.get(&k, None).await, Err(BlobError::InvalidKey(_))),
+            "get accepted {bad:?}"
+        );
+        assert!(
+            matches!(store.head(&k).await, Err(BlobError::InvalidKey(_))),
+            "head accepted {bad:?}"
+        );
+        assert!(
+            matches!(store.delete(&k).await, Err(BlobError::InvalidKey(_))),
+            "delete accepted {bad:?}"
+        );
     }
 
     assert_eq!(tokio::fs::read(&outside).await.unwrap(), b"precious");
@@ -280,13 +329,28 @@ async fn must_not_escape_the_root_with_hostile_keys() {
 }
 
 #[tokio::test]
-async fn invalid_key_error_carries_a_typed_source() {
+async fn must_not_report_an_invalid_key_as_a_missing_blob() {
     let (_dir, store) = open().await;
-    let Err(BlobError::Backend { context, source }) = store.head(&key("../x")).await else {
-        panic!("expected a backend error");
-    };
-    assert_eq!(context, "invalid blob key");
-    assert!(source.downcast_ref::<rustryx_blob::KeyError>().is_some());
+    // `NotFound` would tell a caller "nothing is there"; an invalid key is its bug.
+    for bad in ["../x", "/abs", "a//b", "", "_staging/x"] {
+        let k = key(bad);
+        assert!(
+            matches!(store.head(&k).await, Err(BlobError::InvalidKey(_))),
+            "head {bad:?}"
+        );
+        assert!(
+            matches!(store.get(&k, None).await, Err(BlobError::InvalidKey(_))),
+            "get {bad:?}"
+        );
+        assert!(
+            matches!(store.begin(&k, None).await, Err(BlobError::InvalidKey(_))),
+            "begin {bad:?}"
+        );
+        assert!(
+            matches!(store.delete(&k).await, Err(BlobError::InvalidKey(_))),
+            "delete {bad:?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -558,4 +622,52 @@ async fn store_reports_kind_root_and_debug() {
     assert_eq!(store.kind(), BlobStoreKind::Local);
     assert!(store.staging_dir().ends_with(STAGING_DIR));
     assert!(format!("{store:?}").contains("LocalBlobStore"));
+}
+
+#[tokio::test]
+async fn the_local_store_lists_staging_and_keys_and_cannot_presign_or_resume() {
+    let (_dir, store) = open().await;
+    let caps = store.capabilities();
+    assert!(caps.lists_staging, "a file system can list staging");
+    assert!(caps.lists_keys);
+    assert!(!caps.can_presign && !caps.resumable);
+    assert!(store.resumable().is_none());
+}
+
+#[tokio::test]
+async fn a_local_blob_has_no_direct_download_url() {
+    use rustryx_core::ports::PresignOptions;
+    let (_dir, store) = open().await;
+    put(&store, "local-only", &pattern(0, 10), 10).await;
+    // `Ok(None)` is the port's answer for "this store has none": the node serves the bytes.
+    let outcome = store
+        .presign_get(
+            &key("local-only"),
+            Duration::from_secs(60),
+            &PresignOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert!(outcome.is_none());
+}
+
+#[tokio::test]
+async fn shutdown_is_idempotent_and_safe_to_call_concurrently() {
+    let (_dir, store) = open().await;
+    let mut writer = store.begin(&key("abandoned"), None).await.unwrap();
+    writer.write(pattern(0, 10)).await.unwrap();
+    drop(writer);
+    let (a, b) = (store.clone(), store.clone());
+    tokio::join!(a.shutdown(), b.shutdown());
+    store.shutdown().await;
+    assert_eq!(staged(&store).await, Vec::<PathBuf>::new());
+}
+
+#[tokio::test]
+async fn head_reports_the_modification_time_of_the_file() {
+    let (_dir, store) = open().await;
+    put(&store, "dated", &pattern(0, 10), 10).await;
+    let meta = store.head(&key("dated")).await.unwrap().unwrap();
+    let modified = meta.modified.expect("a file system reports mtime");
+    assert!(time::OffsetDateTime::now_utc() - modified < time::Duration::minutes(5));
 }

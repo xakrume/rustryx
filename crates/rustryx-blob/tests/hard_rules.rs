@@ -34,12 +34,26 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Production code of a file: everything before its inline `#[cfg(test)]` module,
-/// with comments removed.
+/// Production code of a file: everything before its inline `#[cfg(test)] mod`, with comments
+/// removed. Only a test MODULE ends the production code: a test-only helper in the middle of
+/// a file must not hide the rest of the file from the scan.
 fn production_code(source: &str) -> String {
-    let end = source.find("#[cfg(test)]").unwrap_or(source.len());
-    source[..end]
-        .lines()
+    let lines: Vec<&str> = source.lines().collect();
+    let end = lines
+        .iter()
+        .enumerate()
+        .find(|(i, line)| {
+            line.trim() == "#[cfg(test)]"
+                && lines.get(i + 1).is_some_and(|next| {
+                    let next = next.trim_start();
+                    next.starts_with("mod ")
+                        || next.starts_with("pub mod ")
+                        || next.starts_with("pub(crate) mod ")
+                })
+        })
+        .map_or(lines.len(), |(i, _)| i);
+    lines[..end]
+        .iter()
         .map(|line| line.split("//").next().unwrap_or(""))
         .collect::<Vec<_>>()
         .join("\n")
@@ -65,6 +79,70 @@ fn the_scan_itself_detects_each_forbidden_construct() {
     let after_tests =
         production_code("fn f() {}\n#[cfg(test)]\nmod t { fn g() { std::fs::read(\"x\"); } }");
     assert_eq!(found_in(&after_tests), Vec::<&str>::new());
+    // A test-only helper in the middle of a file does not end the production code.
+    let helper_then_offender = production_code(
+        "#[cfg(test)]\nfn helper() {}\nfn f() { let _ = std::fs::read(\"x\"); }\n#[cfg(test)]\nmod t {}",
+    );
+    assert_eq!(found_in(&helper_then_offender), vec!["std::fs"]);
+}
+
+/// Threads. The only thread this crate owns is the disk monitor (`disk.rs`), which exists
+/// because `statvfs` has no async form and must not occupy the blocking pool. Any other
+/// thread would be a fire-and-forget task in disguise: nothing waits for it at shutdown.
+const THREAD_CONSTRUCTS: &[&str] = &["std::thread", "thread::Builder", "thread::spawn"];
+
+fn threads_in(code: &str) -> Vec<&'static str> {
+    THREAD_CONSTRUCTS
+        .iter()
+        .filter(|needle| code.contains(**needle))
+        .copied()
+        .collect()
+}
+
+#[test]
+fn the_thread_scan_detects_each_construct_and_ignores_comments() {
+    for needle in THREAD_CONSTRUCTS {
+        let offender = production_code(&format!("fn f() {{ let _ = {needle}; }}"));
+        assert!(
+            threads_in(&offender).contains(needle),
+            "scan missed `{needle}`"
+        );
+    }
+    let commented = production_code("// std::thread is only mentioned here\nfn f() {}");
+    assert_eq!(threads_in(&commented), Vec::<&str>::new());
+}
+
+#[test]
+fn must_not_start_threads_outside_the_disk_monitor() {
+    let mut files = Vec::new();
+    rust_files(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut files,
+    );
+    let mut violations = Vec::new();
+    let mut monitor_found = false;
+    for file in files {
+        let in_test_module = file.file_name().is_some_and(|name| name == "tests.rs")
+            || file.components().any(|part| part.as_os_str() == "tests");
+        if in_test_module {
+            continue;
+        }
+        let found = threads_in(&production_code(&std::fs::read_to_string(&file).unwrap()));
+        if file.file_name().is_some_and(|name| name == "disk.rs") {
+            monitor_found = !found.is_empty();
+        } else if !found.is_empty() {
+            violations.push(format!("{}: {found:?}", file.display()));
+        }
+    }
+    assert!(
+        monitor_found,
+        "the scan must see the monitor thread in disk.rs, or it checks nothing"
+    );
+    assert!(
+        violations.is_empty(),
+        "threads outside the disk monitor:\n{}",
+        violations.join("\n")
+    );
 }
 
 #[test]

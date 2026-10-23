@@ -72,14 +72,14 @@ impl BlobHasher {
     /// Finishes the hash and returns size and lowercase hex digests.
     #[must_use]
     pub fn finish(self) -> BlobCommit {
-        BlobCommit {
-            size_bytes: self.size,
-            checksums: Checksums {
+        BlobCommit::new(
+            self.size,
+            Checksums {
                 sha1: hex::encode(self.sha1.finalize()),
                 sha256: hex::encode(self.sha256.finalize()),
                 md5: hex::encode(self.md5.finalize()),
             },
-        }
+        )
     }
 }
 

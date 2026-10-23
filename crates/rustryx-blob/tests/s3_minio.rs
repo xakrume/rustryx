@@ -22,13 +22,19 @@ use std::time::Duration;
 use bytes::Bytes;
 use common::{byte_at, pattern, rss_kib};
 use futures::{StreamExt, TryStreamExt};
+use object_store::aws::AmazonS3Builder;
+use object_store::path::Path as ObjectPath;
+use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
 use rustryx_blob::{
     BlobHasher, BlobStoreRegistry, MapSecretResolver, S3BlobStore, S3Config, S3Credentials,
+    shard_of,
 };
 use rustryx_core::error::StoreError;
 use rustryx_core::ids::BlobStoreId;
 use rustryx_core::model::{BlobStoreDef, BlobStoreKind};
-use rustryx_core::ports::{BlobCommit, BlobKey, BlobStore, BlobStoreRepo, ByteRange};
+use rustryx_core::ports::{
+    BlobCommit, BlobKey, BlobStore, BlobStoreRepo, ByteRange, PresignOptions,
+};
 use rustryx_core::{BlobError, Secret};
 use serde_json::json;
 use testcontainers::core::{IntoContainerPort, WaitFor};
@@ -199,10 +205,9 @@ async fn wait_until_reachable(store: &S3BlobStore) {
 async fn small_object_round_trip(store: &S3BlobStore) {
     let commit = upload(store, "small", 2048).await;
     assert_eq!(commit, expected(0, 2048));
-    assert_eq!(
-        store.head(&key("small")).await.unwrap().unwrap().size_bytes,
-        2048
-    );
+    let head = store.head(&key("small")).await.unwrap().unwrap();
+    assert_eq!(head.size_bytes, 2048);
+    assert!(head.modified.is_some(), "S3 reports a modification time");
     verify_download(store, "small", None, 0, 2048).await;
     verify_download(
         store,
@@ -305,7 +310,7 @@ async fn must_not_leave_an_object_after_abort_or_drop(store: &S3BlobStore, part:
             .unwrap();
     }
     drop(writer);
-    store.drain_cleanup().await;
+    store.shutdown().await;
     assert!(store.head(&key("dropped")).await.unwrap().is_none());
     assert_eq!(store.available_upload_slots(), 4);
 }
@@ -323,7 +328,7 @@ async fn delete_and_missing(store: &S3BlobStore) {
 
 async fn upload_slots_follow_the_writer_lifecycle(endpoint: &str) {
     let config = s3_config(endpoint, &json!({"max_concurrent_uploads": 2}));
-    let store = S3BlobStore::new(&config, Some(&credentials())).unwrap();
+    let store = S3BlobStore::new("slots", &config, Some(&credentials())).unwrap();
     let first = store.begin(&key("slot-a"), None).await.unwrap();
     let second = store.begin(&key("slot-b"), None).await.unwrap();
     assert_eq!(store.available_upload_slots(), 0);
@@ -396,6 +401,9 @@ impl BlobStoreRepo for OneStoreRepo {
     async fn list(&self) -> Result<Vec<BlobStoreDef>, StoreError> {
         Ok(vec![self.0.clone()])
     }
+    async fn update(&self, _: &BlobStoreDef) -> Result<(), StoreError> {
+        Ok(())
+    }
     async fn delete(&self, _: BlobStoreId) -> Result<(), StoreError> {
         Ok(())
     }
@@ -404,11 +412,11 @@ impl BlobStoreRepo for OneStoreRepo {
 /// The path production uses: definition JSON with secret references, resolved by the
 /// registry, no static credentials in the JSON.
 async fn registry_builds_a_working_store(endpoint: &str) {
-    let def = BlobStoreDef {
-        id: BlobStoreId::generate(),
-        name: "minio".into(),
-        kind: BlobStoreKind::S3,
-        config: json!({
+    let def = BlobStoreDef::new(
+        BlobStoreId::generate(),
+        "minio",
+        BlobStoreKind::S3,
+        json!({
             "bucket": BUCKET,
             "endpoint": endpoint,
             "allow_http": true,
@@ -416,12 +424,12 @@ async fn registry_builds_a_working_store(endpoint: &str) {
             "access_key_id_ref": "IT_KEY",
             "secret_access_key_ref": "IT_SECRET",
         }),
-        quota_bytes: None,
-        created_at: time::OffsetDateTime::UNIX_EPOCH,
-    };
+        time::OffsetDateTime::UNIX_EPOCH,
+    );
     let secrets = MapSecretResolver::new([("IT_KEY", ACCESS_KEY), ("IT_SECRET", SECRET_KEY)]);
     let registry = BlobStoreRegistry::new(Arc::new(OneStoreRepo(def.clone())), Arc::new(secrets));
-    let store = registry.store_for(def.id).await.unwrap();
+    let store = registry.store_by_id(def.id).await.unwrap();
+    assert_eq!(registry.definition(def.id).await.unwrap().name, "minio");
     store.health().await.unwrap();
     let mut writer = store.begin(&key("via-registry"), None).await.unwrap();
     writer
@@ -443,7 +451,7 @@ async fn wrong_credentials_are_reported_not_hidden(endpoint: &str) {
         secret_access_key: Secret::new("definitely-wrong"),
         session_token: None,
     };
-    let store = S3BlobStore::new(&config, Some(&bad)).unwrap();
+    let store = S3BlobStore::new("bad-credentials", &config, Some(&bad)).unwrap();
     assert!(
         store.health().await.is_err(),
         "bad credentials must fail the health check"
@@ -455,6 +463,227 @@ async fn wrong_credentials_are_reported_not_hidden(endpoint: &str) {
         "bad credentials must fail the commit"
     );
     assert!(store.head(&key("denied")).await.is_err());
+}
+
+/// What an HTTP client without credentials sees.
+struct HttpReply {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+impl HttpReply {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+/// A minimal HTTP/1.1 GET over a plain TCP connection. The test crate has no HTTP client,
+/// and a presigned URL has to be fetched by something that holds no credentials.
+async fn http_get(url: &str) -> HttpReply {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let parsed = url::Url::parse(url).unwrap();
+    let host = parsed.host_str().unwrap();
+    let port = parsed.port_or_known_default().unwrap();
+    let mut target = parsed.path().to_owned();
+    if let Some(query) = parsed.query() {
+        target.push('?');
+        target.push_str(query);
+    }
+    let mut stream = tokio::net::TcpStream::connect((host, port)).await.unwrap();
+    let request = format!(
+        "GET {target} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\nAccept-Encoding: identity\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).await.unwrap();
+    let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    let head = String::from_utf8_lossy(&raw[..split]).into_owned();
+    let mut lines = head.lines();
+    let status = lines
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse().ok())
+        .unwrap();
+    let headers = lines
+        .filter_map(|line| line.split_once(':'))
+        .map(|(n, v)| (n.trim().to_owned(), v.trim().to_owned()))
+        .collect();
+    HttpReply {
+        status,
+        headers,
+        body: raw[split + 4..].to_vec(),
+    }
+}
+
+fn raw_client(endpoint: &str) -> impl ObjectStore {
+    AmazonS3Builder::new()
+        .with_bucket_name(BUCKET)
+        .with_region("us-east-1")
+        .with_endpoint(endpoint)
+        .with_allow_http(true)
+        .with_virtual_hosted_style_request(false)
+        .with_access_key_id(ACCESS_KEY)
+        .with_secret_access_key(SECRET_KEY)
+        .build()
+        .unwrap()
+}
+
+async fn list_keys_walks_the_bucket_and_skips_foreign_objects(store: &S3BlobStore, endpoint: &str) {
+    let caps = store.capabilities();
+    assert!(caps.lists_keys && !caps.lists_staging && !caps.can_presign);
+
+    // An object that this crate did not write, under the store's own prefix.
+    let raw = raw_client(endpoint);
+    let foreign = ObjectPath::from("it/foreign-object.txt");
+    raw.put(&foreign, PutPayload::from_static(b"not a blob"))
+        .await
+        .unwrap();
+    for name in ["list-a", "list-b", "list-c"] {
+        upload(store, name, 100).await;
+    }
+
+    let mut seen: Vec<(String, u64, bool)> = Vec::new();
+    let mut after: Option<String> = None;
+    loop {
+        let page = store.list_keys(after.as_deref(), 2).await.unwrap();
+        assert!(page.keys.len() <= 2, "a page never exceeds its limit");
+        seen.extend(
+            page.keys
+                .iter()
+                .map(|(k, m)| (k.as_str().to_owned(), m.size_bytes, m.modified.is_some())),
+        );
+        match page.next {
+            Some(next) => after = Some(next),
+            None => break,
+        }
+    }
+    for name in ["list-a", "list-b", "list-c"] {
+        let entry = seen.iter().find(|(k, _, _)| k == name).unwrap();
+        assert_eq!(entry.1, 100, "{name}");
+        assert!(entry.2, "S3 reports a modification time for {name}");
+    }
+    assert!(
+        seen.iter().all(|(k, _, _)| k != "foreign-object.txt"),
+        "a foreign object is not a blob"
+    );
+    let locations: Vec<String> = seen
+        .iter()
+        .map(|(k, _, _)| {
+            let (first, second) = shard_of(k);
+            format!("{first}/{second}/{k}")
+        })
+        .collect();
+    assert!(
+        locations.windows(2).all(|pair| pair[0] < pair[1]),
+        "the order is stable and strictly increasing by location: {locations:?}"
+    );
+
+    assert!(matches!(
+        store.list_keys(Some("garbage"), 10).await,
+        Err(BlobError::InvalidKey(_))
+    ));
+    raw.delete(&foreign).await.unwrap();
+    for name in ["list-a", "list-b", "list-c"] {
+        store.delete(&key(name)).await.unwrap();
+    }
+}
+
+async fn presigned_downloads_work_without_credentials_and_expire(endpoint: &str) {
+    let config = s3_config(
+        endpoint,
+        &json!({"presign": {"enabled": true, "ttl_secs": 60}}),
+    );
+    let store = S3BlobStore::new("presign", &config, Some(&credentials())).unwrap();
+    assert!(store.capabilities().can_presign);
+    upload(&store, "presigned", 4096).await;
+
+    let options = PresignOptions {
+        response_content_type: Some("application/x-rustryx-test".into()),
+        response_content_disposition: Some("attachment; filename=\"p.bin\"".into()),
+    };
+    // A caller asking for an hour gets the configured minute, never more.
+    let issued = time::OffsetDateTime::now_utc();
+    let presigned = store
+        .presign_get(&key("presigned"), Duration::from_secs(3600), &options)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(presigned.expires_at <= issued + Duration::from_secs(61));
+    let url = presigned.url.expose().to_owned();
+    assert!(url.contains("X-Amz-Expires=60"), "lifetime is in the URL");
+
+    let reply = http_get(&url).await;
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.body, pattern(0, 4096).to_vec());
+    assert_eq!(
+        reply.header("content-type"),
+        Some("application/x-rustryx-test")
+    );
+    assert_eq!(
+        reply.header("content-disposition"),
+        Some("attachment; filename=\"p.bin\"")
+    );
+
+    // The overrides are inside the signature: a client cannot lift the `attachment`.
+    let mut tampered = url::Url::parse(&url).unwrap();
+    let pairs: Vec<(String, String)> = tampered
+        .query_pairs()
+        .map(|(k, v)| {
+            if k == "response-content-disposition" {
+                (k.into_owned(), "inline".to_owned())
+            } else {
+                (k.into_owned(), v.into_owned())
+            }
+        })
+        .collect();
+    tampered.query_pairs_mut().clear().extend_pairs(pairs);
+    assert_eq!(http_get(tampered.as_str()).await.status, 403);
+
+    // A URL for a key that is not there answers 404 at the client.
+    let absent = store
+        .presign_get(&key("presigned-absent"), Duration::from_secs(30), &options)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(http_get(absent.url.expose()).await.status, 404);
+
+    // A one second URL stops working.
+    let short = store
+        .presign_get(
+            &key("presigned"),
+            Duration::ZERO,
+            &PresignOptions::default(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(http_get(short.url.expose()).await.status, 200);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(
+        http_get(short.url.expose()).await.status,
+        403,
+        "an expired URL must be refused"
+    );
+
+    // Off by default: no URL, and the node serves the bytes.
+    let plain = S3BlobStore::new(
+        "plain",
+        &s3_config(endpoint, &json!({})),
+        Some(&credentials()),
+    )
+    .unwrap();
+    assert!(
+        plain
+            .presign_get(&key("presigned"), Duration::from_secs(30), &options)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    store.delete(&key("presigned")).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -489,7 +718,7 @@ async fn s3_minio_suite() {
         &endpoint,
         &json!({"part_size_mib": 5, "max_concurrent_uploads": 4}),
     );
-    let store = S3BlobStore::new(&config, Some(&credentials())).unwrap();
+    let store = S3BlobStore::new("minio", &config, Some(&credentials())).unwrap();
     let part_bytes = 5 * MIB;
     wait_until_reachable(&store).await;
 
@@ -501,10 +730,16 @@ async fn s3_minio_suite() {
     upload_slots_follow_the_writer_lifecycle(&endpoint).await;
     registry_builds_a_working_store(&endpoint).await;
     wrong_credentials_are_reported_not_hidden(&endpoint).await;
+    list_keys_walks_the_bucket_and_skips_foreign_objects(&store, &endpoint).await;
+    presigned_downloads_work_without_credentials_and_expire(&endpoint).await;
 
     // The default 16 MiB part size is what production runs; measure memory with it.
-    let production =
-        S3BlobStore::new(&s3_config(&endpoint, &json!({})), Some(&credentials())).unwrap();
+    let production = S3BlobStore::new(
+        "production",
+        &s3_config(&endpoint, &json!({})),
+        Some(&credentials()),
+    )
+    .unwrap();
     memory_stays_bounded(&production).await;
 
     container.rm().await.unwrap();

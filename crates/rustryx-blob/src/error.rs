@@ -1,9 +1,9 @@
 //! Error construction helpers.
 //!
-//! `rustryx_core::BlobError` has no variant for "invalid key" or "disk full", so
-//! those cases travel as `BlobError::Backend` with a typed source. Callers that need
-//! to tell them apart can `downcast_ref::<KeyError>()` on the source (see
-//! `docs/blob.md`, section "Core gaps").
+//! Core revision 2 gave the port typed variants for the cases that used to travel as
+//! `BlobError::Backend` with a side-channel source: `InvalidKey`, `InsufficientStorage`
+//! and `Overloaded`. Everything that is not one of those stays `Backend` with the source
+//! kept for the logs.
 
 use std::future::Future;
 use std::time::Duration;
@@ -39,9 +39,23 @@ pub(crate) fn io_read(context: &'static str, err: std::io::Error) -> BlobError {
     }
 }
 
+/// An I/O error while writing: a full disk (`ENOSPC`) or an exhausted quota (`EDQUOT`) is
+/// `InsufficientStorage` (507), not an opaque backend failure, because the caller can act
+/// on it and the alert for it is different from "the disk is broken".
+pub(crate) fn io_write(context: &'static str, err: std::io::Error) -> BlobError {
+    if matches!(
+        err.kind(),
+        std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded
+    ) {
+        BlobError::InsufficientStorage
+    } else {
+        backend(context, err)
+    }
+}
+
 /// An invalid key is a caller bug, not a missing object, so it is never `NotFound`.
 pub(crate) fn invalid_key(err: KeyError) -> BlobError {
-    backend("invalid blob key", err)
+    BlobError::InvalidKey(err.reason())
 }
 
 /// Runs `future` under a deadline. An expired deadline is `Unavailable`: the
@@ -87,14 +101,47 @@ mod tests {
     }
 
     #[test]
-    fn invalid_key_keeps_the_typed_source() {
-        match invalid_key(KeyError::Empty) {
-            BlobError::Backend { context, source } => {
-                assert_eq!(context, "invalid blob key");
-                assert_eq!(source.downcast_ref::<KeyError>(), Some(&KeyError::Empty));
+    fn must_not_report_an_invalid_key_as_a_missing_object() {
+        for err in [
+            KeyError::Empty,
+            KeyError::TooLong,
+            KeyError::Absolute,
+            KeyError::EmptyComponent,
+            KeyError::DotComponent,
+            KeyError::ComponentTooLong,
+            KeyError::ForbiddenCharacter,
+            KeyError::Reserved,
+        ] {
+            match invalid_key(err) {
+                BlobError::InvalidKey(reason) => assert!(!reason.is_empty(), "{err:?}"),
+                other => panic!("{err:?} became {other:?}"),
             }
-            other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_full_disk_and_an_exhausted_quota_are_insufficient_storage() {
+        for kind in [
+            std::io::ErrorKind::StorageFull,
+            std::io::ErrorKind::QuotaExceeded,
+        ] {
+            let outcome = io_write("write", std::io::Error::from(kind));
+            assert!(
+                matches!(outcome, BlobError::InsufficientStorage),
+                "{kind:?}"
+            );
+        }
+        let denied = io_write(
+            "write",
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        );
+        assert!(matches!(
+            denied,
+            BlobError::Backend {
+                context: "write",
+                ..
+            }
+        ));
     }
 
     #[tokio::test]

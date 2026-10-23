@@ -157,6 +157,7 @@ pub(super) fn settings(max_uploads: usize) -> S3Settings {
         permit_timeout: Duration::from_millis(60),
         metadata_timeout: Duration::from_secs(5),
         part_timeout: Duration::from_secs(5),
+        ..S3Settings::default()
     }
 }
 

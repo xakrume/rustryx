@@ -11,6 +11,8 @@ use rustryx_core::ports::BlobStore;
 use super::*;
 use crate::hashing::BlobSink;
 
+mod listing;
+mod presigning;
 mod support;
 use support::*;
 
@@ -134,7 +136,7 @@ async fn must_not_leave_an_upload_behind_after_drop() {
     let mut writer = fx.store.begin(&key("dropped"), None).await.unwrap();
     writer.write(pattern(PART * 2 + 5)).await.unwrap();
     drop(writer);
-    fx.store.drain_cleanup().await;
+    fx.store.shutdown().await;
     let state = fx.fake.snap();
     assert_eq!(
         state.open, 0,
@@ -160,7 +162,7 @@ async fn must_not_leave_an_upload_behind_when_the_writing_task_is_cancelled() {
     }
     task.abort();
     let _ = task.await;
-    fx.store.drain_cleanup().await;
+    fx.store.shutdown().await;
     assert_eq!(fx.fake.snap().open, 0);
     assert!(fx.store.head(&key("cancelled")).await.unwrap().is_none());
 }
@@ -183,7 +185,7 @@ async fn failed_part_poisons_the_writer_and_drop_aborts() {
         writer.commit().await,
         Err(BlobError::WriterClosed)
     ));
-    fx.store.drain_cleanup().await;
+    fx.store.shutdown().await;
     assert_eq!(fx.fake.snap().open, 0);
     assert!(fx.store.head(&key("failing")).await.unwrap().is_none());
 }
@@ -257,7 +259,16 @@ async fn must_not_start_more_uploads_than_the_limit_and_must_not_queue_forever()
     let b = fx.store.begin(&key("b"), None).await.unwrap();
     let started = std::time::Instant::now();
     let third = fx.store.begin(&key("c"), None).await;
-    assert!(matches!(third, Err(BlobError::Unavailable(_))));
+    // Slot exhaustion is backpressure: 503 with a retry hint, not "the store is down".
+    assert!(
+        matches!(
+            third.err(),
+            Some(BlobError::Overloaded {
+                retry_after: Some(_)
+            })
+        ),
+        "the third upload must be refused with a retry hint"
+    );
     assert!(
         started.elapsed() < Duration::from_secs(2),
         "begin must give up quickly"
@@ -383,7 +394,7 @@ async fn must_not_exceed_the_part_limit() {
         })
     ));
     drop(writer);
-    fx.store.drain_cleanup().await;
+    fx.store.shutdown().await;
     assert_eq!(fx.fake.snap().open, 0);
 }
 
@@ -600,7 +611,7 @@ fn building_from_config_needs_no_network_and_validates() {
         secret_access_key: Secret::new("key"),
         session_token: Some(Secret::new("token")),
     };
-    let store = S3BlobStore::new(&config, Some(&creds)).unwrap();
+    let store = S3BlobStore::new("unit", &config, Some(&creds)).unwrap();
     assert_eq!(store.kind(), BlobStoreKind::S3);
     let debug = format!("{store:?} {creds:?}");
     assert!(
@@ -611,5 +622,5 @@ fn building_from_config_needs_no_network_and_validates() {
     let mut bad = config.clone();
     bad.endpoint = Some("http://127.0.0.1:9000".into());
     bad.allow_http = false;
-    assert!(S3BlobStore::new(&bad, None).is_err());
+    assert!(S3BlobStore::new("unit", &bad, None).is_err());
 }
