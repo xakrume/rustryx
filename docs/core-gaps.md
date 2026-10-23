@@ -135,3 +135,7 @@ product.
 - Not done: paged search above 1000 AD entries (such answers fail the lookup), referral following, several URLs for failover, a fuzz target for the filter builder.
 - Both `ring` and `aws-lc-rs` are in the workspace, so `ClientConfig::builder()` would panic: providers are named explicitly everywhere (keep it so).
 - Added workspace deps: `rustls`, `rustls-native-certs`, `rcgen`, `tokio-rustls`.
+
+## Security review finding (automated, 24.10), open
+
+- `crates/rustryx-api/src/router.rs`: the rate limiter sits inside `authenticate` (`with_rate_limit(...)` then `.layer(from_fn_with_state(state, authenticate))`), so failed logins can be sent without being counted per client IP. Fix: put a per-IP limiter (keyed on `ClientIp`) OUTSIDE `authenticate`, or charge the IP bucket on every failed attempt before returning 401; keep the per-user limiter for authenticated requests. Needs a `must_not_` test. The PostgreSQL-backed login guard in `rustryx-auth` already throttles password logins per (account, ip) and per account, so this covers token and bearer guessing and unauthenticated floods.
