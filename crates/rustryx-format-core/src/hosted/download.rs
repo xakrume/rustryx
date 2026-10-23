@@ -13,7 +13,7 @@ use crate::conditional::{
     Conditional, RangeDecision, decide_range, etag_from_checksums, evaluate_conditional,
     format_http_date,
 };
-use crate::context::FormatContext;
+use crate::context::{ContentEvent, FormatContext};
 use crate::error::FormatError;
 use crate::request::RequestHead;
 use crate::stream::body_from_blob;
@@ -49,6 +49,10 @@ impl CacheStatus {
 pub(crate) struct ServeOptions {
     /// Adds `X-Rustryx-Cache` (and `Warning: 110` for stale).
     pub(crate) cache: Option<CacheStatus>,
+    /// The read is a download of an artifact and may count (a `GET` that opens the body, by a
+    /// client). Index documents never count: a group merge reads one per member, and a
+    /// metadata read is not a pull of the component.
+    pub(crate) count_download: bool,
 }
 
 /// Builds the response for an asset. The body is the blob stream, not a copy.
@@ -102,6 +106,9 @@ pub(crate) async fn serve_asset(
         open_body(cx, asset, range).await?
     };
 
+    if options.count_download && head.method == Method::GET {
+        record_download(cx, asset);
+    }
     let mut response = Response::new(body);
     *response.status_mut() = status;
     let headers = response.headers_mut();
@@ -151,6 +158,22 @@ pub(crate) async fn serve_asset(
     Ok(response)
 }
 
+/// Announces a client download. Scanner, replication and internal reads are not announced:
+/// they must not bump counters or refresh the pull time, or scanning would keep an unused
+/// artifact alive (SCN-21).
+fn record_download(cx: &FormatContext, asset: &Asset) {
+    let source = cx.download_source();
+    if !source.counts_as_download() {
+        return;
+    }
+    cx.ports().events.emit(ContentEvent::AssetDownloaded {
+        repository: asset.repository_id,
+        asset: asset.id,
+        source,
+        at: cx.now(),
+    });
+}
+
 async fn open_body(
     cx: &FormatContext,
     asset: &Asset,
@@ -159,7 +182,9 @@ async fn open_body(
     let record = cx.ports().blobs.get(asset.blob_id).await?.ok_or_else(|| {
         FormatError::internal("asset references a blob record that does not exist")
     })?;
-    let store = cx.store()?;
+    // The store the blob row names, never the repository's: for a group store that is the member
+    // that holds the bytes, so a read never probes members.
+    let store = cx.store_for_blob(&record).await?;
     let key = rustryx_core::ports::BlobKey::new(record.key);
     match store.get(&key, range).await {
         Ok(read) => Ok(body_from_blob(read)),

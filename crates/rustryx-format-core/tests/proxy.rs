@@ -281,16 +281,15 @@ async fn must_not_replace_an_artifact_that_was_published_while_the_fill_ran() {
     );
     world
         .store
-        .publish(&NewAsset {
-            repository_id: repo.id,
-            component_id: None,
-            path: "race/a.bin".into(),
-            content_type: "application/octet-stream".into(),
-            blob: BlobRecord {
+        .publish(&NewAsset::new(
+            repo.id,
+            "race/a.bin",
+            "application/octet-stream",
+            BlobRecord {
                 blob_store_id: repo.blob_store_id,
                 ..published
             },
-        })
+        ))
         .await
         .unwrap();
     let _ = request.await.unwrap();
@@ -1429,6 +1428,13 @@ async fn a_failing_component_lookup_does_not_leave_the_fetched_blob_behind() {
             id: rustryx_core::ids::ComponentId,
         ) -> Result<(), rustryx_core::error::StoreError> {
             rustryx_core::ports::ComponentRepo::delete(&self.0, id).await
+        }
+        async fn delete_checked(
+            &self,
+            id: rustryx_core::ids::ComponentId,
+            options: &rustryx_core::model::WriteOptions,
+        ) -> Result<(), rustryx_core::error::MutationError> {
+            rustryx_core::ports::ComponentRepo::delete_checked(&self.0, id, options).await
         }
     }
     let world = World::with_ports(|ports| {

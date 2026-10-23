@@ -13,15 +13,17 @@
 //!    404 (or 403 if the format asks, see `hide_inaccessible_repository`), an
 //!    authorization backend failure fails closed;
 //! 5. routing rules, then `handle`;
-//! 6. any error is logged once, here, and rendered by the format.
+//! 6. any error is logged once, here, and rendered by the format;
+//! 7. the response leaves with its [`RequestLabels`] (`class`, `cache`) as an extension, for the
+//!    latency histogram of the HTTP layer.
 
 use std::sync::Arc;
 
 use axum_core::body::Body;
 use http::Response;
 use rustryx_core::error::AuthError;
-use rustryx_core::identity::Action;
-use rustryx_core::model::{RepoType, Repository};
+use rustryx_core::identity::{Action, AuthMethod, Principal};
+use rustryx_core::model::{DownloadSource, RepoType, Repository};
 use rustryx_core::ports::{Decision, ResourceRef};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
@@ -30,7 +32,8 @@ use tokio_util::task::TaskTracker;
 use crate::context::{FormatContext, Limits, Ports, RequestMeta, RoutingDecision, Shared};
 use crate::error::FormatError;
 use crate::handler::{ErrorInfo, FormatHandler};
-use crate::hosted::UploadReservations;
+use crate::hosted::{CacheStatus, UploadReservations, X_RUSTRYX_CACHE};
+use crate::metrics::{CacheLabel, RequestClass, RequestLabels};
 use crate::proxy::executor::{ExecutorConfig, UpstreamExecutor};
 use crate::proxy::flight::Flights;
 use crate::proxy::negative::NegativeCache;
@@ -38,8 +41,9 @@ use crate::proxy::ssrf::UpstreamUrlPolicy;
 use crate::proxy::upstream::{
     ReqwestClientConfig, ReqwestUpstreamClient, UpstreamClient, UpstreamError,
 };
+use crate::proxy::validators::ValidatorCache;
 use crate::registry::FormatRegistry;
-use crate::request::{ArtifactRequest, RequestHead};
+use crate::request::{ArtifactRequest, ContentKind, RequestHead};
 
 /// Builder of a [`FormatEngine`].
 pub struct FormatEngineBuilder {
@@ -116,6 +120,10 @@ impl FormatEngineBuilder {
             upstream: UpstreamExecutor::new(client, policy, self.executor),
             flights: Flights::new(),
             negative: NegativeCache::new(self.limits.negative_cache_capacity),
+            validators: ValidatorCache::new(
+                self.limits.validator_cache_capacity,
+                self.limits.stale_max_age,
+            ),
             reservations: UploadReservations::new(),
             blocking: Arc::new(Semaphore::new(self.limits.blocking_permits.max(1))),
             tasks: TaskTracker::new(),
@@ -158,6 +166,13 @@ impl FormatEngine {
         &self.shared.registry
     }
 
+    /// The tracker of the engine's background tasks, for work that must end with the engine (the
+    /// download counter flusher): [`FormatEngine::drain`] waits for what runs on it.
+    #[must_use]
+    pub fn tasks(&self) -> &TaskTracker {
+        &self.shared.tasks
+    }
+
     /// The shutdown token the engine's tasks listen to.
     #[must_use]
     pub fn shutdown_token(&self) -> &CancellationToken {
@@ -196,6 +211,11 @@ impl FormatEngine {
             RequestMeta {
                 request_id: head.client.request_id.clone(),
                 client_ip: head.client.ip,
+                download_source: Some(
+                    head.client
+                        .download_source
+                        .unwrap_or_else(|| download_source_of(&head.principal)),
+                ),
             },
         )
     }
@@ -216,21 +236,31 @@ impl FormatEngine {
         let Some(handler) = self.shared.registry.get(repository.format).cloned() else {
             let error = FormatError::internal("no handler is registered for the repository format");
             Self::log(&error, &repository, head.client.request_id.as_deref());
-            return error.to_generic_response(head.client.request_id.as_deref());
+            let mut response = error.to_generic_response(head.client.request_id.as_deref());
+            RequestLabels::default().attach(&mut response);
+            return response;
         };
-        match self.dispatch(&handler, &repository, &head, body).await {
+        // Set by `dispatch` as soon as the request is classified, so that a failure after that
+        // point still reports the right class.
+        let mut class = RequestClass::Other;
+        match self
+            .dispatch(&handler, &repository, &head, body, &mut class)
+            .await
+        {
             Ok(response) => response,
             Err(error) => {
                 let request_id = head.client.request_id.as_deref();
                 Self::log(&error, &repository, request_id);
-                handler.render_error(
+                let mut response = handler.render_error(
                     &error,
                     &ErrorInfo {
                         request_id,
                         repository: &repository,
                         anonymous: head.principal.is_anonymous(),
                     },
-                )
+                );
+                RequestLabels::new(class, CacheLabel::None).attach(&mut response);
+                response
             }
         }
     }
@@ -241,6 +271,7 @@ impl FormatEngine {
         repository: &Arc<Repository>,
         head: &RequestHead,
         body: Body,
+        class: &mut RequestClass,
     ) -> Result<Response<Body>, FormatError> {
         if !repository.online {
             return Err(FormatError::Unavailable {
@@ -249,6 +280,8 @@ impl FormatEngine {
             });
         }
         let request = handler.classify(repository, head)?;
+        let (action, kind) = (request.action, request.kind);
+        *class = class_of(action, kind);
         let writes = matches!(request.action, Action::Write | Action::Delete);
         if writes && repository.repo_type != RepoType::Hosted {
             // Refused before authorization and before the body is read: nothing about
@@ -269,7 +302,13 @@ impl FormatEngine {
             }
         }
         let cx = self.context(Arc::clone(repository), head);
-        handler.handle(cx, request, body).await
+        let mut response = handler.handle(cx, request, body).await?;
+        RequestLabels::new(
+            *class,
+            cache_of(action, kind, repository.repo_type, &response),
+        )
+        .attach(&mut response);
+        Ok(response)
     }
 
     async fn authorize(
@@ -285,12 +324,10 @@ impl FormatEngine {
         // anonymous principal when the switch is on).
         let anonymous_blocked = principal.is_anonymous() && !repository.allow_anonymous;
         if !anonymous_blocked {
-            let resource = ResourceRef {
-                repository: repository.name.to_string(),
-                format: repository.format,
-                path: request.path.as_str().to_owned(),
-                coordinate: request.coordinate.clone(),
-            };
+            let mut resource = ResourceRef::for_repository(repository, request.path.as_str());
+            if let Some(coordinate) = &request.coordinate {
+                resource = resource.with_coordinate(coordinate.clone());
+            }
             match rbac.check(principal, request.action, &resource).await {
                 Ok(Decision::Allow) => return Ok(()),
                 Ok(Decision::Deny) => {}
@@ -340,6 +377,83 @@ impl FormatEngine {
                 request_id,
                 code = error.code(),
                 "format request rejected"
+            );
+        }
+    }
+}
+
+/// Who caused the read when the HTTP layer did not say: a scanner's short lived token is the
+/// scanner, everything else is a client. Replication workers and the node itself call the
+/// engine with an explicit `ClientInfo::download_source`.
+fn download_source_of(principal: &Principal) -> DownloadSource {
+    if principal.auth_method == AuthMethod::ScanToken {
+        DownloadSource::Scanner
+    } else {
+        DownloadSource::Client
+    }
+}
+
+/// The `class` label of a classified request.
+fn class_of(action: Action, kind: ContentKind) -> RequestClass {
+    match action {
+        Action::Write | Action::Delete => RequestClass::Upload,
+        _ if kind == ContentKind::Index => RequestClass::Metadata,
+        _ => RequestClass::Download,
+    }
+}
+
+/// The `cache` label of a response. The proxy and the group already say how they produced a
+/// copy in `X-Rustryx-Cache`; a response without it is a read from local storage (`hit`: the
+/// request did not wait for anything), or, for a merged group index, one that was composed
+/// without a cache (`bypass`). Failures and writes carry no cache relation.
+fn cache_of(
+    action: Action,
+    kind: ContentKind,
+    repo_type: RepoType,
+    response: &Response<Body>,
+) -> CacheLabel {
+    if let Some(value) = response.headers().get(X_RUSTRYX_CACHE) {
+        return match value.as_bytes() {
+            v if v == CacheStatus::Hit.as_str().as_bytes() => CacheLabel::Hit,
+            v if v == CacheStatus::Miss.as_str().as_bytes() => CacheLabel::Miss,
+            v if v == CacheStatus::Stale.as_str().as_bytes() => CacheLabel::Stale,
+            _ => CacheLabel::None,
+        };
+    }
+    let read = matches!(action, Action::Read | Action::Browse);
+    let served =
+        response.status().is_success() || response.status() == http::StatusCode::NOT_MODIFIED;
+    if !read || !served {
+        return CacheLabel::None;
+    }
+    if repo_type == RepoType::Group && kind == ContentKind::Index {
+        CacheLabel::Bypass
+    } else {
+        CacheLabel::Hit
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustryx_core::identity::UserSource;
+
+    #[test]
+    fn a_scan_token_is_a_scanner_and_everything_else_a_client() {
+        let scan = Principal::new("scan", UserSource::Local, AuthMethod::ScanToken);
+        assert_eq!(download_source_of(&scan), DownloadSource::Scanner);
+        for method in [
+            AuthMethod::Anonymous,
+            AuthMethod::BasicLocal,
+            AuthMethod::ApiToken,
+            AuthMethod::RobotToken,
+            AuthMethod::OidcBearer,
+        ] {
+            let principal = Principal::new("u", UserSource::Local, method);
+            assert_eq!(
+                download_source_of(&principal),
+                DownloadSource::Client,
+                "{method:?}"
             );
         }
     }

@@ -202,12 +202,16 @@ impl UpstreamExecutor {
 
     fn breaker(&self, call: &UpstreamCall) -> Arc<CircuitBreaker> {
         let key = host_key(&call.url);
-        Arc::clone(
+        let breaker = Arc::clone(
             self.breakers
                 .entry(key)
                 .or_insert_with(|| CircuitBreaker::new(self.config.breaker, call.repo_name.clone()))
                 .value(),
-        )
+        );
+        // The breaker is per host, the `upstream_circuit_state{repo}` series is per
+        // repository: every repository that calls the host must report it.
+        breaker.register_repository(&call.repo_name);
+        breaker
     }
 
     fn semaphore(&self, repository: RepositoryId, limit: u32) -> Arc<Semaphore> {
@@ -312,7 +316,7 @@ impl UpstreamExecutor {
                 }
                 Err(error) => {
                     metrics::upstream_request(&call.repo_name, "error", elapsed);
-                    metrics::upstream_error(&call.repo_name, error.kind().as_str());
+                    metrics::upstream_error(&call.repo_name, error.metric_kind());
                     if matches!(error, UpstreamError::Blocked(_)) {
                         // A policy refusal is not an upstream failure; it must not open the breaker.
                         drop(slot);

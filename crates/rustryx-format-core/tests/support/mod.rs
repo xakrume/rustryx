@@ -28,6 +28,9 @@
     reason = "test scenarios read best as straight-line code with local helpers"
 )]
 
+pub mod doubles;
+pub mod recorder;
+
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -39,6 +42,7 @@ use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, Response, header};
 use rustryx_core::error::{AuthError, BlobError};
 use rustryx_core::identity::{Action, AuthMethod, Principal};
+use rustryx_core::ids::BlobStoreId;
 use rustryx_core::model::{RepoFormat, RepoType, Repository};
 use rustryx_core::ports::auth::Coordinate;
 use rustryx_core::ports::{BlobStore, Decision, RbacChecker, RepositoryRepo, ResourceRef};
@@ -173,11 +177,12 @@ impl RbacChecker for FakeRbac {
     }
 }
 
-/// Hands the same blob store to every repository.
+/// Hands the same blob store to every repository and every blob row.
 pub struct SingleStore(pub Arc<dyn BlobStore>);
 
+#[async_trait]
 impl BlobStoreRegistry for SingleStore {
-    fn store_for(&self, _repository: &Repository) -> Result<Arc<dyn BlobStore>, BlobError> {
+    async fn store_by_id(&self, _id: BlobStoreId) -> Result<Arc<dyn BlobStore>, BlobError> {
         Ok(Arc::clone(&self.0))
     }
 }
@@ -185,8 +190,9 @@ impl BlobStoreRegistry for SingleStore {
 /// A registry that has no store, for the failure path.
 pub struct NoStore;
 
+#[async_trait]
 impl BlobStoreRegistry for NoStore {
-    fn store_for(&self, _repository: &Repository) -> Result<Arc<dyn BlobStore>, BlobError> {
+    async fn store_by_id(&self, _id: BlobStoreId) -> Result<Arc<dyn BlobStore>, BlobError> {
         Err(BlobError::Unavailable("no such blob store".into()))
     }
 }
@@ -327,10 +333,7 @@ impl FormatHandler for RawLikeHandler {
         let mut request = classify_path_addressed(repository, head)?;
         let first = request.path.segments().next().map(str::to_owned);
         if let Some(name) = first {
-            request = request.with_coordinate(Coordinate {
-                name: Some(name),
-                ..Coordinate::default()
-            });
+            request = request.with_coordinate(Coordinate::new(None, Some(name), None));
         }
         if request.path.as_str().ends_with(".index") {
             request = request.index();
@@ -457,6 +460,9 @@ pub struct World {
     pub events: Arc<RecordingEvents>,
     pub shutdown: CancellationToken,
     pub engine: FormatEngine,
+    /// The ports the engine was built from, to build a second engine over the same world (a
+    /// second node: shared database and blob store, nothing else shared).
+    pub ports: Ports,
 }
 
 impl World {
@@ -484,6 +490,58 @@ impl World {
             MemBlobStore::new(),
             Some(Arc::new(NoStore)),
             fast_executor(),
+        )
+    }
+
+    /// A world whose only blob store is `store`; `inner` is the in-memory store behind it, for
+    /// assertions.
+    pub fn with_store(store: Arc<dyn BlobStore>, inner: MemBlobStore) -> Self {
+        Self::with_store_and_limits(store, inner, Limits::default())
+    }
+
+    /// [`World::with_store`] with custom limits.
+    pub fn with_store_and_limits(
+        store: Arc<dyn BlobStore>,
+        inner: MemBlobStore,
+        limits: Limits,
+    ) -> Self {
+        Self::assemble(
+            limits,
+            inner,
+            Some(Arc::new(SingleStore(store))),
+            fast_executor(),
+        )
+    }
+
+    /// A world whose only blob store is `store` and whose policy hook is `policy`.
+    pub fn with_store_and_policy(
+        store: Arc<dyn BlobStore>,
+        inner: MemBlobStore,
+        policy: Arc<dyn rustryx_format_core::ContentPolicy>,
+    ) -> Self {
+        Self::assemble_with(
+            Limits::default(),
+            inner,
+            Some(Arc::new(SingleStore(store))),
+            fast_executor(),
+            |ports| ports.policy = policy,
+        )
+    }
+
+    /// A world whose blob store registry is `registry` (the in-memory store `blobs` is only
+    /// there for the assertions of the test).
+    pub fn with_registry(blobs: MemBlobStore, registry: Arc<dyn BlobStoreRegistry>) -> Self {
+        Self::assemble(Limits::default(), blobs, Some(registry), fast_executor())
+    }
+
+    /// A world with custom limits whose ports are adjusted by `customize`.
+    pub fn with_limits_and_ports(limits: Limits, customize: impl FnOnce(&mut Ports)) -> Self {
+        Self::assemble_with(
+            limits,
+            MemBlobStore::new(),
+            None,
+            fast_executor(),
+            customize,
         )
     }
 
@@ -591,6 +649,7 @@ impl World {
         customize(&mut ports);
         let upstream = FakeUpstream::new();
         let shutdown = CancellationToken::new();
+        let node_ports = ports.clone();
         let builder = FormatEngine::builder(ports, registry)
             .limits(limits)
             .executor_config(executor)
@@ -617,7 +676,22 @@ impl World {
             events,
             shutdown,
             engine,
+            ports: node_ports,
         }
+    }
+
+    /// A second engine over the same metadata store, blob store and upstream: another node,
+    /// with its own caches (singleflight map, negative cache, upstream validators, reservations).
+    pub fn second_node(&self) -> FormatEngine {
+        let mut registry = FormatRegistry::new();
+        registry.register(Arc::new(RawLikeHandler)).unwrap();
+        FormatEngine::builder(self.ports.clone(), registry)
+            .executor_config(fast_executor())
+            .url_policy(UpstreamUrlPolicy::any_public())
+            .upstream_client(self.upstream.clone())
+            .shutdown_token(self.shutdown.clone())
+            .build()
+            .unwrap()
     }
 
     /// Creates a repository in the store and returns it.

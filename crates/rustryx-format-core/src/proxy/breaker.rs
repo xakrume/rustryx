@@ -74,27 +74,47 @@ enum Phase {
 struct Inner {
     phase: Phase,
     window: VecDeque<(Instant, bool)>,
+    /// Repositories that call this host. The breaker is per host (one failing host is one
+    /// fact), but the gauge is per repository, because that is the label the dashboard and
+    /// the operator read. Every repository that shares the host gets the same value.
+    labels: Vec<String>,
 }
 
 /// Breaker for one upstream host.
 pub struct CircuitBreaker {
     config: BreakerConfig,
-    label: String,
     inner: Mutex<Inner>,
 }
 
 impl CircuitBreaker {
-    /// Creates a closed breaker. `label` is the repository name used for the gauge.
+    /// Creates a closed breaker. `label` is the repository name used for the gauge. The
+    /// closed value is exported at once: a gauge that appears only after the first failure
+    /// would leave the circuit panel empty exactly while everything is healthy.
     #[must_use]
     pub fn new(config: BreakerConfig, label: impl Into<String>) -> Arc<Self> {
+        let label = label.into();
+        metrics::circuit_state(&label, BreakerState::Closed.gauge());
         Arc::new(Self {
             config,
-            label: label.into(),
             inner: Mutex::new(Inner {
                 phase: Phase::Closed,
                 window: VecDeque::new(),
+                labels: vec![label],
             }),
         })
+    }
+
+    /// Makes `repository` report this breaker's state too. Idempotent. The breaker belongs to
+    /// the host, so it is created by the first repository that calls it; the others register
+    /// here, otherwise their circuit panel would show nothing while the host is open.
+    pub fn register_repository(&self, repository: &str) {
+        let mut inner = self.lock();
+        if inner.labels.iter().any(|known| known == repository) {
+            return;
+        }
+        inner.labels.push(repository.to_owned());
+        let state = Self::state_of(&inner.phase);
+        metrics::circuit_state(repository, state.gauge());
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -106,7 +126,11 @@ impl CircuitBreaker {
     /// Current state.
     #[must_use]
     pub fn state(&self) -> BreakerState {
-        match self.lock().phase {
+        Self::state_of(&self.lock().phase)
+    }
+
+    fn state_of(phase: &Phase) -> BreakerState {
+        match phase {
             Phase::Closed => BreakerState::Closed,
             Phase::Open { .. } => BreakerState::Open,
             Phase::HalfOpen { .. } => BreakerState::HalfOpen,
@@ -123,7 +147,7 @@ impl CircuitBreaker {
             Phase::Closed => false,
             Phase::Open { until } if now >= until => {
                 inner.phase = Phase::HalfOpen { probing: true };
-                self.export(BreakerState::HalfOpen);
+                Self::export(&inner.labels, BreakerState::HalfOpen);
                 true
             }
             Phase::HalfOpen { probing: false } => {
@@ -146,12 +170,12 @@ impl CircuitBreaker {
             if ok {
                 inner.phase = Phase::Closed;
                 inner.window.clear();
-                self.export(BreakerState::Closed);
+                Self::export(&inner.labels, BreakerState::Closed);
             } else {
                 inner.phase = Phase::Open {
                     until: now + self.config.open_for,
                 };
-                self.export(BreakerState::Open);
+                Self::export(&inner.labels, BreakerState::Open);
             }
             return;
         }
@@ -176,7 +200,7 @@ impl CircuitBreaker {
                 until: now + self.config.open_for,
             };
             inner.window.clear();
-            self.export(BreakerState::Open);
+            Self::export(&inner.labels, BreakerState::Open);
         }
     }
 
@@ -190,8 +214,10 @@ impl CircuitBreaker {
         }
     }
 
-    fn export(&self, state: BreakerState) {
-        metrics::circuit_state(&self.label, state.gauge());
+    fn export(labels: &[String], state: BreakerState) {
+        for label in labels {
+            metrics::circuit_state(label, state.gauge());
+        }
     }
 }
 

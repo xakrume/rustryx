@@ -380,6 +380,13 @@ async fn a_failing_claim_lookup_fails_closed() {
         async fn delete(&self, id: rustryx_core::ids::ComponentId) -> Result<(), StoreError> {
             ComponentRepo::delete(&self.0, id).await
         }
+        async fn delete_checked(
+            &self,
+            id: rustryx_core::ids::ComponentId,
+            options: &rustryx_core::model::WriteOptions,
+        ) -> Result<(), rustryx_core::error::MutationError> {
+            ComponentRepo::delete_checked(&self.0, id, options).await
+        }
     }
 
     // The wrapper only has to fail `list`; the store behind it is irrelevant here.

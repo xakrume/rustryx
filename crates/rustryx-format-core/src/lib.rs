@@ -5,13 +5,16 @@
 //! needs is here, built once and tested once:
 //!
 //! * [`hosted`]: streaming upload (body, size limit, hashing, blob writer, a single
-//!   `AssetRepo::publish` commit, abort on error or disconnect), streaming download
-//!   with `ETag`, ranges and conditional requests;
+//!   `AssetRepo::publish_with` commit, abort on error or disconnect), chunked uploads on
+//!   resumable stores, streaming download with `ETag`, ranges and conditional requests;
 //! * [`proxy`]: cache fill with singleflight, a tee to the first client, bounded
 //!   upstream concurrency, timeouts, retries, circuit breaker, negative cache,
 //!   serve-stale, checksum verification, and the SSRF guard;
 //! * [`group`]: ordered members, per-member authorization, index merging, and
 //!   dependency-confusion name claims;
+//! * [`policy`]: the hook that immutability, holds and quotas plug into before a body is read;
+//! * [`routing`]: allow and block rules per proxy and group repository;
+//! * [`downloads`]: batched download counters;
 //! * helpers: [`path`] normalization, [`mime`], [`conditional`], [`stream`], [`metrics`].
 //!
 //! The entry point from the HTTP layer is [`FormatEngine::serve`].
@@ -35,6 +38,7 @@ pub mod blobio;
 pub mod checksum;
 pub mod conditional;
 pub mod context;
+pub mod downloads;
 pub mod engine;
 pub mod error;
 pub mod group;
@@ -43,9 +47,11 @@ pub mod hosted;
 pub mod metrics;
 pub mod mime;
 pub mod path;
+pub mod policy;
 pub mod proxy;
 pub mod registry;
 pub mod request;
+pub mod routing;
 pub mod standard;
 pub mod stream;
 pub mod testing;
@@ -55,6 +61,7 @@ pub use context::{
     AllowAllRouting, BlobStoreRegistry, ContentEvent, ContentEvents, FormatContext, Limits,
     NoopEvents, OrphanCause, Ports, RequestMeta, RoutingDecision, RoutingGate,
 };
+pub use downloads::DownloadBatcher;
 pub use engine::{FormatEngine, FormatEngineBuilder};
 pub use error::{FormatError, UpstreamFailureKind};
 pub use group::{
@@ -62,9 +69,14 @@ pub use group::{
     NameClaim,
 };
 pub use handler::{ErrorInfo, FormatHandler};
-pub use hosted::{CacheStatus, ComponentSpec, OverwriteRule, UploadOutcome, UploadSpec};
+pub use hosted::{
+    CacheStatus, ChunkedSession, ComponentSpec, OverwriteRule, UploadOutcome, UploadSpec,
+};
+pub use metrics::{CacheLabel, RequestClass, RequestLabels};
 pub use path::{NormalizedPath, PathError, PathRules};
+pub use policy::{ContentPolicy, DeleteIntent, NoopContentPolicy, WriteIntent};
 pub use proxy::{CachedDocument, ProxyFetch, UpstreamPath};
 pub use registry::{FormatRegistry, RegistryError};
 pub use request::{ArtifactRequest, ClientInfo, ContentKind, RequestHead, action_for_method};
+pub use routing::RuleRoutingGate;
 pub use standard::classify_path_addressed;

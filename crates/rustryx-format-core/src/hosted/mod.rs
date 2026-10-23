@@ -3,14 +3,19 @@
 //! The upload path is a straight line with one visibility commit:
 //!
 //! ```text
-//! body stream -> size limit -> 64 KiB slices -> BlobWriter (hashes) -> commit
-//!             -> AssetRepo::publish   <- the only moment the artifact becomes visible
+//! policy hook -> body stream -> size limit -> 64 KiB slices -> BlobWriter (hashes) -> commit
+//!             -> AssetRepo::publish_with   <- the only moment the artifact becomes visible
 //! ```
 //!
 //! Nothing is collected into memory. Any error, a client that disconnects, or a
 //! cancelled request aborts the staged blob; a published artifact is never half
 //! there. See [`UploadSpec`] for what a format controls.
+//!
+//! Uploads that span requests (OCI chunked blob uploads) use the same publish step through
+//! [`HostedPipeline::begin_chunked`] and friends, on stores whose
+//! `BlobStoreCapabilities::resumable` is set.
 
+mod chunked;
 mod download;
 pub(crate) mod quota;
 mod reservation;
@@ -20,6 +25,7 @@ use axum_core::body::Body;
 use http::Response;
 use rustryx_core::model::{Asset, BlobRecord, RepoType};
 
+pub use chunked::ChunkedSession;
 pub use download::{CacheStatus, X_RUSTRYX_CACHE};
 pub(crate) use download::{ServeOptions, serve_asset};
 pub use reservation::{UploadReservation, UploadReservations};
@@ -28,7 +34,7 @@ use crate::checksum::ExpectedChecksum;
 use crate::context::FormatContext;
 use crate::error::FormatError;
 use crate::path::NormalizedPath;
-use crate::request::ArtifactRequest;
+use crate::request::{ArtifactRequest, ContentKind};
 
 /// Whether an existing path may be overwritten, beyond the repository write policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -106,14 +112,18 @@ pub struct UploadOutcome {
     pub asset: Asset,
     /// The blob this upload replaced. It is already unreferenced in the database
     /// and has been announced through [`crate::ContentEvents`]; the GC removes it.
+    /// `None` for a new path, and also when the replaced blob is still referenced by another
+    /// asset (a linked copy), so it is not a test for "the path existed": use `created`.
     pub replaced: Option<BlobRecord>,
+    /// True when the path did not exist before (the port's own answer).
+    pub created: bool,
 }
 
 impl UploadOutcome {
     /// True when the path did not exist before.
     #[must_use]
     pub fn created(&self) -> bool {
-        self.replaced.is_none()
+        self.created
     }
 }
 
@@ -171,16 +181,32 @@ impl<'a> HostedPipeline<'a> {
             .get_by_path(repository.id, req.path.as_str())
             .await?
             .ok_or(FormatError::NotFound)?;
-        serve_asset(self.cx, &req.head, &asset, ServeOptions::default()).await
+        serve_asset(
+            self.cx,
+            &req.head,
+            &asset,
+            ServeOptions {
+                cache: None,
+                // Only artifacts count: an index document is read once per member of a group.
+                count_download: req.kind == ContentKind::Artifact,
+            },
+        )
+        .await
     }
 
-    /// Deletes the asset at `path` and announces its blob for garbage collection.
+    /// Deletes the asset at `path` and announces its blob for garbage collection. Returns the
+    /// blob that lost its last reference, `None` when another asset still references it.
+    ///
+    /// The policy hook runs first and the transaction (`delete_by_path_checked`) decides
+    /// again, so an immutable or held asset stays whatever the hook said.
     ///
     /// Cancel safe: the delete is one statement.
     ///
     /// # Errors
-    /// `Forbidden` for a read-only repository, `NotFound` when there is no such asset.
-    pub async fn delete(&self, path: &NormalizedPath) -> Result<BlobRecord, FormatError> {
+    /// `Forbidden` for a read-only repository, `NotFound` when there is no such asset,
+    /// `Policy` (409, or 503 in read only mode) when immutability, a hold or the system state
+    /// refuses the delete.
+    pub async fn delete(&self, path: &NormalizedPath) -> Result<Option<BlobRecord>, FormatError> {
         self.require_hosted()?;
         upload::delete(self.cx, path).await
     }

@@ -24,6 +24,7 @@ pub mod negative;
 pub mod ssrf;
 mod target;
 pub mod upstream;
+pub(crate) mod validators;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,6 +32,7 @@ use std::time::Duration;
 use axum_core::body::Body;
 use bytes::Bytes;
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Response, StatusCode, header};
+use rustryx_core::error::UpstreamError as CoreUpstreamError;
 use rustryx_core::model::{Asset, ProxyConfig, RepoType};
 use rustryx_core::ports::BlobKey;
 use time::OffsetDateTime;
@@ -41,7 +43,7 @@ pub use fill::{FillFailure, FillOutcome};
 pub use target::UpstreamPath;
 
 use self::executor::{CallClass, UpstreamCall};
-use self::fill::{FillIntent, FillJob, FillPlan, TeeHead, tee_body, tee_headers};
+use self::fill::{ExistingCopy, FillJob, FillPlan, TeeHead, tee_body, tee_headers};
 use self::flight::{FlightKey, Join, WaitError};
 use self::target::build_upstream_url;
 use crate::checksum::{ChecksumSource, ExpectedChecksum};
@@ -289,6 +291,9 @@ impl<'a> ProxyPipeline<'a> {
                     &asset,
                     ServeOptions {
                         cache: Some(status),
+                        // The first client of a miss is served from the tee and not counted
+                        // (its copy did not exist yet); every later read of the copy is.
+                        count_download: true,
                     },
                 )
                 .await
@@ -440,7 +445,17 @@ impl<'a> ProxyPipeline<'a> {
             }
             match follower.wait(cx.limits().singleflight_max_wait).await {
                 Ok(FillOutcome::Cached) => {
-                    return self.after_cached_fill(&prepared.cache_path).await;
+                    return self
+                        .after_cached_fill(&prepared.cache_path, CacheStatus::Miss)
+                        .await;
+                }
+                Ok(FillOutcome::Revalidated) => {
+                    // The expired copy was confirmed: it is served as a hit, and counted as
+                    // a revalidation so the cost saved is visible.
+                    metrics::cache_result(format, "revalidated");
+                    return self
+                        .after_cached_fill(&prepared.cache_path, CacheStatus::Hit)
+                        .await;
                 }
                 Ok(FillOutcome::NotFound) => {
                     metrics::cache_result(format, "negative");
@@ -467,9 +482,15 @@ impl<'a> ProxyPipeline<'a> {
         })
     }
 
-    async fn after_cached_fill(&self, cache_path: &str) -> Result<Resolved, FormatError> {
+    async fn after_cached_fill(
+        &self,
+        cache_path: &str,
+        status: CacheStatus,
+    ) -> Result<Resolved, FormatError> {
         let repository = self.cx.repository();
-        metrics::cache_result(repository.format, "miss");
+        if status == CacheStatus::Miss {
+            metrics::cache_result(repository.format, "miss");
+        }
         match self
             .cx
             .ports()
@@ -477,7 +498,7 @@ impl<'a> ProxyPipeline<'a> {
             .get_by_path(repository.id, cache_path)
             .await?
         {
-            Some(asset) => Ok(Resolved::Asset(Box::new(asset), CacheStatus::Miss)),
+            Some(asset) => Ok(Resolved::Asset(Box::new(asset), status)),
             // Removed between the fill and now (cleanup, delete). The client may simply retry.
             None => Err(FormatError::Unavailable {
                 reason: "the cached copy disappeared, retry",
@@ -519,12 +540,7 @@ impl<'a> ProxyPipeline<'a> {
             checksum_source: fetch.checksum_source.clone(),
             component: fetch.component.clone(),
             forbidden_is_miss: fetch.forbidden_is_miss,
-            intent: if existing.is_some() {
-                FillIntent::Refresh
-            } else {
-                FillIntent::Fill
-            },
-            existing_size: existing.map_or(0, |a| a.size_bytes),
+            existing: existing.map(ExistingCopy::of),
             negative_ttl: Duration::from_secs(prepared.config.negative_cache_ttl_secs),
         }
     }
@@ -553,7 +569,7 @@ impl<'a> ProxyPipeline<'a> {
             .ok_or_else(|| {
                 FormatError::internal("asset references a blob record that does not exist")
             })?;
-        let store = self.cx.store()?;
+        let store = self.cx.store_for_blob(&record).await?;
         let read = store.get(&BlobKey::new(record.key), None).await?;
         let body = collect_bounded(read.stream, limit)
             .await
@@ -586,12 +602,14 @@ impl<'a> ProxyPipeline<'a> {
             } else {
                 CacheStatus::Stale
             };
+            // A `HEAD` is never a download: `serve_asset` counts only a `GET`.
             return serve_asset(
                 cx,
                 &fetch.request.head,
                 &asset,
                 ServeOptions {
                     cache: Some(status),
+                    count_download: false,
                 },
             )
             .await;
@@ -642,12 +660,9 @@ impl<'a> ProxyPipeline<'a> {
             }
             404 | 410 => Err(FormatError::NotFound),
             403 if fetch.forbidden_is_miss => Err(FormatError::NotFound),
-            401 | 403 => Err(FormatError::upstream(
-                UpstreamFailureKind::Rejected,
-                format!("upstream answered {}", result.status),
-            )),
-            _ => Err(FormatError::upstream(
-                UpstreamFailureKind::BadStatus,
+            // The same mapping as a fill: 401 and 403 are a 502 and never forwarded.
+            code => Err(FormatError::upstream(
+                UpstreamFailureKind::of(&CoreUpstreamError::Status(code)),
                 format!("upstream answered {}", result.status),
             )),
         }

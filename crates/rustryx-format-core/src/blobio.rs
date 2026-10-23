@@ -15,6 +15,7 @@ use bytes::Bytes;
 use rustryx_core::error::BlobError;
 use rustryx_core::ports::{BlobCommit, BlobKey, BlobStore, BlobWriter};
 
+use crate::context::FormatContext;
 use crate::metrics;
 use crate::stream::hash_slices;
 
@@ -162,11 +163,32 @@ impl Drop for BlobSink {
 
 /// Deletes a committed blob that must not be published (checksum mismatch, failed
 /// metadata commit). A failure leaves an object in the store that no database row
-/// points at, so it is counted and logged loudly: the GC job cannot find it.
+/// points at, so it is counted and logged loudly: the row driven GC cannot find it.
+///
+/// Why there is no pending row that would make it findable (gap 28): core revision 2 rejected
+/// it, because it would add a write to every upload and still not cover a lost commit
+/// response of an object store. The leak is closed by the store sweep of `verify_blobs`
+/// (`BlobStore::list_keys` against the `blobs` rows), which deletes orphan objects older than
+/// twice the GC minimum age. The counter and the log line below are what an operator sees
+/// first.
 pub async fn delete_orphan(store: &dyn BlobStore, key: &BlobKey) {
     if let Err(error) = store.delete(key).await {
         metrics::count(metrics::BLOB_ORPHAN_LEAK_TOTAL);
         tracing::error!(%error, key = key.as_str(), "could not delete an unpublished blob; it is now an orphan object");
+    }
+}
+
+/// Deletes the object of a commit that will not be published, through the store that took
+/// the bytes. A group adapter refuses `delete`, so the member named in `placement` is the
+/// one to ask; when even the lookup fails the object is leaked and counted like any other
+/// failed cleanup.
+pub(crate) async fn discard_committed(cx: &FormatContext, commit: &BlobCommit, key: &BlobKey) {
+    match cx.store_of_commit(commit).await {
+        Ok(store) => delete_orphan(store.as_ref(), key).await,
+        Err(error) => {
+            metrics::count(metrics::BLOB_ORPHAN_LEAK_TOTAL);
+            tracing::error!(%error, key = key.as_str(), "no blob store to delete an unpublished blob from; it is now an orphan object");
+        }
     }
 }
 

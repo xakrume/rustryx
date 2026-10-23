@@ -145,14 +145,14 @@ impl BlobWriter for DiscardingWriter {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(self.key.clone(), (self.size, sha256.clone()));
-        Ok(BlobCommit {
-            size_bytes: self.size,
-            checksums: Checksums {
+        Ok(BlobCommit::new(
+            self.size,
+            Checksums {
                 sha1: "0".repeat(40),
                 sha256,
                 md5: "0".repeat(32),
             },
-        })
+        ))
     }
 
     async fn abort(self: Box<Self>) -> Result<(), BlobError> {
@@ -209,7 +209,7 @@ impl BlobStore for DiscardingHandle {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(key.as_str())
-            .map(|(size, _)| BlobMeta { size_bytes: *size }))
+            .map(|(size, _)| BlobMeta::new(*size)))
     }
 
     async fn delete(&self, key: &BlobKey) -> Result<(), BlobError> {

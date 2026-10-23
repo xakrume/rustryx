@@ -16,6 +16,8 @@ use futures::stream::BoxStream;
 use http::{HeaderMap, Method, StatusCode};
 use url::Url;
 
+use rustryx_core::error::UpstreamError as CoreUpstreamError;
+
 use super::ssrf::{GuardedResolver, HostResolver, SystemResolver, UpstreamUrlPolicy, UrlRejection};
 use crate::error::UpstreamFailureKind;
 
@@ -32,7 +34,14 @@ pub enum TimeoutPhase {
     Total,
 }
 
-/// Failure of an upstream call.
+/// Failure of an upstream call at the transport level.
+///
+/// This type keeps what the executor needs and the core type does not carry: the phase of a
+/// timeout (connect and header timeouts are retried, idle and total ones are not), the policy
+/// rejection with its detail for the audit record, and log text. The contract that crosses a
+/// crate boundary is [`rustryx_core::error::UpstreamError`]: [`UpstreamError::to_core`] is the
+/// lossy projection onto it, and the HTTP mapping of both is defined once, in
+/// [`UpstreamFailureKind::of`].
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum UpstreamError {
     /// DNS, TCP or TLS failure. The text never contains the URL.
@@ -66,11 +75,42 @@ impl UpstreamError {
     #[must_use]
     pub fn kind(&self) -> UpstreamFailureKind {
         match self {
-            Self::Connect(_) | Self::Body(_) | Self::Overloaded => UpstreamFailureKind::Unreachable,
-            Self::Timeout(_) => UpstreamFailureKind::Timeout,
-            Self::Blocked(_) => UpstreamFailureKind::Blocked,
-            Self::Protocol(_) | Self::TooManyRedirects => UpstreamFailureKind::BadStatus,
-            Self::CircuitOpen => UpstreamFailureKind::CircuitOpen,
+            // Our own concurrency cap says nothing about the upstream, but the client sees
+            // the same thing: nothing answered. The proxy turns it into a 503 before this.
+            Self::Overloaded => UpstreamFailureKind::Unreachable,
+            other => UpstreamFailureKind::of(&other.to_core()),
+        }
+    }
+
+    /// The projection onto the core contract. Lossy on purpose: the core error is a label,
+    /// the detail (timeout phase, rejected host, text) stays in this type and in the log.
+    ///
+    /// `Overloaded` is the local concurrency cap, not an upstream fault; it has no core
+    /// counterpart and maps to `CircuitOpen`, the closest "we are not calling it now".
+    #[must_use]
+    pub fn to_core(&self) -> CoreUpstreamError {
+        match self {
+            Self::Connect(_) | Self::Body(_) => CoreUpstreamError::Connect,
+            Self::Timeout(_) => CoreUpstreamError::Timeout,
+            Self::Blocked(rejection) => CoreUpstreamError::Blocked(rejection.label()),
+            Self::Protocol(_) | Self::TooManyRedirects => CoreUpstreamError::Protocol,
+            Self::CircuitOpen | Self::Overloaded => CoreUpstreamError::CircuitOpen,
+        }
+    }
+
+    /// Label of the `kind` dimension of `upstream_errors_total`. The vocabulary is the one of
+    /// the observability catalogue (`timeout`, `connect`, `5xx`, `circuit_open`) plus the
+    /// failures that catalogue has no word for; the alerts select `circuit_open` by name.
+    #[must_use]
+    pub const fn metric_kind(&self) -> &'static str {
+        match self {
+            Self::Connect(_) => "connect",
+            Self::Timeout(_) => "timeout",
+            Self::Blocked(_) => "blocked",
+            Self::Protocol(_) | Self::TooManyRedirects => "protocol",
+            Self::Body(_) => "body",
+            Self::CircuitOpen => "circuit_open",
+            Self::Overloaded => "overloaded",
         }
     }
 
@@ -307,6 +347,61 @@ mod tests {
         assert!(!UpstreamError::Timeout(TimeoutPhase::Total).is_retryable());
         assert!(!UpstreamError::Blocked(UrlRejection::NoHost).is_retryable());
         assert!(!UpstreamError::CircuitOpen.is_retryable());
+    }
+
+    #[test]
+    fn the_projection_onto_the_core_error_keeps_the_http_class() {
+        use rustryx_core::error::UpstreamError as Core;
+        let cases = [
+            (UpstreamError::Connect("x".into()), Core::Connect),
+            (UpstreamError::Body("x".into()), Core::Connect),
+            (UpstreamError::Timeout(TimeoutPhase::Idle), Core::Timeout),
+            (UpstreamError::Protocol("x".into()), Core::Protocol),
+            (UpstreamError::TooManyRedirects, Core::Protocol),
+            (UpstreamError::CircuitOpen, Core::CircuitOpen),
+            (UpstreamError::Overloaded, Core::CircuitOpen),
+        ];
+        for (local, core) in cases {
+            assert_eq!(
+                std::mem::discriminant(&local.to_core()),
+                std::mem::discriminant(&core),
+                "{local}"
+            );
+        }
+        match UpstreamError::Blocked(UrlRejection::HostNotAllowed("evil.example".into())).to_core()
+        {
+            Core::Blocked(label) => {
+                assert_eq!(label, "host_not_allowed", "a label, never the host");
+            }
+            other => panic!("{other:?}"),
+        }
+        // A timeout stays a 504 through the projection, everything else a 502.
+        assert_eq!(
+            UpstreamError::Timeout(TimeoutPhase::Total)
+                .to_core()
+                .http_status(),
+            504
+        );
+        assert_eq!(
+            UpstreamError::Connect("x".into()).to_core().http_status(),
+            502
+        );
+    }
+
+    #[test]
+    fn metric_kinds_use_the_documented_vocabulary() {
+        for (error, kind) in [
+            (UpstreamError::Connect("x".into()), "connect"),
+            (UpstreamError::Timeout(TimeoutPhase::Headers), "timeout"),
+            (UpstreamError::Blocked(UrlRejection::NoHost), "blocked"),
+            (UpstreamError::Protocol("x".into()), "protocol"),
+            (UpstreamError::TooManyRedirects, "protocol"),
+            (UpstreamError::Body("x".into()), "body"),
+            (UpstreamError::CircuitOpen, "circuit_open"),
+            (UpstreamError::Overloaded, "overloaded"),
+        ] {
+            assert_eq!(error.metric_kind(), kind, "{error}");
+        }
     }
 
     #[test]

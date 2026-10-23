@@ -15,9 +15,19 @@ use std::time::Duration;
 
 use axum_core::body::Body;
 use http::{HeaderMap, HeaderValue, Response, StatusCode, header};
-use rustryx_core::error::{BlobError, DomainError, StoreError};
+use rustryx_core::error::{
+    BlobError, DomainError, MutationError, PolicyViolation, StoreError,
+    UpstreamError as CoreUpstreamError,
+};
+use rustryx_core::model::WritePolicy;
 
 use crate::path::PathError;
+
+/// Client text of a refused overwrite, shared by the pre check and the transaction guard.
+pub(crate) const EXISTING_PATH_MESSAGE: &str = "the path already exists and cannot be overwritten";
+
+/// How long a client is told to wait while the system is in read only mode.
+const READ_ONLY_RETRY_AFTER: Duration = Duration::from_secs(30);
 
 /// Why an upstream (proxy) call did not produce a usable answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -39,6 +49,26 @@ pub enum UpstreamFailureKind {
 }
 
 impl UpstreamFailureKind {
+    /// Classifies a core [`CoreUpstreamError`]. This is the one place that decides how an
+    /// upstream failure reaches the client: a timeout is a 504, everything else a 502, and an
+    /// upstream `401` or `403` becomes [`UpstreamFailureKind::Rejected`] (a 502): the client
+    /// cannot fix the credentials Rustryx holds for that upstream, and forwarding the status
+    /// would also make a client erase or retry credentials that are fine.
+    #[must_use]
+    pub const fn of(error: &CoreUpstreamError) -> Self {
+        match error {
+            CoreUpstreamError::Timeout => Self::Timeout,
+            CoreUpstreamError::Connect | CoreUpstreamError::Tls => Self::Unreachable,
+            CoreUpstreamError::Status(401 | 403) => Self::Rejected,
+            CoreUpstreamError::Blocked(_) => Self::Blocked,
+            CoreUpstreamError::CircuitOpen => Self::CircuitOpen,
+            // A status, size or protocol failure is the upstream answering something unusable.
+            // The enum is non exhaustive: a variant added to core later is also a bad answer,
+            // never a 4xx for the client.
+            _ => Self::BadStatus,
+        }
+    }
+
     /// Label used in metrics and in stable error codes.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -112,6 +142,10 @@ pub enum FormatError {
     /// Repository or blob store quota would be exceeded (507).
     #[error("quota exceeded")]
     QuotaExceeded,
+    /// A policy refused the write or the delete: immutability, a hold, the write policy,
+    /// create-only mode, read only mode. Nothing was changed.
+    #[error("policy violation: {0}")]
+    Policy(PolicyViolation),
     /// A client-declared digest did not match the uploaded bytes (400).
     #[error("digest mismatch")]
     DigestMismatch,
@@ -199,6 +233,7 @@ impl FormatError {
             Self::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::TooManyRequests { .. } => StatusCode::TOO_MANY_REQUESTS,
             Self::QuotaExceeded => StatusCode::INSUFFICIENT_STORAGE,
+            Self::Policy(violation) => policy_status(violation),
             Self::Upstream { kind, .. } => match kind {
                 UpstreamFailureKind::Timeout => StatusCode::GATEWAY_TIMEOUT,
                 _ => StatusCode::BAD_GATEWAY,
@@ -208,16 +243,22 @@ impl FormatError {
             Self::Store(e) => match e {
                 StoreError::NotFound(_) => StatusCode::NOT_FOUND,
                 StoreError::Conflict(_) => StatusCode::CONFLICT,
+                StoreError::Invalid(_) => StatusCode::BAD_REQUEST,
                 StoreError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
-                StoreError::Backend { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+                // `StoreError` is non exhaustive: a variant this build does not know is a
+                // fault on our side, never an allow and never a 404.
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
             },
             Self::Blob(e) => match e {
                 BlobError::NotFound => StatusCode::NOT_FOUND,
                 BlobError::RangeNotSatisfiable => StatusCode::RANGE_NOT_SATISFIABLE,
-                BlobError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
-                BlobError::WriterClosed | BlobError::Backend { .. } => {
-                    StatusCode::INTERNAL_SERVER_ERROR
+                BlobError::Unavailable(_) | BlobError::Overloaded { .. } => {
+                    StatusCode::SERVICE_UNAVAILABLE
                 }
+                BlobError::InsufficientStorage => StatusCode::INSUFFICIENT_STORAGE,
+                // `InvalidKey` is a caller bug (the key could escape the store root) and
+                // `Unsupported` a call the store cannot do: both are our fault, 500 class.
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
             },
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -241,6 +282,7 @@ impl FormatError {
             Self::Unprocessable(_) => "unprocessable",
             Self::TooManyRequests { .. } => "too_many_requests",
             Self::QuotaExceeded => "quota_exceeded",
+            Self::Policy(violation) => policy_code(violation),
             Self::Upstream { kind, .. } => match kind {
                 UpstreamFailureKind::Unreachable => "upstream_unreachable",
                 UpstreamFailureKind::Timeout => "upstream_timeout",
@@ -255,14 +297,16 @@ impl FormatError {
             Self::Store(e) => match e {
                 StoreError::NotFound(_) => "not_found",
                 StoreError::Conflict(_) => "conflict",
+                StoreError::Invalid(_) => "bad_request",
                 StoreError::Unavailable(_) => "unavailable",
-                StoreError::Backend { .. } => "internal",
+                _ => "internal",
             },
             Self::Blob(e) => match e {
                 BlobError::NotFound => "not_found",
                 BlobError::RangeNotSatisfiable => "range_not_satisfiable",
-                BlobError::Unavailable(_) => "unavailable",
-                BlobError::WriterClosed | BlobError::Backend { .. } => "internal",
+                BlobError::Unavailable(_) | BlobError::Overloaded { .. } => "unavailable",
+                BlobError::InsufficientStorage => "insufficient_storage",
+                _ => "internal",
             },
             Self::Internal(_) => "internal",
         }
@@ -289,6 +333,7 @@ impl FormatError {
             Self::RangeNotSatisfiable { .. } => "requested range not satisfiable".into(),
             Self::TooManyRequests { .. } => "too many requests, retry later".into(),
             Self::QuotaExceeded => "storage quota exceeded".into(),
+            Self::Policy(violation) => policy_message(violation).into(),
             Self::Upstream { kind, .. } => match kind {
                 UpstreamFailureKind::Timeout => "upstream repository timed out".into(),
                 UpstreamFailureKind::Integrity => {
@@ -301,14 +346,19 @@ impl FormatError {
             Self::Store(e) => match e {
                 StoreError::NotFound(_) => "not found".into(),
                 StoreError::Conflict(_) => "conflict".into(),
+                // The store text may name a token or a column; the client learns only the class.
+                StoreError::Invalid(_) => "invalid request".into(),
                 StoreError::Unavailable(_) => "service temporarily unavailable".into(),
-                StoreError::Backend { .. } => "internal error".into(),
+                _ => "internal error".into(),
             },
             Self::Blob(e) => match e {
                 BlobError::NotFound => "not found".into(),
                 BlobError::RangeNotSatisfiable => "requested range not satisfiable".into(),
-                BlobError::Unavailable(_) => "storage temporarily unavailable".into(),
-                BlobError::WriterClosed | BlobError::Backend { .. } => "internal error".into(),
+                BlobError::Unavailable(_) | BlobError::Overloaded { .. } => {
+                    "storage temporarily unavailable".into()
+                }
+                BlobError::InsufficientStorage => "insufficient storage".into(),
+                _ => "internal error".into(),
             },
             Self::Internal(_) => "internal error".into(),
         }
@@ -320,9 +370,15 @@ impl FormatError {
         match self {
             Self::TooManyRequests { retry_after } => Some(*retry_after),
             Self::Unavailable { retry_after, .. } => *retry_after,
+            // A store that says how long it needs is believed; one that does not gets the default.
+            Self::Blob(BlobError::Overloaded { retry_after }) => {
+                Some(retry_after.unwrap_or(Duration::from_secs(5)))
+            }
             Self::Store(StoreError::Unavailable(_)) | Self::Blob(BlobError::Unavailable(_)) => {
                 Some(Duration::from_secs(5))
             }
+            // Read only mode ends when an operator says so; a client should not hammer meanwhile.
+            Self::Policy(PolicyViolation::ReadOnly) => Some(READ_ONLY_RETRY_AFTER),
             _ => None,
         }
     }
@@ -381,6 +437,87 @@ impl FormatError {
     }
 }
 
+/// Status of a policy refusal that reached the client as [`FormatError::Policy`]: the status
+/// class of core (507 quota, 503 read only mode, 409 the rest), except that a repository which
+/// takes no writes at all (`deny`) is a 403 on native protocols (api-conventions section 19,
+/// row 16; the REST API reports the same refusal as 409).
+fn policy_status(violation: &PolicyViolation) -> StatusCode {
+    match violation {
+        PolicyViolation::WritePolicy(WritePolicy::Deny) => StatusCode::FORBIDDEN,
+        other => StatusCode::from_u16(other.http_status()).unwrap_or(StatusCode::CONFLICT),
+    }
+}
+
+/// Stable code of a policy refusal on the data plane. `PolicyViolation::label` is a metrics
+/// label and not this code: the wire names follow the API contract where it has one
+/// (`read_only_mode`), and the refusals that have an older variant keep that variant's code.
+fn policy_code(violation: &PolicyViolation) -> &'static str {
+    match violation {
+        PolicyViolation::Immutable { .. } => "immutable",
+        PolicyViolation::Held { .. } => "held",
+        PolicyViolation::QuotaExceeded(_) => "quota_exceeded",
+        PolicyViolation::WritePolicy(WritePolicy::Deny) => "forbidden",
+        PolicyViolation::ReadOnly => "read_only_mode",
+        PolicyViolation::ApprovalRequired => "approval_required",
+        // An existing path (`allow_once`, create-only) and a refusal added to core later are
+        // conflicts, the same code the pre check has always used: never a success.
+        _ => "conflict",
+    }
+}
+
+/// Client safe text of a policy refusal. Rule and hold ids stay out of it on purpose: they
+/// name configuration the caller may not be allowed to read.
+fn policy_message(violation: &PolicyViolation) -> &'static str {
+    match violation {
+        PolicyViolation::Immutable { .. } => "the item is immutable and cannot be changed",
+        PolicyViolation::Held { .. } => "the item is under a hold and cannot be changed",
+        PolicyViolation::QuotaExceeded(_) => "storage quota exceeded",
+        PolicyViolation::WritePolicy(WritePolicy::Deny) => "access denied",
+        PolicyViolation::WritePolicy(_) | PolicyViolation::AlreadyExists => EXISTING_PATH_MESSAGE,
+        PolicyViolation::ReadOnly => "the system is in read-only mode",
+        PolicyViolation::ApprovalRequired => "the repository requires an approved promotion",
+        _ => "the request conflicts with a policy",
+    }
+}
+
+impl From<PolicyViolation> for FormatError {
+    /// A refusal looks the same to the client whichever layer caught it: the pre check of the
+    /// pipeline, a policy hook, or the transaction that switches the asset. That is why the
+    /// refusals the pipeline already produces on its own (quota, `deny`, `allow_once`, an
+    /// existing path) map onto their old variants and only the new ones use
+    /// [`FormatError::Policy`].
+    fn from(violation: PolicyViolation) -> Self {
+        match violation {
+            PolicyViolation::QuotaExceeded(_) => Self::QuotaExceeded,
+            PolicyViolation::WritePolicy(WritePolicy::Deny) => Self::Forbidden,
+            PolicyViolation::WritePolicy(_) | PolicyViolation::AlreadyExists => {
+                Self::conflict(EXISTING_PATH_MESSAGE)
+            }
+            other => Self::Policy(other),
+        }
+    }
+}
+
+impl From<MutationError> for FormatError {
+    fn from(error: MutationError) -> Self {
+        match error {
+            MutationError::Violation(violation) => violation.into(),
+            MutationError::Store(store) => Self::Store(store),
+            // Non exhaustive: an unknown failure is ours, never an allow.
+            other => Self::Internal(other.to_string()),
+        }
+    }
+}
+
+impl From<CoreUpstreamError> for FormatError {
+    fn from(error: CoreUpstreamError) -> Self {
+        Self::Upstream {
+            kind: UpstreamFailureKind::of(&error),
+            detail: error.to_string(),
+        }
+    }
+}
+
 impl From<PathError> for FormatError {
     fn from(_: PathError) -> Self {
         // The reason is intentionally not echoed: it would confirm to an attacker
@@ -405,7 +542,11 @@ impl From<DomainError> for FormatError {
             DomainError::Store(e) => Self::Store(e),
             DomainError::Blob(e) => Self::Blob(e),
             DomainError::Auth(e) => Self::Internal(format!("authentication backend: {e}")),
+            DomainError::Upstream(e) => e.into(),
+            DomainError::Violation(violation) => violation.into(),
             DomainError::Internal(m) => Self::Internal(m),
+            // Non exhaustive: a variant this build does not know is a fault on our side.
+            other => Self::Internal(other.to_string()),
         }
     }
 }
@@ -451,6 +592,19 @@ mod tests {
             FormatError::Blob(BlobError::RangeNotSatisfiable),
             FormatError::Blob(BlobError::Unavailable("s3 at 10.2.2.2".into())),
             FormatError::Blob(BlobError::WriterClosed),
+            FormatError::Store(StoreError::Invalid("page token abc".into())),
+            FormatError::Blob(BlobError::InvalidKey("parent segment")),
+            FormatError::Blob(BlobError::InsufficientStorage),
+            FormatError::Blob(BlobError::Overloaded { retry_after: None }),
+            FormatError::Blob(BlobError::Unsupported("list_keys")),
+            FormatError::Policy(PolicyViolation::Immutable {
+                rule: rustryx_core::ids::ImmutabilityRuleId::generate(),
+            }),
+            FormatError::Policy(PolicyViolation::Held {
+                hold: rustryx_core::ids::LifecycleHoldId::generate(),
+            }),
+            FormatError::Policy(PolicyViolation::ReadOnly),
+            FormatError::Policy(PolicyViolation::ApprovalRequired),
             FormatError::internal("/var/lib/secret/path"),
         ]
     }
@@ -615,6 +769,234 @@ mod tests {
         assert!(matches!(
             FormatError::from(DomainError::Auth(rustryx_core::AuthError::Overloaded)),
             FormatError::Internal(_)
+        ));
+    }
+
+    #[test]
+    fn new_store_and_blob_variants_map_to_their_status_and_code() {
+        let invalid = FormatError::Store(StoreError::Invalid("page token 4f2a.zzz".into()));
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(invalid.code(), "bad_request");
+        assert_eq!(invalid.public_message(), "invalid request");
+
+        let key = FormatError::Blob(BlobError::InvalidKey("../etc"));
+        assert_eq!(key.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(key.code(), "internal", "a caller bug is never a 404");
+        assert_eq!(key.public_message(), "internal error");
+
+        let full = FormatError::Blob(BlobError::InsufficientStorage);
+        assert_eq!(full.status(), StatusCode::INSUFFICIENT_STORAGE);
+        assert_eq!(full.code(), "insufficient_storage");
+
+        let busy = FormatError::Blob(BlobError::Overloaded {
+            retry_after: Some(Duration::from_secs(7)),
+        });
+        assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(busy.code(), "unavailable");
+        assert_eq!(busy.retry_after(), Some(Duration::from_secs(7)));
+        assert_eq!(
+            busy.headers()
+                .get(header::RETRY_AFTER)
+                .map(HeaderValue::as_bytes),
+            Some(b"7".as_slice())
+        );
+        let unhinted = FormatError::Blob(BlobError::Overloaded { retry_after: None });
+        assert_eq!(unhinted.retry_after(), Some(Duration::from_secs(5)));
+
+        let unsupported = FormatError::Blob(BlobError::Unsupported("presign"));
+        assert_eq!(unsupported.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(unsupported.code(), "internal");
+    }
+
+    #[test]
+    fn must_not_leak_new_variant_internals_in_public_messages() {
+        for error in [
+            FormatError::Store(StoreError::Invalid("token for user hunter2".into())),
+            FormatError::Blob(BlobError::InvalidKey("/etc/shadow")),
+            FormatError::Blob(BlobError::Unsupported("list_keys on /mnt/disk")),
+        ] {
+            let message = error.public_message();
+            for needle in ["hunter2", "/etc", "/mnt", "token", "list_keys"] {
+                assert!(!message.contains(needle), "{message} leaks {needle}");
+            }
+        }
+    }
+
+    #[test]
+    fn policy_refusals_have_a_status_a_code_and_a_message_without_ids() {
+        let rule = rustryx_core::ids::ImmutabilityRuleId::generate();
+        let hold = rustryx_core::ids::LifecycleHoldId::generate();
+        let cases = [
+            (PolicyViolation::Immutable { rule }, 409, "immutable"),
+            (PolicyViolation::Held { hold }, 409, "held"),
+            (PolicyViolation::ReadOnly, 503, "read_only_mode"),
+            (PolicyViolation::ApprovalRequired, 409, "approval_required"),
+        ];
+        for (violation, status, code) in cases {
+            let error = FormatError::Policy(violation);
+            assert_eq!(error.status().as_u16(), status);
+            assert_eq!(error.code(), code);
+            let message = error.public_message();
+            assert!(!message.contains(&rule.to_string()) && !message.contains(&hold.to_string()));
+            assert_ne!(message, "");
+        }
+        let read_only = FormatError::Policy(PolicyViolation::ReadOnly);
+        assert_eq!(
+            read_only
+                .headers()
+                .get(header::RETRY_AFTER)
+                .map(HeaderValue::as_bytes),
+            Some(b"30".as_slice()),
+            "read only mode ends when an operator says so: do not invite a retry storm"
+        );
+        // A violation that arrives as `Policy` directly keeps the class of core.
+        assert_eq!(
+            FormatError::Policy(PolicyViolation::WritePolicy(WritePolicy::Deny)).status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            FormatError::Policy(PolicyViolation::WritePolicy(WritePolicy::AllowOnce)).status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            FormatError::Policy(PolicyViolation::AlreadyExists).code(),
+            "conflict"
+        );
+        assert_eq!(
+            FormatError::Policy(PolicyViolation::WritePolicy(WritePolicy::Deny)).code(),
+            "forbidden"
+        );
+    }
+
+    #[test]
+    fn a_refusal_looks_the_same_whichever_layer_caught_it() {
+        use rustryx_core::quota::{QuotaExceeded, QuotaScope};
+        let quota = PolicyViolation::QuotaExceeded(QuotaExceeded {
+            scope: QuotaScope::Repository(rustryx_core::ids::RepositoryId::generate()),
+            limit_bytes: 1,
+            used_bytes: 1,
+            requested_bytes: 1,
+        });
+        assert!(matches!(
+            FormatError::from(quota),
+            FormatError::QuotaExceeded
+        ));
+        assert!(matches!(
+            FormatError::from(PolicyViolation::WritePolicy(WritePolicy::Deny)),
+            FormatError::Forbidden
+        ));
+        for existing in [
+            PolicyViolation::WritePolicy(WritePolicy::AllowOnce),
+            PolicyViolation::AlreadyExists,
+        ] {
+            match FormatError::from(existing) {
+                FormatError::Conflict(message) => assert_eq!(message, EXISTING_PATH_MESSAGE),
+                other => panic!("{other:?}"),
+            }
+        }
+        assert!(matches!(
+            FormatError::from(PolicyViolation::ReadOnly),
+            FormatError::Policy(PolicyViolation::ReadOnly)
+        ));
+    }
+
+    #[test]
+    fn mutation_errors_convert_without_losing_the_class() {
+        assert!(matches!(
+            FormatError::from(MutationError::Violation(PolicyViolation::ReadOnly)),
+            FormatError::Policy(PolicyViolation::ReadOnly)
+        ));
+        assert!(matches!(
+            FormatError::from(MutationError::Store(StoreError::Unavailable("db".into()))),
+            FormatError::Store(StoreError::Unavailable(_))
+        ));
+    }
+
+    #[test]
+    fn core_upstream_errors_keep_the_http_mapping_and_never_forward_401_or_403() {
+        use rustryx_core::error::UpstreamError as Core;
+        let all = [
+            Core::Timeout,
+            Core::Connect,
+            Core::Tls,
+            Core::Status(401),
+            Core::Status(403),
+            Core::Status(404),
+            Core::Status(500),
+            Core::TooLarge,
+            Core::Blocked("loopback"),
+            Core::Protocol,
+            Core::CircuitOpen,
+        ];
+        for error in all {
+            let expected = error.http_status();
+            let converted = FormatError::from(error);
+            assert_eq!(
+                converted.status().as_u16(),
+                expected,
+                "{converted:?}: the same 502 and 504 as core says"
+            );
+            assert!(matches!(converted, FormatError::Upstream { .. }));
+        }
+    }
+
+    #[test]
+    fn must_not_forward_a_core_upstream_401_or_403() {
+        use rustryx_core::error::UpstreamError as Core;
+        for status in [401, 403] {
+            let error = FormatError::from(Core::Status(status));
+            assert_ne!(error.status(), StatusCode::UNAUTHORIZED);
+            assert_ne!(error.status(), StatusCode::FORBIDDEN);
+            assert_eq!(error.status(), StatusCode::BAD_GATEWAY);
+            assert_eq!(error.code(), "upstream_rejected");
+            assert_eq!(
+                error.public_message(),
+                "upstream repository is unavailable",
+                "the status the upstream sent is for the log"
+            );
+        }
+        assert_eq!(
+            UpstreamFailureKind::of(&Core::Status(404)),
+            UpstreamFailureKind::BadStatus,
+            "a 404 is a miss to the caller that checked for it first; as an error it is a bad answer"
+        );
+    }
+
+    #[test]
+    fn core_upstream_errors_classify_into_the_failure_kinds() {
+        use rustryx_core::error::UpstreamError as Core;
+        for (error, kind) in [
+            (Core::Timeout, UpstreamFailureKind::Timeout),
+            (Core::Connect, UpstreamFailureKind::Unreachable),
+            (Core::Tls, UpstreamFailureKind::Unreachable),
+            (Core::Blocked("x"), UpstreamFailureKind::Blocked),
+            (Core::CircuitOpen, UpstreamFailureKind::CircuitOpen),
+            (Core::TooLarge, UpstreamFailureKind::BadStatus),
+            (Core::Protocol, UpstreamFailureKind::BadStatus),
+            (Core::Status(502), UpstreamFailureKind::BadStatus),
+        ] {
+            assert_eq!(UpstreamFailureKind::of(&error), kind, "{error}");
+        }
+    }
+
+    #[test]
+    fn domain_errors_with_upstream_and_violation_convert() {
+        use rustryx_core::error::UpstreamError as Core;
+        assert_eq!(
+            FormatError::from(DomainError::Upstream(Core::Timeout)).status(),
+            StatusCode::GATEWAY_TIMEOUT
+        );
+        assert_eq!(
+            FormatError::from(DomainError::Upstream(Core::Status(403))).status(),
+            StatusCode::BAD_GATEWAY
+        );
+        assert!(matches!(
+            FormatError::from(DomainError::Violation(PolicyViolation::ReadOnly)),
+            FormatError::Policy(PolicyViolation::ReadOnly)
+        ));
+        assert!(matches!(
+            FormatError::from(DomainError::Violation(PolicyViolation::AlreadyExists)),
+            FormatError::Conflict(_)
         ));
     }
 

@@ -22,6 +22,10 @@ pub struct ClientInfo {
     pub user_agent: Option<String>,
     /// Request id for log and audit correlation.
     pub request_id: Option<String>,
+    /// Who caused this read, for download counters. `None` lets the engine decide from the
+    /// principal (a scan token is a scanner, everything else a client). Replication workers and
+    /// the node's own reads set it, so that they never count as downloads.
+    pub download_source: Option<rustryx_core::model::DownloadSource>,
 }
 
 /// Everything known about a request before its body is read.
@@ -269,6 +273,7 @@ mod tests {
                 ip: Some("10.0.0.1".parse().unwrap()),
                 user_agent: Some("ua".into()),
                 request_id: Some("r1".into()),
+                download_source: None,
             });
         assert_eq!(head.content_length(), Some(42));
         assert_eq!(head.query_param("y").as_deref(), Some("a b"));
@@ -334,10 +339,7 @@ mod tests {
         assert!(req.coordinate.is_none());
         assert_eq!(req.method(), Method::GET);
         let req = req
-            .with_coordinate(Coordinate {
-                name: Some("x".into()),
-                ..Coordinate::default()
-            })
+            .with_coordinate(Coordinate::new(None, Some("x".into()), None))
             .index();
         assert_eq!(req.kind, ContentKind::Index);
         assert_eq!(req.coordinate.unwrap().name.as_deref(), Some("x"));

@@ -7,13 +7,13 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use rustryx_core::audit::{AuditEvent, AuditKind};
-use rustryx_core::error::BlobError;
+use rustryx_core::error::{BlobError, PolicyViolation};
 use rustryx_core::identity::Principal;
-use rustryx_core::ids::RepositoryId;
-use rustryx_core::model::{Asset, BlobRecord, Repository};
+use rustryx_core::ids::{AssetId, BlobStoreId, RepositoryId};
+use rustryx_core::model::{Asset, BlobRecord, DownloadSource, Repository};
 use rustryx_core::ports::{
-    AssetRepo, AuditSink, BlobRepo, BlobStore, BlobStoreRepo, Clock, ComponentRepo, IdGen,
-    RbacChecker, RepositoryRepo, UuidV7IdGen,
+    AssetRepo, AuditSink, BlobCommit, BlobRepo, BlobStore, BlobStoreRepo, Clock, ComponentRepo,
+    IdGen, RbacChecker, RepositoryRepo, UuidV7IdGen,
 };
 use time::OffsetDateTime;
 use tokio::sync::Semaphore;
@@ -23,26 +23,56 @@ use tokio_util::task::TaskTracker;
 use crate::error::FormatError;
 use crate::group::GroupPipeline;
 use crate::hosted::{HostedPipeline, UploadReservations};
+use crate::policy::{ContentPolicy, NoopContentPolicy};
 use crate::proxy::executor::UpstreamExecutor;
 use crate::proxy::flight::Flights;
 use crate::proxy::negative::NegativeCache;
+use crate::proxy::validators::ValidatorCache;
 use crate::proxy::{FillOutcome, ProxyPipeline};
 use crate::registry::FormatRegistry;
 use crate::request::ArtifactRequest;
 
-/// Maps a repository to the blob store that holds its content.
+/// Maps a blob store id to the open store, and a repository or a blob row to the store that
+/// holds its bytes.
 ///
-/// Implemented by the blob crate (it owns the open stores); this crate only
-/// consumes it. The lookup is synchronous: the registry hands out stores that
-/// were opened at start-up or on configuration change.
+/// Implemented by the blob crate (it owns the open stores); this crate only consumes it. The
+/// lookups are async because a registry may open a store on first use. They are cheap when
+/// the store is already open, and they must not hold a lock across the open.
+///
+/// Only [`BlobStoreRegistry::store_by_id`] is required. The two other methods exist because
+/// the right store depends on the question:
+///
+/// * a NEW write goes to the store of the repository ([`BlobStoreRegistry::store_for`]); for
+///   a repository on a group store that is the group adapter, which picks a member and says
+///   which one in `BlobCommit::placement`;
+/// * an EXISTING blob is read, ranged and deleted through the store its row names
+///   ([`BlobStoreRegistry::store_for_blob`]), never through the group, so no read ever
+///   probes members.
+#[async_trait]
 pub trait BlobStoreRegistry: Send + Sync {
-    /// The store for `repository` (its `blob_store_id`).
+    /// The store with this id: a plain store or a member. Required.
     ///
     /// # Errors
-    /// [`BlobError::Unavailable`] when the store is unknown or failed to open.
-    /// Returning an error instead of panicking is required: a repository can
-    /// reference a store that was deleted or never came up.
-    fn store_for(&self, repository: &Repository) -> Result<Arc<dyn BlobStore>, BlobError>;
+    /// [`BlobError::Unavailable`] when the store is unknown or failed to open. Returning an
+    /// error instead of panicking is required: a repository can reference a store that was
+    /// deleted or never came up.
+    async fn store_by_id(&self, id: BlobStoreId) -> Result<Arc<dyn BlobStore>, BlobError>;
+
+    /// The store that takes a NEW write for `repository` (its `blob_store_id`). Provided.
+    ///
+    /// # Errors
+    /// As [`BlobStoreRegistry::store_by_id`].
+    async fn store_for(&self, repository: &Repository) -> Result<Arc<dyn BlobStore>, BlobError> {
+        self.store_by_id(repository.blob_store_id).await
+    }
+
+    /// The store that holds an EXISTING blob: the one named in its row. Provided.
+    ///
+    /// # Errors
+    /// As [`BlobStoreRegistry::store_by_id`].
+    async fn store_for_blob(&self, blob: &BlobRecord) -> Result<Arc<dyn BlobStore>, BlobError> {
+        self.store_by_id(blob.blob_store_id).await
+    }
 }
 
 /// Decision of the routing-rule gate.
@@ -56,8 +86,9 @@ pub enum RoutingDecision {
 
 /// Evaluates routing rules (allow or block lists of paths per repository).
 ///
-/// The core has no routing-rule port yet, so this is the seam: whoever owns the
-/// rule store implements it. The default [`AllowAllRouting`] allows everything.
+/// The engine calls it for proxy and group repositories (and the group pipeline for every
+/// member). The real implementation is [`crate::RuleRoutingGate`], which reads the rule
+/// through `RoutingRuleRepo`; the default [`AllowAllRouting`] allows everything.
 #[async_trait]
 pub trait RoutingGate: Send + Sync {
     /// Decides for a repository and a classified request. Cancel safe.
@@ -116,6 +147,21 @@ pub enum ContentEvent {
         /// True when the path existed before.
         replaced: bool,
     },
+    /// A client pulled an asset. Emitted only for [`DownloadSource::Client`] (scanner,
+    /// replication and internal reads never count, so scanning cannot keep an old artifact
+    /// alive), only for a `GET` that opened the body (not `HEAD`, not a `304`), and not for
+    /// the first client of a cache miss, whose copy did not exist yet. Consumers fold these
+    /// into batches, see [`crate::DownloadBatcher`].
+    AssetDownloaded {
+        /// Repository.
+        repository: RepositoryId,
+        /// The asset that was read.
+        asset: AssetId,
+        /// Who caused the read; always a source that counts as a download.
+        source: DownloadSource,
+        /// When the response was produced.
+        at: OffsetDateTime,
+    },
 }
 
 /// Receiver of [`ContentEvent`]s. Must not block: hand the event to a channel.
@@ -160,13 +206,16 @@ pub struct Ports {
     pub routing: Arc<dyn RoutingGate>,
     /// Content lifecycle events.
     pub events: Arc<dyn ContentEvents>,
+    /// Pre checks of hosted writes and deletes (immutability, holds, quota headroom). The
+    /// port guards enforce the same policies in the transaction; this only refuses earlier.
+    pub policy: Arc<dyn ContentPolicy>,
 }
 
 impl Ports {
     /// Builds the ports from one object that implements all the metadata repositories
     /// (the PostgreSQL store in production, the in-memory store in tests). Ids are
-    /// `UUIDv7`, routing allows everything and events are dropped; replace the public
-    /// fields to change that.
+    /// `UUIDv7`, routing allows everything, events are dropped and no policy hook runs;
+    /// replace the public fields to change that.
     #[must_use]
     pub fn from_store<S>(
         store: Arc<S>,
@@ -191,6 +240,7 @@ impl Ports {
             blob_stores,
             routing: Arc::new(AllowAllRouting),
             events: Arc::new(NoopEvents),
+            policy: Arc::new(NoopContentPolicy),
         }
     }
 }
@@ -227,6 +277,13 @@ pub struct Limits {
     pub blocking_permits: usize,
     /// How long to wait for a blocking permit before answering 503.
     pub blocking_permit_wait: Duration,
+    /// Size at which the body of a chunked upload request is cut into staged chunks. It
+    /// bounds the memory one `PATCH` holds; each chunk is one object in the store, so a
+    /// smaller value means more objects to join at the end.
+    pub chunk_segment_bytes: usize,
+    /// Entries of the upstream validator cache (`ETag` and `Last-Modified` of cached copies, kept
+    /// per node to revalidate expired entries with a conditional request).
+    pub validator_cache_capacity: u64,
 }
 
 impl Default for Limits {
@@ -245,6 +302,8 @@ impl Default for Limits {
             negative_cache_capacity: 100_000,
             blocking_permits: 8,
             blocking_permit_wait: Duration::from_secs(5),
+            chunk_segment_bytes: 8 * 1024 * 1024,
+            validator_cache_capacity: 100_000,
         }
     }
 }
@@ -257,6 +316,7 @@ pub(crate) struct Shared {
     pub(crate) upstream: UpstreamExecutor,
     pub(crate) flights: Flights<FillOutcome>,
     pub(crate) negative: NegativeCache,
+    pub(crate) validators: ValidatorCache,
     pub(crate) reservations: UploadReservations,
     pub(crate) blocking: Arc<Semaphore>,
     pub(crate) tasks: TaskTracker,
@@ -270,6 +330,8 @@ pub struct RequestMeta {
     pub request_id: Option<String>,
     /// Peer address.
     pub client_ip: Option<IpAddr>,
+    /// Who caused the read, for download counters. `None` means a client.
+    pub download_source: Option<DownloadSource>,
 }
 
 /// Everything a handler needs for one request.
@@ -370,12 +432,55 @@ impl FormatContext {
         self.shared.ports.clock.now()
     }
 
-    /// The blob store of this repository.
+    /// The blob store that takes NEW writes of this repository (for a repository on a group
+    /// store: the group adapter).
     ///
     /// # Errors
     /// [`FormatError::Blob`] when the registry cannot provide the store.
-    pub fn store(&self) -> Result<Arc<dyn BlobStore>, FormatError> {
-        Ok(self.shared.ports.blob_stores.store_for(&self.repository)?)
+    pub async fn store(&self) -> Result<Arc<dyn BlobStore>, FormatError> {
+        Ok(self
+            .shared
+            .ports
+            .blob_stores
+            .store_for(&self.repository)
+            .await?)
+    }
+
+    /// The store that holds an EXISTING blob: the one its row names. Reads, ranges and
+    /// deletes of existing content go through it, never through the repository store.
+    ///
+    /// # Errors
+    /// [`FormatError::Blob`] when the registry cannot provide the store.
+    pub async fn store_for_blob(
+        &self,
+        blob: &BlobRecord,
+    ) -> Result<Arc<dyn BlobStore>, FormatError> {
+        Ok(self.shared.ports.blob_stores.store_for_blob(blob).await?)
+    }
+
+    /// The store that took the bytes of `commit`: the member it names in `placement`, or the
+    /// repository store for a plain store. Needed to delete an unpublished object, which a
+    /// group adapter refuses to do itself.
+    pub(crate) async fn store_of_commit(
+        &self,
+        commit: &BlobCommit,
+    ) -> Result<Arc<dyn BlobStore>, FormatError> {
+        match commit.placement {
+            Some(member) => Ok(self.shared.ports.blob_stores.store_by_id(member).await?),
+            None => self.store().await,
+        }
+    }
+
+    /// The store id a blob row must name for `commit`: the member that took the bytes, or the
+    /// repository store when the store reports no placement.
+    pub(crate) fn blob_store_id_of(&self, commit: &BlobCommit) -> BlobStoreId {
+        commit.placement.unwrap_or(self.repository.blob_store_id)
+    }
+
+    /// Who caused this request, for download counters.
+    #[must_use]
+    pub fn download_source(&self) -> DownloadSource {
+        self.meta.download_source.unwrap_or(DownloadSource::Client)
     }
 
     /// Token cancelled at shutdown. Long-lived work must select on it.
@@ -432,18 +537,43 @@ impl FormatContext {
         outcome: &str,
         detail: serde_json::Value,
     ) {
-        let event = AuditEvent {
-            at: self.now(),
-            kind: AuditKind::ContentChange,
-            actor_id: self.principal.user_id,
-            actor_name: self.principal.username.clone(),
-            client_ip: self.meta.client_ip.map(|ip| ip.to_string()),
-            request_id: self.meta.request_id.clone(),
-            action: action.to_owned(),
-            target: Some(target),
-            outcome: outcome.to_owned(),
-            detail,
-        };
+        self.audit_as(AuditKind::ContentChange, action, target, outcome, detail)
+            .await;
+    }
+
+    /// Records that a policy refused a write or a delete (`asset.rejected`, kind
+    /// `SecurityDecision`): an immutable item, a hold, a quota or read only mode said no. The
+    /// reason is the bounded label of the violation, never a rule id or a size.
+    pub(crate) async fn audit_rejection(&self, target: String, violation: &PolicyViolation) {
+        self.audit_as(
+            AuditKind::SecurityDecision,
+            "asset.rejected",
+            target,
+            "failure",
+            serde_json::json!({ "reason": violation.label() }),
+        )
+        .await;
+    }
+
+    async fn audit_as(
+        &self,
+        kind: AuditKind,
+        action: &str,
+        target: String,
+        outcome: &str,
+        detail: serde_json::Value,
+    ) {
+        let mut event = AuditEvent::new(kind, self.principal.username.clone(), action, outcome);
+        // `new` stamps the wall clock; the injected clock is the one the rest of the request used.
+        event.at = self.now();
+        event.actor_id = self.principal.user_id;
+        event.actor_kind = self.principal.actor_kind();
+        event.client_ip = self.meta.client_ip.map(|ip| ip.to_string());
+        event.request_id.clone_from(&self.meta.request_id);
+        event.target = Some(target);
+        event.detail = detail;
+        // The project log view (OPS-12) reads this column.
+        event.project_id = self.repository.project.as_ref().map(|project| project.id);
         if let Err(error) = self.shared.ports.audit.record(event).await {
             tracing::error!(%error, action, "audit record for a content change failed");
         }
@@ -461,6 +591,8 @@ mod tests {
         assert_eq!(limits.group_merge_cap_bytes, 64 * 1024 * 1024);
         assert_eq!(limits.body_idle_timeout, Duration::from_secs(60));
         assert!(limits.max_group_depth >= 2);
+        assert_eq!(limits.chunk_segment_bytes, 8 * 1024 * 1024);
+        assert_eq!(limits.validator_cache_capacity, 100_000);
     }
 
     #[test]

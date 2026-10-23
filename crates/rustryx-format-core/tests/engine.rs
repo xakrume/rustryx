@@ -379,7 +379,7 @@ async fn the_context_exposes_what_handlers_need() {
     assert_eq!(cx.request_id(), Some("req-7"));
     assert_eq!(cx.limits().max_group_depth, 4);
     assert_eq!(cx.now(), cx.clock().now());
-    assert!(cx.store().is_ok());
+    assert!(cx.store().await.is_ok());
     assert!(!cx.shutdown_token().is_cancelled());
     assert_eq!(cx.tasks().len(), 0);
     assert!(

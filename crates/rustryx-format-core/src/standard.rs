@@ -113,25 +113,15 @@ mod tests {
 
     fn repo() -> Repository {
         use rustryx_core::ids::{BlobStoreId, RepositoryId};
-        use rustryx_core::model::{RepoFormat, WritePolicy};
-        Repository {
-            id: RepositoryId::generate(),
-            name: rustryx_core::names::RepoName::parse("r").unwrap(),
-            format: RepoFormat::Raw,
-            repo_type: RepoType::Hosted,
-            blob_store_id: BlobStoreId::generate(),
-            write_policy: WritePolicy::Allow,
-            allow_anonymous: false,
-            online: true,
-            quota_bytes: None,
-            cleanup_policy_ids: Vec::new(),
-            routing_rule_id: None,
-            proxy: None,
-            group: None,
-            format_config: serde_json::Value::Null,
-            created_at: time::OffsetDateTime::UNIX_EPOCH,
-            updated_at: time::OffsetDateTime::UNIX_EPOCH,
-        }
+        use rustryx_core::model::RepoFormat;
+        Repository::new(
+            RepositoryId::generate(),
+            rustryx_core::names::RepoName::parse("r").unwrap(),
+            RepoFormat::Raw,
+            RepoType::Hosted,
+            BlobStoreId::generate(),
+            time::OffsetDateTime::UNIX_EPOCH,
+        )
     }
 
     #[test]

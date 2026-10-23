@@ -220,12 +220,10 @@ impl<'a> GroupPipeline<'a> {
                 return Err(());
             }
         }
-        let resource = ResourceRef {
-            repository: member.name.to_string(),
-            format: member.format,
-            path: req.path.as_str().to_owned(),
-            coordinate: req.coordinate.clone(),
-        };
+        let mut resource = ResourceRef::for_repository(member, req.path.as_str());
+        if let Some(coordinate) = &req.coordinate {
+            resource = resource.with_coordinate(coordinate.clone());
+        }
         let action = if req.action == Action::Browse {
             Action::Browse
         } else {

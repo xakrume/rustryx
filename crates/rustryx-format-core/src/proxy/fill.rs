@@ -22,8 +22,13 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures::StreamExt;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
-use rustryx_core::ids::BlobId;
-use rustryx_core::model::{Asset, BlobRecord, NewAsset, NewComponent};
+use rustryx_core::error::{
+    MutationError, PolicyViolation, StoreError, UpstreamError as CoreUpstreamError,
+};
+use rustryx_core::ids::{AssetId, BlobId};
+use rustryx_core::model::{
+    BlobRecord, NewAsset, NewComponent, PublishMode, PublishOutcome, WriteOptions,
+};
 use rustryx_core::ports::BlobKey;
 use tokio::sync::{mpsc, oneshot};
 use url::Url;
@@ -31,7 +36,8 @@ use url::Url;
 use super::executor::{CallClass, UpstreamCall};
 use super::flight::LeaderGuard;
 use super::upstream::UpstreamError;
-use crate::blobio::{BlobSink, SinkError, delete_orphan};
+use super::validators::Validators;
+use crate::blobio::{BlobSink, SinkError, discard_committed};
 use crate::checksum::{ChecksumSource, ExpectedChecksum};
 use crate::context::{ContentEvent, FormatContext, OrphanCause};
 use crate::error::{FormatError, UpstreamFailureKind};
@@ -64,6 +70,10 @@ pub enum FillFailure {
     },
     /// The repository or blob store quota has no room.
     Quota,
+    /// A policy refused to store the copy (read only mode, immutability of a copy that would
+    /// have to change). The client gets the data when a tee or a stale copy can serve it; the
+    /// cache is simply not updated.
+    Policy(PolicyViolation),
     /// The blob store or the metadata store failed.
     Storage(String),
     /// The node is shutting down.
@@ -87,6 +97,7 @@ impl FillFailure {
                 format!("upstream content exceeds {limit} bytes"),
             ),
             Self::Quota => FormatError::QuotaExceeded,
+            Self::Policy(violation) => FormatError::from(violation),
             Self::Storage(detail) => FormatError::Internal(detail),
             Self::Shutdown | Self::NotCached => FormatError::Unavailable {
                 reason: "the content could not be cached, retry",
@@ -101,19 +112,37 @@ impl FillFailure {
 pub enum FillOutcome {
     /// The content is cached and can be read from the store.
     Cached,
+    /// The expired copy was confirmed current (the upstream answered `304`, or the new body
+    /// had the digest of the copy and was dropped) and its age was reset: nothing new was
+    /// stored, the copy is served as a fresh hit.
+    Revalidated,
     /// The upstream answered 404 (or 410, or a 403 treated as a miss).
     NotFound,
     /// No cached copy was produced.
     Failed(FillFailure),
 }
 
-/// Whether the fill creates a new cache entry or refreshes an expired one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FillIntent {
-    /// No asset existed. The fill must not replace one that appears meanwhile.
-    Fill,
-    /// An expired asset exists and is meant to be replaced.
-    Refresh,
+/// The expired copy a fill is meant to refresh. Its absence is what makes a fill create-only:
+/// without a copy the fill must never replace one that appears meanwhile, on any node.
+#[derive(Debug, Clone)]
+pub(crate) struct ExistingCopy {
+    pub(crate) asset_id: AssetId,
+    pub(crate) blob_id: BlobId,
+    pub(crate) size_bytes: u64,
+    /// Digest of the cached bytes, to recognise an unchanged body that the upstream did not
+    /// answer with a `304`.
+    pub(crate) sha256: String,
+}
+
+impl ExistingCopy {
+    pub(crate) fn of(asset: &rustryx_core::model::Asset) -> Self {
+        Self {
+            asset_id: asset.id,
+            blob_id: asset.blob_id,
+            size_bytes: asset.size_bytes,
+            sha256: asset.checksums.sha256.clone(),
+        }
+    }
 }
 
 /// Everything the fill needs, decided before the task is spawned.
@@ -129,8 +158,7 @@ pub(crate) struct FillPlan {
     pub(crate) checksum_source: Option<Arc<dyn ChecksumSource>>,
     pub(crate) component: Option<ComponentSpec>,
     pub(crate) forbidden_is_miss: bool,
-    pub(crate) intent: FillIntent,
-    pub(crate) existing_size: u64,
+    pub(crate) existing: Option<ExistingCopy>,
     pub(crate) negative_ttl: Duration,
 }
 
@@ -166,7 +194,7 @@ impl FillJob {
         } = self;
         let outcome = fill(&cx, &plan, tee).await;
         match &outcome {
-            FillOutcome::Cached => {
+            FillOutcome::Cached | FillOutcome::Revalidated => {
                 cx.shared
                     .negative
                     .remove(cx.repository().id, &plan.cache_path)
@@ -221,12 +249,11 @@ fn classify_status(status: StatusCode, forbidden_is_miss: bool) -> StatusClass {
         200 => StatusClass::Success,
         404 | 410 => StatusClass::Missing,
         403 if forbidden_is_miss => StatusClass::Missing,
-        401 | 403 => StatusClass::Failure(FillFailure::Upstream {
-            kind: UpstreamFailureKind::Rejected,
-            detail: format!("upstream answered {status}"),
-        }),
-        _ => StatusClass::Failure(FillFailure::Upstream {
-            kind: UpstreamFailureKind::BadStatus,
+        // Every other status is a failure, classified by the one mapping that decides how an
+        // upstream failure reaches a client: 401 and 403 become `Rejected` (a 502, never
+        // forwarded), anything else a bad answer.
+        code => StatusClass::Failure(FillFailure::Upstream {
+            kind: UpstreamFailureKind::of(&CoreUpstreamError::Status(code)),
             detail: format!("upstream answered {status}"),
         }),
     }
@@ -269,7 +296,8 @@ async fn fill(
     let shutdown = cx.shutdown_token();
     let repository = cx.repository();
 
-    let budget = match quota::budget(cx, plan.existing_size).await {
+    let replaced_size = plan.existing.as_ref().map_or(0, |copy| copy.size_bytes);
+    let budget = match quota::budget(cx, replaced_size).await {
         Ok(budget) => budget,
         Err(error) => return FillOutcome::Failed(FillFailure::Storage(error.to_string())),
     };
@@ -278,12 +306,22 @@ async fn fill(
         CallClass::Data => budget.bytes,
     };
 
+    // Revalidation: ask with the validators the upstream gave us for exactly this copy. A copy
+    // without a known validator is fetched unconditionally (see `validators`).
+    let mut headers = plan.headers.clone();
+    let mut conditional = false;
+    if let Some(copy) = &plan.existing
+        && let Some(validators) = cx.shared.validators.get(copy.asset_id, copy.blob_id).await
+    {
+        validators.apply(&mut headers);
+        conditional = true;
+    }
     let call = UpstreamCall {
         repository: repository.id,
         repo_name: repository.name.to_string(),
         method: http::Method::GET,
         url: plan.url.clone(),
-        headers: plan.headers.clone(),
+        headers,
         credentials: plan.credentials.clone(),
         max_concurrent: plan.max_concurrent,
         class: plan.class,
@@ -302,6 +340,15 @@ async fn fill(
         },
     };
 
+    if conditional
+        && response.status == StatusCode::NOT_MODIFIED
+        && let Some(copy) = &plan.existing
+    {
+        // Only a request that carried a condition may be answered with 304: an upstream that
+        // sends one unasked is broken and falls through to the status classification below.
+        drop(response);
+        return revalidated(cx, copy).await;
+    }
     match classify_status(response.status, plan.forbidden_is_miss) {
         StatusClass::Success => {}
         StatusClass::Missing => return FillOutcome::NotFound,
@@ -315,6 +362,7 @@ async fn fill(
             .and_then(|source| source.expected_from_headers(&response.headers))
     });
     let content_type = stored_content_type(plan, &response.headers);
+    let validators = Validators::from_headers(&response.headers);
 
     // Tee only when nobody needs to see the bytes verified first, and only while
     // the leader is still there to receive them.
@@ -396,7 +444,7 @@ async fn fill(
     }
 
     match sink {
-        Some(sink) => finish(cx, plan, sink, expected, &content_type).await,
+        Some(sink) => finish(cx, plan, sink, expected, &content_type, validators).await,
         None => FillOutcome::Failed(FillFailure::NotCached),
     }
 }
@@ -420,7 +468,7 @@ async fn open_sink(
     declared: Option<u64>,
     limit: u64,
 ) -> Result<BlobSink, FormatError> {
-    let store = cx.store()?;
+    let store = cx.store().await?;
     let key = BlobKey::new(cx.ports().ids.next_uuid().to_string());
     Ok(BlobSink::begin(store.as_ref(), key, declared, limit).await?)
 }
@@ -451,6 +499,15 @@ fn open_client(
     })
 }
 
+/// Resets the age of an expired copy that the upstream confirmed. A copy that vanished meanwhile
+/// (deleted by cleanup) is not an error here: the request that waits for it answers "retry".
+async fn revalidated(cx: &FormatContext, copy: &ExistingCopy) -> FillOutcome {
+    match cx.ports().assets.touch_fresh(copy.asset_id, cx.now()).await {
+        Ok(()) | Err(StoreError::NotFound(_)) => FillOutcome::Revalidated,
+        Err(error) => FillOutcome::Failed(FillFailure::Storage(error.to_string())),
+    }
+}
+
 /// Commit, verify, publish. Not cancelled by shutdown: half of it would orphan a blob.
 async fn finish(
     cx: &FormatContext,
@@ -458,16 +515,10 @@ async fn finish(
     sink: BlobSink,
     expected: Option<ExpectedChecksum>,
     content_type: &str,
+    validators: Option<Validators>,
 ) -> FillOutcome {
     let repository = cx.repository();
     let key = sink.key().clone();
-    let store = match cx.store() {
-        Ok(store) => store,
-        Err(error) => {
-            sink.abort().await;
-            return FillOutcome::Failed(FillFailure::Storage(error.to_string()));
-        }
-    };
     let commit = match sink.commit().await {
         Ok(commit) => commit,
         Err(error) => return FillOutcome::Failed(FillFailure::Storage(error.to_string())),
@@ -475,7 +526,7 @@ async fn finish(
     if let Some(expected) = &expected
         && !expected.matches(&commit.checksums)
     {
-        delete_orphan(store.as_ref(), &key).await;
+        discard_committed(cx, &commit, &key).await;
         cx.audit_content(
             "proxy.checksum_mismatch",
             format!("{}:{}", repository.name, plan.cache_path),
@@ -489,34 +540,37 @@ async fn finish(
         });
     }
 
-    // A fill must never replace an artifact someone else published while it ran.
-    if plan.intent == FillIntent::Fill {
-        match cx
-            .ports()
-            .assets
-            .get_by_path(repository.id, &plan.cache_path)
-            .await
-        {
-            Ok(Some(_already_there)) => {
-                delete_orphan(store.as_ref(), &key).await;
-                return FillOutcome::Cached;
-            }
-            Ok(None) => {}
-            Err(error) => {
-                delete_orphan(store.as_ref(), &key).await;
-                return FillOutcome::Failed(FillFailure::Storage(error.to_string()));
-            }
+    // The same bytes again: do not replace the blob. A new blob would be written, announced
+    // as orphaning the old one and collected, all for nothing, and `Last-Modified` of the
+    // copy would change for clients that hold a validator. Only the age is reset.
+    if let Some(copy) = &plan.existing
+        && commit.checksums.sha256 == copy.sha256
+    {
+        discard_committed(cx, &commit, &key).await;
+        if let Some(validators) = validators {
+            cx.shared
+                .validators
+                .put(copy.asset_id, copy.blob_id, validators)
+                .await;
         }
+        return revalidated(cx, copy).await;
     }
 
     match publish(cx, plan, &commit, &key, content_type).await {
-        Ok(asset) => {
+        Ok(outcome) => {
+            if let Some(validators) = validators {
+                cx.shared
+                    .validators
+                    .put(outcome.asset.id, outcome.asset.blob_id, validators)
+                    .await;
+            }
+            let replaced = !outcome.created;
             cx.ports().events.emit(ContentEvent::AssetPublished {
                 repository: repository.id,
-                asset: asset.0,
-                replaced: asset.1.is_some(),
+                asset: outcome.asset,
+                replaced,
             });
-            if let Some(blob) = asset.1 {
+            if let Some(blob) = outcome.replaced {
                 cx.ports().events.emit(ContentEvent::BlobOrphaned {
                     repository: repository.id,
                     blob,
@@ -525,11 +579,36 @@ async fn finish(
             }
             FillOutcome::Cached
         }
-        Err(error) => {
-            delete_orphan(store.as_ref(), &key).await;
-            FillOutcome::Failed(FillFailure::Storage(error.to_string()))
+        Err(PublishFailure::Taken) => {
+            // Someone published this path while the fill ran, on this node or another: the
+            // create-only publish was refused by the transaction. Their copy stands, ours is
+            // surplus. Not an error, and exactly why the fill is create-only.
+            discard_committed(cx, &commit, &key).await;
+            FillOutcome::Cached
+        }
+        Err(PublishFailure::Refused(violation)) => {
+            discard_committed(cx, &commit, &key).await;
+            metrics::policy_violation(repository.format, violation.label());
+            FillOutcome::Failed(match violation {
+                PolicyViolation::QuotaExceeded(_) => FillFailure::Quota,
+                other => FillFailure::Policy(other),
+            })
+        }
+        Err(PublishFailure::Failed(detail)) => {
+            discard_committed(cx, &commit, &key).await;
+            FillOutcome::Failed(FillFailure::Storage(detail))
         }
     }
+}
+
+/// Why the metadata commit of a fill did not happen.
+enum PublishFailure {
+    /// Create-only found the path taken.
+    Taken,
+    /// A policy refused the copy.
+    Refused(PolicyViolation),
+    /// The metadata store failed.
+    Failed(String),
 }
 
 async fn publish(
@@ -538,41 +617,64 @@ async fn publish(
     commit: &rustryx_core::ports::BlobCommit,
     key: &BlobKey,
     content_type: &str,
-) -> Result<(Asset, Option<BlobRecord>), FormatError> {
+) -> Result<PublishOutcome, PublishFailure> {
     let repository = cx.repository();
+    let failed = |error: &dyn std::fmt::Display| PublishFailure::Failed(error.to_string());
     let component_id = match &plan.component {
-        Some(component) => Some(
-            cx.ports()
-                .components
-                .find_or_create(&NewComponent {
-                    repository_id: repository.id,
-                    format: repository.format,
-                    group_id: component.group.clone(),
-                    name: component.name.clone(),
-                    version: component.version.clone(),
-                })
-                .await?
-                .id,
-        ),
+        Some(component) => {
+            let mut new = NewComponent::new(repository.id, repository.format, &component.name);
+            new.group_id.clone_from(&component.group);
+            new.version.clone_from(&component.version);
+            // No `created_by`: a cache fill is the node's doing, not a user's upload.
+            Some(
+                cx.ports()
+                    .components
+                    .find_or_create(&new)
+                    .await
+                    .map_err(|e| failed(&e))?
+                    .id,
+            )
+        }
         None => None,
     };
     let id = BlobId::from_uuid(uuid_from_key(key).unwrap_or_else(|| cx.ports().ids.next_uuid()));
-    let new = NewAsset {
-        repository_id: repository.id,
-        component_id,
-        path: plan.cache_path.clone(),
-        content_type: content_type.to_owned(),
-        blob: BlobRecord {
+    let mut new = NewAsset::new(
+        repository.id,
+        plan.cache_path.as_str(),
+        content_type,
+        BlobRecord {
             id,
-            blob_store_id: repository.blob_store_id,
+            blob_store_id: cx.blob_store_id_of(commit),
             key: key.as_str().to_owned(),
             size_bytes: commit.size_bytes,
             checksums: commit.checksums.clone(),
             created_at: cx.now(),
         },
+    );
+    new.component_id = component_id;
+    // A fill of a path that has no copy is create-only, so a fill never replaces an artifact
+    // that was published meanwhile, on any node: the database answers `AlreadyExists`. Only a
+    // fill that refreshes an expired copy may replace it. No actor: a fill is the system's.
+    let mode = if plan.existing.is_some() {
+        PublishMode::Upsert
+    } else {
+        PublishMode::CreateOnly
     };
-    let outcome = cx.ports().assets.publish(&new).await?;
-    Ok((outcome.asset, outcome.replaced))
+    let mut options = WriteOptions::new().with_mode(mode);
+    if let Some(request_id) = cx.request_id() {
+        options = options.with_request_id(request_id);
+    }
+    match cx.ports().assets.publish_with(&new, &options).await {
+        Ok(outcome) => Ok(outcome),
+        Err(MutationError::Violation(PolicyViolation::AlreadyExists))
+            if mode == PublishMode::CreateOnly =>
+        {
+            Err(PublishFailure::Taken)
+        }
+        Err(MutationError::Violation(violation)) => Err(PublishFailure::Refused(violation)),
+        Err(MutationError::Store(error)) => Err(failed(&error)),
+        Err(other) => Err(failed(&other)),
+    }
 }
 
 fn uuid_from_key(key: &BlobKey) -> Option<uuid::Uuid> {
@@ -712,6 +814,45 @@ mod tests {
         assert_eq!(
             FillFailure::NotCached.into_error().status(),
             StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    #[test]
+    fn a_policy_refusal_of_a_fill_reaches_the_client_as_its_own_error() {
+        use rustryx_core::error::PolicyViolation;
+        let error = FillFailure::Policy(PolicyViolation::ReadOnly).into_error();
+        assert!(matches!(
+            error,
+            FormatError::Policy(PolicyViolation::ReadOnly)
+        ));
+        assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn the_existing_copy_remembers_what_a_comparison_needs() {
+        let asset = rustryx_core::model::Asset::new(
+            AssetId::generate(),
+            rustryx_core::ids::RepositoryId::generate(),
+            "a/b",
+            BlobId::generate(),
+            "text/plain",
+            7,
+            rustryx_core::model::Checksums {
+                sha1: "1".into(),
+                sha256: "abc".into(),
+                md5: "2".into(),
+            },
+            time::OffsetDateTime::UNIX_EPOCH,
+        );
+        let copy = ExistingCopy::of(&asset);
+        assert_eq!(
+            (
+                copy.asset_id,
+                copy.blob_id,
+                copy.size_bytes,
+                copy.sha256.as_str()
+            ),
+            (asset.id, asset.blob_id, 7, "abc")
         );
     }
 

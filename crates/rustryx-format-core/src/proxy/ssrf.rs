@@ -96,6 +96,23 @@ pub enum UrlRejection {
     Unresolved,
 }
 
+impl UrlRejection {
+    /// Fixed label of the refusal, for the core `UpstreamError::Blocked` and for metrics. It
+    /// never carries the host, the port or the address: those are for the log only.
+    #[must_use]
+    pub const fn label(&self) -> &'static str {
+        match self {
+            Self::Scheme(_) => "scheme",
+            Self::NoHost => "no_host",
+            Self::Credentials => "credentials",
+            Self::HostNotAllowed(_) => "host_not_allowed",
+            Self::PortNotAllowed(_) => "port_not_allowed",
+            Self::ForbiddenAddress { .. } => "forbidden_address",
+            Self::Unresolved => "unresolved",
+        }
+    }
+}
+
 /// A host name pattern: an exact name or `*.example.com` (any subdomain, not the apex).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostPattern {
@@ -468,6 +485,33 @@ impl Resolve for GuardedResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejection_labels_are_fixed_and_carry_no_host_or_address() {
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        let cases = [
+            (UrlRejection::Scheme("ftp".into()), "scheme"),
+            (UrlRejection::NoHost, "no_host"),
+            (UrlRejection::Credentials, "credentials"),
+            (
+                UrlRejection::HostNotAllowed("internal.example".into()),
+                "host_not_allowed",
+            ),
+            (UrlRejection::PortNotAllowed(8080), "port_not_allowed"),
+            (
+                UrlRejection::ForbiddenAddress {
+                    ip,
+                    class: AddressClass::Private,
+                },
+                "forbidden_address",
+            ),
+            (UrlRejection::Unresolved, "unresolved"),
+        ];
+        for (rejection, label) in cases {
+            assert_eq!(rejection.label(), label);
+            assert!(!label.contains("internal") && !label.contains("10.0"));
+        }
+    }
 
     fn policy() -> UpstreamUrlPolicy {
         UpstreamUrlPolicy::any_public()
