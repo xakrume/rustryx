@@ -35,7 +35,10 @@ use crate::layers::{
     BodyLimits, body_limits, cors, method_not_allowed, no_store_by_default, not_found, observe,
     panic_response, request_timeout, security_headers, shed_response,
 };
-use crate::rate_limit::{LimitState, RateLimiter, rate_limit};
+use crate::rate_limit::{
+    AUTH_FAILURE_BURST, AUTH_FAILURE_PER_MINUTE, FailureGuardState, LimitState, RateLimiter,
+    auth_failure_guard, rate_limit,
+};
 use crate::request_id::request_id_layer;
 use crate::state::AppState;
 
@@ -107,6 +110,16 @@ impl RouterBuilder {
             metrics: state.metrics().cloned(),
         });
 
+        // Shares the on/off switch of the rate limit but has its own, slowly refilling
+        // bucket per client address (see `auth_failure_guard`).
+        let guard = state.settings().rate_limit.map(|_| FailureGuardState {
+            limiter: Arc::new(RateLimiter::per_minute(
+                AUTH_FAILURE_PER_MINUTE,
+                AUTH_FAILURE_BURST,
+            )),
+            metrics: state.metrics().cloned(),
+        });
+
         // The 405 handler is set per group, before the group's layers are applied, so
         // that those layers wrap it: a CORS preflight (an `OPTIONS` request that no
         // route declares) must reach the CORS layer instead of a bare 405, and
@@ -114,8 +127,14 @@ impl RouterBuilder {
         let ops = health::routes()
             .method_not_allowed_fallback(method_not_allowed)
             .with_state(state.clone());
-        let api = api_group(api, &state, &in_flight, limit.as_ref());
-        let artifacts = artifact_group(artifacts, &state, &in_flight, limit.as_ref());
+        let api = api_group(api, &state, &in_flight, limit.as_ref(), guard.as_ref());
+        let artifacts = artifact_group(
+            artifacts,
+            &state,
+            &in_flight,
+            limit.as_ref(),
+            guard.as_ref(),
+        );
 
         let router = Router::new()
             .merge(ops)
@@ -142,6 +161,7 @@ fn api_group(
     state: &AppState,
     in_flight: &Arc<Semaphore>,
     limit: Option<&LimitState>,
+    guard: Option<&FailureGuardState>,
 ) -> Router {
     let settings = state.settings();
     let limits = BodyLimits {
@@ -153,9 +173,10 @@ fn api_group(
         routes.method_not_allowed_fallback(method_not_allowed),
         limit,
     )
-    .layer(from_fn_with_state(state.clone(), authenticate))
-    .layer(from_fn(no_store_by_default))
-    .layer(CompressionLayer::new());
+    .layer(from_fn_with_state(state.clone(), authenticate));
+    let routes = with_failure_guard(routes, guard)
+        .layer(from_fn(no_store_by_default))
+        .layer(CompressionLayer::new());
     // CORS sits outside authentication so that a browser can read a 401, and a
     // preflight (which carries no credentials) is answered before anything else.
     let routes = match cors(settings) {
@@ -173,6 +194,7 @@ fn artifact_group(
     state: &AppState,
     in_flight: &Arc<Semaphore>,
     limit: Option<&LimitState>,
+    guard: Option<&FailureGuardState>,
 ) -> Router {
     let settings = state.settings();
     let limits = BodyLimits {
@@ -184,10 +206,23 @@ fn artifact_group(
         routes.method_not_allowed_fallback(method_not_allowed),
         limit,
     )
-    .layer(from_fn_with_state(state.clone(), authenticate))
-    .layer(from_fn_with_state(limits, body_limits))
-    .layer(from_fn_with_state(state.clone(), request_timeout));
+    .layer(from_fn_with_state(state.clone(), authenticate));
+    let routes = with_failure_guard(routes, guard)
+        .layer(from_fn_with_state(limits, body_limits))
+        .layer(from_fn_with_state(state.clone(), request_timeout));
     shed(routes, state, in_flight).with_state(state.clone())
+}
+
+/// Directly outside authentication: charges failed credential checks to the client
+/// address, which the per-user limiter inside authentication cannot see.
+fn with_failure_guard(
+    routes: Router<AppState>,
+    guard: Option<&FailureGuardState>,
+) -> Router<AppState> {
+    match guard {
+        Some(state) => routes.layer(from_fn_with_state(state.clone(), auth_failure_guard)),
+        None => routes,
+    }
 }
 
 /// Innermost layer of a group, directly inside authentication so the limiter can key

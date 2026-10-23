@@ -201,3 +201,87 @@ async fn without_settings_nothing_is_limited() {
         );
     }
 }
+
+fn guess(peer: [u8; 4], token: &str) -> http::Request<Body> {
+    let mut req = from_peer("/api/only-get", peer, None);
+    req.headers_mut().insert(
+        "authorization",
+        format!("Bearer {token}").parse().expect("header"),
+    );
+    req
+}
+
+#[tokio::test(start_paused = true)]
+async fn must_not_allow_unlimited_credential_guessing_from_one_address() {
+    // The per-user limiter inside authentication never sees a caller that failed to
+    // authenticate, so guessing needs its own counter keyed on the address.
+    let auth = StubAuth::new(|_, _| Err(rustryx_core::AuthError::InvalidCredentials));
+    let router = test_router(
+        state_with_settings(|s| {
+            s.rate_limit = Some(RateLimitSettings {
+                requests_per_second: 1000,
+                burst: 1000,
+            });
+        })
+        .with_authenticator(auth),
+    );
+    for attempt in 0..10 {
+        let reply = call(
+            &router,
+            guess([198, 51, 100, 7], &format!("ryx_guess{attempt}")),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "attempt {attempt}");
+    }
+    let refused = call(&router, guess([198, 51, 100, 7], "ryx_guess10")).await;
+    assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(refused.error_code(), "rate_limited");
+    assert!(refused.header("retry-after").is_some());
+
+    // Anonymous requests carry no credentials to guess: the challenge flow of docker,
+    // maven and npm (anonymous first, then retry with credentials) must keep working.
+    let anonymous = call(&router, from_peer("/api/only-get", [198, 51, 100, 7], None)).await;
+    assert_ne!(anonymous.status, StatusCode::TOO_MANY_REQUESTS);
+
+    // Another address has its own counter.
+    let other = call(&router, guess([198, 51, 100, 8], "ryx_guess")).await;
+    assert_eq!(other.status, StatusCode::UNAUTHORIZED);
+
+    // The counter refills: ten failures per minute afterwards.
+    tokio::time::advance(Duration::from_secs(6)).await;
+    let later = call(&router, guess([198, 51, 100, 7], "ryx_guess11")).await;
+    assert_eq!(
+        later.status,
+        StatusCode::UNAUTHORIZED,
+        "one attempt regained"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn successful_credentials_do_not_use_up_the_failure_counter() {
+    let auth = StubAuth::new(|credentials, _| match credentials {
+        Credentials::Basic { username, .. } => {
+            Ok(Some(principal(username, AuthMethod::BasicLocal, "r")))
+        }
+        _ => Ok(None),
+    });
+    let router = test_router(
+        state_with_settings(|s| {
+            s.rate_limit = Some(RateLimitSettings {
+                requests_per_second: 1000,
+                burst: 1000,
+            });
+        })
+        .with_authenticator(auth),
+    );
+    for _ in 0..50 {
+        let mut req = from_peer("/api/whoami", [10, 1, 1, 1], None);
+        req.headers_mut().insert(
+            "authorization",
+            format!("Basic {}", STANDARD.encode("alice:pw"))
+                .parse()
+                .expect("header"),
+        );
+        assert_eq!(call(&router, req).await.status, StatusCode::OK);
+    }
+}
