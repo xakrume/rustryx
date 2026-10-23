@@ -1,1 +1,1 @@
-//! groups (see crate docs).
+//! Module `groups`, see the crate docs.

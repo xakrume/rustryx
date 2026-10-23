@@ -1,1 +1,1 @@
-//! chain (see crate docs).
+//! Module `chain`, see the crate docs.

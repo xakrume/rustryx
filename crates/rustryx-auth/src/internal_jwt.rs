@@ -1,1 +1,1 @@
-//! internal_jwt (see crate docs).
+//! Module `internal_jwt`, see the crate docs.

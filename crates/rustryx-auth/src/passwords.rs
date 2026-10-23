@@ -1,1 +1,1 @@
-//! passwords (see crate docs).
+//! Module `passwords`, see the crate docs.

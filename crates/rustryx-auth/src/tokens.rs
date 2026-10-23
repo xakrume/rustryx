@@ -1,1 +1,1 @@
-//! tokens (see crate docs).
+//! Module `tokens`, see the crate docs.

@@ -1,1 +1,1 @@
-//! login_guard (see crate docs).
+//! Module `login_guard`, see the crate docs.
