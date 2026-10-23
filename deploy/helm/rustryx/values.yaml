@@ -1,0 +1,617 @@
+# Rustryx chart values: safe defaults.
+#
+# Rules this file follows (README section 8, OPS-30):
+#   * No password, key or token appears in any values file. Secrets come from an existing
+#     Kubernetes Secret whose NAME is given in `secrets.existingSecret` (or from an
+#     ExternalSecret that fills that Secret). Values and ConfigMap hold non-sensitive settings only.
+#   * Defaults fail closed: production mode, NetworkPolicy on, S3 storage, no ingress, no HPA.
+#     A bare `helm template` fails on purpose until `config.server.base_url` and the
+#     network peers are set, instead of rendering something that silently misbehaves.
+#   * Env var names follow `RUSTRYX_<SECTION>_<KEY>`; a secret mounted as a file uses
+#     `<NAME>_FILE` (README 8, OPS-50). The names are listed in `secrets.entries` below and come
+#     from the key table of the rustryx-config crate (docs/config.md). Unknown keys in the config
+#     file are startup errors there, so the chart renders only keys that table knows.
+
+nameOverride: ""
+fullnameOverride: ""
+commonLabels: {}
+
+# ---------------------------------------------------------------------------------------------
+# image
+# ---------------------------------------------------------------------------------------------
+# CI publishes two images with separate multi-arch manifests (README 7): musl static and glibc on
+# distroless/cc. One tag never mixes them, so `variant` selects which one the chart pulls.
+# `variants.<name>` says how that image is named; change it only if the registry layout differs.
+image:
+  repository: ghcr.io/rustryx/rustryx
+  variant: musl
+  variants:
+    musl:
+      tagSuffix: "-musl"
+      repositorySuffix: ""
+    glibc:
+      tagSuffix: "-glibc"
+      repositorySuffix: ""
+  # Empty means `.Chart.AppVersion`. `latest` is rejected by values.schema.json and, for
+  # `--skip-schema-validation` runs, again by the template (OPS-18).
+  tag: ""
+  # `sha256:<64 hex>`. When set it wins over the tag and the image is rendered as repo@digest.
+  digest: ""
+  # true makes the chart refuse to render without a digest. values-prod.yaml sets it, so a
+  # production release cannot be deployed by a mutable tag.
+  requireDigest: false
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# ---------------------------------------------------------------------------------------------
+# workload
+# ---------------------------------------------------------------------------------------------
+# Two replicas are the floor in production (checked in templates/_validate.tpl). When
+# `autoscaling.enabled` is true the Deployment omits `replicas` so that an upgrade does not
+# reset the count the HPA chose.
+replicaCount: 2
+# Opt-out for a single-node production environment, e.g. local blob store on a ReadWriteOnce volume.
+allowSingleReplica: false
+revisionHistoryLimit: 5
+
+# maxUnavailable 0 plus maxSurge 1: a new pod must be Ready before an old one is stopped, so a
+# rollout never lowers capacity (SRE-33).
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
+# Rustryx serves the API, the artifact routes, /healthz, /readyz and /metrics on ONE listener
+# (server.listen_addr, docs/config.md). `http` is that container port. It is the single source for
+# the container port, the Service targetPort, the listen address in the rendered config file and
+# the probe port, which is how "probe port equals containerPort" holds by construction.
+#
+# `ops` is for a dedicated probe and metrics listener (OPS-35). The current config schema has no
+# second listener, so it stays null. When the application grows one, set a port here AND the key
+# that opens it under `config.server` (the chart does not invent a key the schema does not know:
+# unknown keys are startup errors). The probes, the metrics Service and the NetworkPolicy then move
+# to that port and the API port is no longer reachable for them.
+containerPorts:
+  http: 8081
+  ops: null
+
+# Binary subcommand. `serve` never migrates (README 8.2); schema changes belong to the hook Job.
+args:
+  - serve
+
+# Graceful shutdown (SRE-06). On SIGTERM the app turns /readyz into 503, drains in-flight
+# requests until `timeoutSeconds`, then exits 0.
+#   preStopSleepSeconds must be >= readiness periodSeconds * failureThreshold, otherwise the
+#     load balancer still sends requests to a pod that already stopped accepting.
+#   The pod grace period starts BEFORE preStop runs, so it must cover preStop + drain + slack.
+#     terminationGracePeriodSeconds = null derives exactly that sum.
+# Raise timeoutSeconds when clients push multi-GB blobs through a node.
+shutdown:
+  timeoutSeconds: 30
+  preStopSleepSeconds: 10
+  graceSlackSeconds: 15
+terminationGracePeriodSeconds: null
+
+priorityClassName: ""
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+
+# Spread replicas so one node or zone failure never takes every pod (OPS-31).
+#   mode soft: preferred, the scheduler may still co-locate when it has to (safe with HPA).
+#   mode hard: required, pods stay Pending when there are fewer nodes than replicas.
+#   mode none: render no anti-affinity.
+# `custom` is a full `affinity` block that replaces the generated one (node affinity etc.).
+affinity:
+  podAntiAffinity:
+    mode: soft
+    topologyKey: kubernetes.io/hostname
+  custom: {}
+
+# The chart adds the labelSelector. `whenUnsatisfiable` is a value on purpose: DoNotSchedule is
+# right when zones are guaranteed, ScheduleAnyway when a small cluster must still schedule.
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+
+# 10001:10001 matches USER in the Dockerfile (OPS-11). values.schema.json pins the hardening
+# flags to their safe value, so they cannot be switched off from a values file.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  # fsGroup makes the PVC of a local blob store writable by the non-root user.
+  fsGroup: 10001
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+# Starting values from SRE-33. OPS-34 requires replacing them with numbers from the load test:
+# memory limit must cover peak concurrent uploads (streaming keeps this bounded by buffer sizes,
+# not by artifact size). CPU has no limit on purpose: a CPU limit throttles the tokio runtime.
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    memory: 1Gi
+
+# Writable paths: emptyDir on /tmp only (root filesystem is read-only, OPS-12). A local blob
+# store adds a PVC, see `storage`.
+tmp:
+  sizeLimit: 1Gi
+  medium: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Env var and volume escape hatches for site specifics. Do not put secret values here; use the
+# Secret named in `secrets.existingSecret` or `extraEnvFrom` referencing another Secret.
+extraEnv: []
+extraEnvFrom: []
+extraVolumes: []
+extraVolumeMounts: []
+
+# Internal CA for Keycloak, LDAP or S3, mounted from a Secret or ConfigMap instead of rebuilding
+# the image (OPS-13). SSL_CERT_FILE REPLACES the system roots in rustls-based clients, so the
+# bundle must also contain the public roots when proxy repositories reach public registries.
+tls:
+  customCA:
+    enabled: false
+    existingSecret: ""
+    existingConfigMap: ""
+    key: ca-bundle.crt
+    mountPath: /etc/rustryx/ca
+
+# ---------------------------------------------------------------------------------------------
+# probes
+# ---------------------------------------------------------------------------------------------
+# Rules (SRE-01 to SRE-05, OPS-33):
+#   * Probe blocks come from here and are rendered once, outside any `range` over service ports.
+#   * The port is not configurable per probe: the template writes the listener's containerPort
+#     (`containerPorts.ops` when set, otherwise `containerPorts.http`), the same number the
+#     container declares.
+#   * liveness = /healthz: touches no dependency. A dependency outage must never restart a pod.
+#   * Never point a probe at an aggregated health endpoint.
+#   * `initialDelaySeconds` must not be set while the startupProbe is enabled (template fails).
+#   * Budget of the startupProbe = periodSeconds * failureThreshold, at least 3x the cold start
+#     from the `started in N seconds` log line. Measure it on the image that ships (SRE-04).
+#   * Verify the paths on a live pod before release: kubectl port-forward + curl (SRE-05).
+probes:
+  startup:
+    enabled: true
+    httpGet:
+      path: /healthz
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 30
+  # readiness depends on PostgreSQL only, and the cascade risk is accepted on purpose: without
+  # the database a node cannot serve a single metadata request, so leaving the balancer is the
+  # correct reaction. The pod is NOT restarted (liveness is independent), so when PostgreSQL
+  # returns every pod comes back by itself. Redis, Keycloak, LDAP, S3 and upstream registries do
+  # not influence /readyz (README 8.2): their outages are degraded modes, not reasons to drop
+  # all pods and turn a partial outage into a full one.
+  readiness:
+    enabled: true
+    httpGet:
+      path: /readyz
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 2
+    successThreshold: 1
+  liveness:
+    enabled: true
+    httpGet:
+      path: /healthz
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+
+# ---------------------------------------------------------------------------------------------
+# service and exposure
+# ---------------------------------------------------------------------------------------------
+# One ClusterIP Service on the API port (plus the ops port when `containerPorts.ops` is set), and a
+# headless metrics Service (publishNotReadyAddresses) so Prometheus keeps scraping pods that are
+# NotReady, which is exactly the state during a PostgreSQL outage.
+service:
+  type: ClusterIP
+  annotations: {}
+  http:
+    port: 80
+  # Service port of the ops listener; used only when containerPorts.ops is set.
+  ops:
+    port: 9090
+  # Additional Service ports, e.g. a dedicated Docker registry port. Entries are
+  # {name, port, targetPort}.
+  extraPorts: []
+
+# Ingress (class nginx) and Gateway API HTTPRoute are mutually exclusive unless
+# `gateway.allowWithIngress` is set.
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: rustryx.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  # cert-manager issues the certificate for the secretName in `tls`.
+  certManager:
+    enabled: false
+    issuerName: ""
+    issuerKind: ClusterIssuer
+  # Uploads of multi-GB artifacts. Defaults matter: nginx buffers request bodies to disk and caps
+  # them at 1m, which breaks docker push and mvn deploy. The app enforces max_blob_bytes itself.
+  # These annotations are written only for the nginx ingress class.
+  largeUploads:
+    enabled: true
+    proxyBodySize: "0"
+    requestBuffering: "off"
+    responseBuffering: "off"
+    connectTimeoutSeconds: 10
+    readTimeoutSeconds: 600
+    sendTimeoutSeconds: 600
+  # Docker clients need the registry at the root of a host (/v2/). Extra hostnames for the
+  # registry. With the subdomain connector the wildcard host is added automatically.
+  docker:
+    hosts: []
+
+gateway:
+  enabled: false
+  allowWithIngress: false
+  # Required when enabled: [{name, namespace, sectionName}].
+  parentRefs: []
+  hostnames: []
+  # Optional HTTPRoute timeouts, e.g. {request: 0s}. Maximum body size and buffering are
+  # configured on the Gateway implementation, not here (see docs/helm.md).
+  timeouts: {}
+  docker:
+    hostnames: []
+
+# ---------------------------------------------------------------------------------------------
+# autoscaling, disruption budget
+# ---------------------------------------------------------------------------------------------
+# autoscaling/v2. CPU always; the custom Pods metric is the per-pod request rate derived from
+# `http_requests_total`. It needs a metrics adapter (prometheus-adapter or the
+# VictoriaMetrics adapter) exposing that rate under `metricName`; rule example in docs/helm.md.
+# minReplicas must not be below replicaCount (checked).
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  cpu:
+    targetAverageUtilization: 70
+  requestsPerSecond:
+    enabled: false
+    metricName: http_requests_per_second
+    targetAverageValue: "50"
+  # Slow scale-down: killing a node mid-upload costs a client retry.
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+
+# minAvailable and maxUnavailable are mutually exclusive; set exactly one. maxUnavailable 1 never
+# blocks a drain with two replicas. AlwaysAllow matters here: when PostgreSQL is down every pod is
+# NotReady, and with the default policy a PDB would then block draining nodes at the worst moment.
+pdb:
+  enabled: true
+  minAvailable: null
+  maxUnavailable: 1
+  unhealthyPodEvictionPolicy: AlwaysAllow
+
+# ---------------------------------------------------------------------------------------------
+# network policy
+# ---------------------------------------------------------------------------------------------
+# Default deny both directions for the Rustryx pods. Egress only to the peers listed below.
+# A dependency with an empty `to` list gets no rule, and the chart fails when that dependency is
+# enabled: a missing rule is a silent timeout in production, so it is rejected at render time.
+# Each peer is a NetworkPolicyPeer: {ipBlock}, {namespaceSelector}, {podSelector} or a pair.
+networkPolicy:
+  enabled: true
+  ingress:
+    # Who may reach the API port. Default: the ingress-nginx namespace. For Gateway API put the
+    # namespace of the gateway data plane here.
+    controllers:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: ingress-nginx
+    # Who may scrape /metrics. With one listener this shares the API port, so these peers are
+    # merged into the same rule; with a dedicated ops listener they get only that port. Kubelet
+    # probes come from the node and are allowed by every CNI regardless of policy.
+    metricsScrapers:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: monitoring
+    extra: []
+  egress:
+    dns:
+      enabled: true
+      to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+    postgresql:
+      to: []
+      ports: [5432]
+    # Redis is reached only when config.lock.backend is redis.
+    redis:
+      to: []
+      ports: [6379]
+    s3:
+      to: []
+      ports: [443]
+    keycloak:
+      to: []
+      ports: [443]
+    ldap:
+      to: []
+      ports: [636]
+    # Upstream registries of proxy repositories. Plain Kubernetes NetworkPolicy cannot match host
+    # names, so this is a CIDR list the operator resolves. For host names use
+    # `networkPolicy.cilium` (FQDN policy, with the shared-IP trap documented in docs/helm.md).
+    upstream:
+      cidrs: []
+      ports: [443]
+    extra: []
+  # Optional CiliumNetworkPolicy with toFQDNs for the upstream registry allowlist.
+  cilium:
+    enabled: false
+    upstreamHosts: []
+    upstreamPorts: [443]
+
+# ---------------------------------------------------------------------------------------------
+# secrets
+# ---------------------------------------------------------------------------------------------
+# The chart consumes the NAME of an existing Secret created by the operator, by External Secrets
+# Operator or by a Vault Agent sidecar-less injector. Values, CI and git never carry the
+# secret values; the pod has no Vault client and no VAULT_* variables (OPS-39).
+secrets:
+  existingSecret: rustryx
+  # env: `envFrom.secretRef`, the Secret keys ARE the env var names listed below.
+  # file: the Secret is mounted read-only and `<NAME>_FILE` variables point at the files, which
+  #       keeps values out of the process environment and of crash dumps.
+  mode: env
+  mountPath: /var/run/secrets/rustryx
+  # Which keys the Secret contains. Env mode ignores the flags at runtime (envFrom takes every
+  # key) but the flags still drive validation and the list printed by NOTES.txt. File mode
+  # renders one `<NAME>_FILE` variable per enabled entry.
+  entries:
+    # Env names, from docs/config.md. Every one is a secret key of the config schema.
+    #   databaseUrl            RUSTRYX_DATABASE_URL (full DSN with the password), always required
+    #   databaseDirectUrl      RUSTRYX_DATABASE_DIRECT_URL, needed behind a transaction-mode pooler
+    #   lockRedisUrl           RUSTRYX_LOCK_REDIS_URL, required when config.lock.backend is redis
+    #   s3AccessKey/s3SecretKey RUSTRYX_BLOB_S3_ACCESS_KEY / RUSTRYX_BLOB_S3_SECRET_KEY, S3 storage
+    #                          (turn both off when the pod gets credentials from a workload identity)
+    #   oidcClientSecret       RUSTRYX_AUTH_OIDC_CLIENT_SECRET, when OIDC is on
+    #   ldapBindPassword       RUSTRYX_AUTH_LDAP_BIND_PASSWORD, when LDAP is on
+    #   internalJwtKey         RUSTRYX_AUTH_INTERNAL_JWT_KEY, PEM Ed25519, identical on every node
+    #   cookieKey              RUSTRYX_AUTH_COOKIE_KEY, base64 of 32 random bytes, identical everywhere
+    #   bootstrapAdminPassword RUSTRYX_AUTH_BOOTSTRAP_ADMIN_PASSWORD, one-time break-glass password;
+    #                          production refuses weak values (OPS-53) and the password is to be changed
+    #   metricsToken           RUSTRYX_OBSERVABILITY_METRICS_TOKEN, required unless metrics_public
+    databaseUrl: true
+    databaseDirectUrl: false
+    lockRedisUrl: false
+    s3AccessKey: true
+    s3SecretKey: true
+    oidcClientSecret: false
+    ldapBindPassword: false
+    internalJwtKey: true
+    cookieKey: true
+    bootstrapAdminPassword: true
+    metricsToken: true
+
+# Optional ExternalSecret that fills `secrets.existingSecret`. Only paths to the secret store
+# are written here, never values. `data[].secretKey` is the env var name from `secrets.entries`.
+externalSecret:
+  enabled: false
+  apiVersion: external-secrets.io/v1
+  refreshInterval: 1h
+  secretStoreRef:
+    name: ""
+    kind: ClusterSecretStore
+  creationPolicy: Owner
+  # Helm creates hook resources before regular ones, so on a FIRST install the Secret does not
+  # exist when the migration hook starts. `hook: true` renders the ExternalSecret as a
+  # pre-install,pre-upgrade hook so it is applied first; use creationPolicy Orphan with it, because
+  # a hook is deleted and recreated on every upgrade and Owner would delete the Secret with it.
+  hook: false
+  data: []
+  # Dedicated ServiceAccount for the ESO SecretStore (kubernetes auth), no token mount, no
+  # Role: ESO controller permissions are granted by its own installation (OPS-36).
+  serviceAccount:
+    create: false
+    name: ""
+    annotations: {}
+
+# ---------------------------------------------------------------------------------------------
+# configuration (non-sensitive only)
+# ---------------------------------------------------------------------------------------------
+# Rendered into /etc/rustryx/config/config.yaml (read-only ConfigMap mount). Keys are the application's own
+# (docs/config.md, config.example.yaml); environment variables win over the file (OPS-50). Unknown
+# keys are errors at startup, so anything the schema does not list is a failed rollout, and
+# `rustryx print-config` is the way to inspect what the pod sees.
+# Chart-derived keys, never set here: server.listen_addr (from containerPorts.http),
+# server.shutdown_timeout_secs (from shutdown.timeoutSeconds), blob.* (from `storage`).
+# `extra` is deep-merged last for any key not modelled below.
+config:
+  # `production` activates the refusal of default credentials (OPS-53) and requires 2+ replicas
+  # in this chart. `development` only for a throwaway contour.
+  environment: production
+  server:
+    # External URL of the service, no path. Used for OIDC redirects and Docker token realms. Required.
+    base_url: ""
+    # CIDRs allowed to set X-Forwarded-For. Without the ingress controller's pod or node CIDR here the
+    # login guard and the audit log see the ingress address instead of the client.
+    trusted_proxies: []
+    cors_allowed_origins: []
+  database:
+    # Per-node pool size. Replicas (max with HPA) x this, plus reserve, must stay under the server's
+    # max_connections (SRE-27).
+    pool_size: 20
+  lock:
+    # postgres (default) or redis. Fixed for the life of the process; there is no automatic
+    # fallback to the other backend (README 8.2). If the backend is down, requests are served
+    # and singleton jobs simply do not start. redis needs secrets.entries.lockRedisUrl.
+    backend: postgres
+  auth:
+    anonymous_enabled: false
+    allow_local_role_supplement: false
+    oidc:
+      enabled: false
+      issuer: ""
+      public_issuer_url: ""
+      client_id: ""
+      admin_groups: []
+      default_role: ""
+    ldap:
+      enabled: false
+      # ldaps://host, or ldap://host together with starttls: true. Plain ldap:// fails startup.
+      url: ""
+      starttls: false
+      bind_dn: ""
+      user_base_dn: ""
+      admin_groups: []
+      # Path of a PEM CA bundle for the LDAP server, e.g. under tls.customCA.mountPath.
+      ca_file: ""
+  limits: {}
+  upstream: {}
+  gc: {}
+  observability:
+    metrics_enabled: true
+    # false: /metrics needs a Bearer token (secrets.entries.metricsToken). With one listener the
+    # metrics share the API port, so the token is their only guard; keep this false.
+    metrics_public: false
+    otlp_endpoint: ""
+    otlp_sample_ratio: 0.1
+  docker:
+    # Docker subdomain connector: repository `foo` is served at `foo.<baseDomain>`. This flag only
+    # adds the wildcard host to Ingress or HTTPRoute (OPS-35). It writes NO application key: the
+    # connector is not in the config schema yet, and an unknown key would stop the pod. The
+    # wildcard host needs a wildcard TLS certificate.
+    subdomainConnector:
+      enabled: false
+      baseDomain: ""
+  extra: {}
+
+# ---------------------------------------------------------------------------------------------
+# storage
+# ---------------------------------------------------------------------------------------------
+# S3 by default (rendered as blob.kind). `local` creates a PVC and is incompatible with HA: with more than one replica
+# the chart fails unless the volume is ReadWriteMany AND `confirmReadWriteMany` is true
+# (OPS-38). A ReadWriteOnce local store forces the Recreate strategy: a rolling update would
+# wait forever for the volume to detach.
+storage:
+  type: s3
+  s3:
+    # Non-sensitive S3 settings, rendered as blob.s3_*. Access and secret key come from the Secret.
+    endpoint: ""
+    bucket: ""
+    region: ""
+    path_style: true
+  local:
+    mountPath: /var/lib/rustryx/blobs
+    size: 50Gi
+    storageClassName: ""
+    accessModes:
+      - ReadWriteOnce
+    existingClaim: ""
+    confirmReadWriteMany: false
+    annotations: {}
+
+# ---------------------------------------------------------------------------------------------
+# migrations
+# ---------------------------------------------------------------------------------------------
+# One Helm hook Job runs `rustryx migrate` before install and upgrade; the process takes a
+# PostgreSQL advisory lock, so a second concurrent run waits or exits cleanly. The Deployment
+# never migrates (README 8.2). With ArgoCD this hook maps to PreSync. Hook weight is negative so
+# the hook ConfigMap and ServiceAccount (also hooks, because regular resources do not exist yet on
+# a first install) are created before the Job.
+migrations:
+  enabled: true
+  args:
+    - migrate
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  # A finished Job is kept for a day so `kube_job_status_failed` stays visible to alerts and
+  # `kubectl logs` still works after a failed upgrade.
+  ttlSecondsAfterFinished: 86400
+  podAnnotations: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+# ---------------------------------------------------------------------------------------------
+# monitoring and dashboards
+# ---------------------------------------------------------------------------------------------
+monitoring:
+  # prometheus: ServiceMonitor + PrometheusRule (monitoring.coreos.com/v1)
+  # victoriametrics: VMServiceScrape + VMRule (operator.victoriametrics.com/v1beta1)
+  flavor: prometheus
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+    # Bearer token Secret for /metrics when config.observability.metrics_public is false. Name and
+    # key only. Empty name means the Secret in secrets.existingSecret with the key
+    # RUSTRYX_OBSERVABILITY_METRICS_TOKEN, i.e. the very token the pods validate against.
+    bearerTokenSecret:
+      name: ""
+      key: ""
+  rules:
+    enabled: false
+    labels: {}
+    # Extra labels added to every alert (team, contour, ...).
+    alertLabels: {}
+    # Base of every runbook_url annotation. Anchors are the alert names.
+    runbookBaseUrl: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md
+    # Group `rustryx.kube` needs kube-state-metrics (migration Job failures, restarts, memory
+    # against the limit). Turn it off where kube-state-metrics is absent.
+    kubeStateMetrics: true
+    # Alert names to drop, e.g. [RustryxRedisUnavailable] when the redis lock backend is not used.
+    disabled: []
+
+dashboards:
+  enabled: false
+  # Label the Grafana sidecar watches (grafana-sidecar `label` and `labelValue`).
+  label: grafana_dashboard
+  labelValue: "1"
+  # Namespace for the ConfigMap; empty means the release namespace. Set it to the sidecar's
+  # namespace when it only watches that one.
+  namespace: ""
+  # Grafana folder annotation understood by the sidecar (`k8s-sidecar-target-directory`).
+  folder: Rustryx

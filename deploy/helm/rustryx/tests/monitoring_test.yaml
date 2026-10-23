@@ -1,0 +1,228 @@
+suite: monitoring
+templates:
+  - templates/servicemonitor.yaml
+  - templates/rules.yaml
+  - templates/dashboard-configmap.yaml
+values:
+  - ../ci/base-values.yaml
+tests:
+  - it: renders nothing by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a ServiceMonitor scraping the headless metrics Service with a fixed job label
+    template: templates/servicemonitor.yaml
+    values:
+      - ../ci/monitoring-prometheus-values.yaml
+    asserts:
+      - isKind:
+          of: ServiceMonitor
+      - equal:
+          path: apiVersion
+          value: monitoring.coreos.com/v1
+      - equal:
+          path: spec.jobLabel
+          value: app.kubernetes.io/name
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/service-role"]
+          value: metrics
+      - equal:
+          path: spec.endpoints[0].port
+          value: http
+      - equal:
+          path: spec.endpoints[0].path
+          value: /metrics
+      - equal:
+          path: spec.endpoints[0].honorLabels
+          value: false
+      - equal:
+          path: spec.endpoints[0].bearerTokenSecret
+          value:
+            name: rustryx-metrics-token
+            key: token
+      - equal:
+          path: metadata.labels.release
+          value: kube-prometheus-stack
+
+  - it: renders a VMServiceScrape for the VictoriaMetrics flavor
+    template: templates/servicemonitor.yaml
+    values:
+      - ../ci/monitoring-vm-values.yaml
+    asserts:
+      - isKind:
+          of: VMServiceScrape
+      - equal:
+          path: apiVersion
+          value: operator.victoriametrics.com/v1beta1
+
+  - it: scrapes with the very token the pods validate when no token Secret is named
+    template: templates/servicemonitor.yaml
+    values:
+      - ../ci/monitoring-vm-values.yaml
+    asserts:
+      - equal:
+          path: spec.endpoints[0].bearerTokenSecret
+          value:
+            name: rustryx
+            key: RUSTRYX_OBSERVABILITY_METRICS_TOKEN
+      - equal:
+          path: spec.endpoints[0].port
+          value: http
+
+  - it: sends no token when /metrics is public
+    template: templates/servicemonitor.yaml
+    values:
+      - ../ci/monitoring-vm-values.yaml
+    set:
+      config.observability.metrics_public: true
+      secrets.entries.metricsToken: false
+    asserts:
+      - notExists:
+          path: spec.endpoints[0].bearerTokenSecret
+
+  - it: scrapes the ops port when a dedicated ops listener exists
+    template: templates/servicemonitor.yaml
+    values:
+      - ../ci/monitoring-vm-values.yaml
+    set:
+      containerPorts.ops: 9191
+    asserts:
+      - equal:
+          path: spec.endpoints[0].port
+          value: ops
+
+  - it: renders a PrometheusRule with the required alert families
+    template: templates/rules.yaml
+    values:
+      - ../ci/monitoring-prometheus-values.yaml
+    asserts:
+      - isKind:
+          of: PrometheusRule
+      - exists:
+          path: spec.groups[*].rules[?(@.alert == "RustryxHigh5xx")]
+      - exists:
+          path: spec.groups[*].rules[?(@.alert == "RustryxDown")]
+      - exists:
+          path: spec.groups[*].rules[?(@.alert == "RustryxMetadataLatencyP95")]
+      - exists:
+          path: spec.groups[*].rules[?(@.alert == "RustryxDbUnavailable")]
+      - exists:
+          path: spec.groups[*].rules[?(@.alert == "RustryxBlobStoreErrors")]
+      - exists:
+          path: spec.groups[*].rules[?(@.alert == "RustryxMigrationFailed")]
+      - exists:
+          path: spec.groups[*].rules[?(@.alert == "RustryxJobStale")]
+      - exists:
+          path: spec.groups[*].rules[?(@.alert == "RustryxOidcRefreshFailures")]
+      - exists:
+          path: spec.groups[*].rules[?(@.alert == "RustryxMemoryNearLimit")]
+      - exists:
+          path: spec.groups[*].rules[?(@.record == "rustryx:sli_availability:ratio_rate5m")]
+
+  - it: renders a VMRule for the VictoriaMetrics flavor
+    template: templates/rules.yaml
+    values:
+      - ../ci/monitoring-vm-values.yaml
+    asserts:
+      - isKind:
+          of: VMRule
+
+  - it: drops the kube-state-metrics group when it is not available
+    template: templates/rules.yaml
+    values:
+      - ../ci/monitoring-vm-values.yaml
+    asserts:
+      - notExists:
+          path: spec.groups[?(@.name == "rustryx.kube")]
+      - exists:
+          path: spec.groups[?(@.name == "rustryx.alerts")]
+
+  - it: drops alerts listed in disabled
+    template: templates/rules.yaml
+    values:
+      - ../ci/monitoring-prometheus-values.yaml
+    asserts:
+      - notExists:
+          path: spec.groups[*].rules[?(@.alert == "RustryxRedisUnavailable")]
+
+  - it: adds alertLabels to every alert but not to recording rules
+    template: templates/rules.yaml
+    values:
+      - ../ci/monitoring-prometheus-values.yaml
+    asserts:
+      - exists:
+          path: spec.groups[*].rules[?(@.alert == "RustryxDown")].labels.team
+      - notExists:
+          path: spec.groups[*].rules[?(@.record)].labels.team
+
+  - it: rewrites the runbook base URL
+    template: templates/rules.yaml
+    values:
+      - ../ci/monitoring-prometheus-values.yaml
+    set:
+      monitoring.rules.runbookBaseUrl: https://wiki.example.com/runbook
+    asserts:
+      - notExists:
+          path: spec.groups[*].rules[?(@.annotations.runbook_url =~ /github.com/)]
+      - exists:
+          path: spec.groups[*].rules[?(@.annotations.runbook_url == "https://wiki.example.com/runbook#rustryxdown")]
+
+  - it: gives every alert severity, summary and runbook_url
+    template: templates/rules.yaml
+    values:
+      - ../ci/monitoring-prometheus-values.yaml
+    asserts:
+      - notExists:
+          path: spec.groups[*].rules[?(@.alert && !@.annotations.runbook_url)]
+      - notExists:
+          path: spec.groups[*].rules[?(@.alert && !@.labels.severity)]
+      - notExists:
+          path: spec.groups[*].rules[?(@.alert && !@.annotations.summary)]
+
+  - it: points the migration and deployment alerts at this release
+    template: templates/rules.yaml
+    release:
+      name: prod
+    values:
+      - ../ci/monitoring-prometheus-values.yaml
+    asserts:
+      - exists:
+          path: spec.groups[*].rules[?(@.alert == "RustryxMigrationFailed" && @.expr =~ /prod-rustryx-migrate/)]
+      - exists:
+          path: spec.groups[*].rules[?(@.alert == "RustryxNoReadyReplicas" && @.expr =~ /deployment="prod-rustryx"/)]
+
+  - it: renders the dashboard ConfigMap with the sidecar label
+    template: templates/dashboard-configmap.yaml
+    values:
+      - ../ci/monitoring-prometheus-values.yaml
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.labels.grafana_dashboard
+          value: "1"
+      - matchRegex:
+          path: data["rustryx.json"]
+          pattern: '"uid": "rustryx-overview"'
+      - equal:
+          path: metadata.annotations.grafana_folder
+          value: Rustryx
+
+  - it: places the dashboard ConfigMap in the sidecar namespace when asked
+    template: templates/dashboard-configmap.yaml
+    values:
+      - ../ci/monitoring-vm-values.yaml
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: monitoring
+
+  - it: must_not_use_rate_on_rare_event_counters_in_the_dashboard
+    template: templates/dashboard-configmap.yaml
+    values:
+      - ../ci/monitoring-prometheus-values.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["rustryx.json"]
+          pattern: 'rate\((distlock|auth_attempts|upstream_errors|background_job_runs|oidc|ldap|http_shed)'

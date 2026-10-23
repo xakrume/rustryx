@@ -1,0 +1,121 @@
+suite: migration hook
+templates:
+  - templates/migrate-job.yaml
+values:
+  - ../ci/base-values.yaml
+tests:
+  - it: renders the hook ServiceAccount, ConfigMap and Job
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: renders a pre-install and pre-upgrade hook Job with before-hook-creation
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+
+  - it: runs rustryx migrate with bounded retries and a deadline
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - migrate
+      - equal:
+          path: spec.backoffLimit
+          value: 2
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 600
+      - equal:
+          path: spec.template.spec.restartPolicy
+          value: Never
+
+  - it: keeps a finished Job for a day so a failure stays visible
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.ttlSecondsAfterFinished
+          value: 86400
+
+  - it: uses the same secrets and config as the server pods
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].envFrom
+          value:
+            - secretRef:
+                name: rustryx
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RUSTRYX_CONFIG
+            value: /etc/rustryx/config/config.yaml
+
+  - it: runs hardened like the server and without an API token
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsUser
+          value: 10001
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: uses the same image as the Deployment
+    set:
+      image.variant: glibc
+      image.tag: 2.0.0
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/rustryx/rustryx:2.0.0-glibc
+
+  - it: must_not_label_the_Job_pods_as_server_pods
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: migrate
+
+  - it: creates the hook ServiceAccount and ConfigMap before the Job (first install has no regular resources yet)
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "-10"
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+
+  - it: must_not_render_the_Job_when_migrations_are_disabled
+    set:
+      migrations.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

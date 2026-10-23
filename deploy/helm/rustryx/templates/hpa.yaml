@@ -1,0 +1,38 @@
+{{- if .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "rustryx.fullname" . }}
+  labels:
+    {{- include "rustryx.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "rustryx.fullname" . }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.cpu.targetAverageUtilization }}
+    {{- if .Values.autoscaling.requestsPerSecond.enabled }}
+    {{- /* Per-pod request rate derived from http_requests_total. The name is whatever the
+           metrics adapter publishes for that rate; without the adapter this metric stays unknown
+           and the HPA cannot scale down. Adapter rule example in docs/helm.md. */}}
+    - type: Pods
+      pods:
+        metric:
+          name: {{ .Values.autoscaling.requestsPerSecond.metricName }}
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.autoscaling.requestsPerSecond.targetAverageValue | quote }}
+    {{- end }}
+  {{- with .Values.autoscaling.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

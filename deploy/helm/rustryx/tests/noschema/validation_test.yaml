@@ -1,0 +1,53 @@
+suite: template level validation (run with --skip-schema-validation)
+# The schema rejects these inputs first. With `helm --skip-schema-validation` the template checks
+# must still stop them, because a credential in a ConfigMap or a plain ldap:// bind is not
+# something to lose to a CLI flag.
+templates:
+  - templates/validate.yaml
+values:
+  - ../../ci/base-values.yaml
+tests:
+  - it: must_not_accept_credentials_inside_the_base_url
+    set:
+      config.server.base_url: https://admin:hunter2@rustryx.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: contains credentials
+
+  - it: must_not_accept_credentials_inside_the_otlp_endpoint
+    set:
+      config.observability.otlp_endpoint: http://user:hunter2@otel.example.com:4317
+    asserts:
+      - failedTemplate:
+          errorPattern: contains credentials
+
+  - it: must_not_accept_a_database_dsn_in_the_config
+    set:
+      config.database.url: postgres://rustryx:hunter2@db/rustryx
+    asserts:
+      - failedTemplate:
+          errorPattern: config.database.url is a secret
+
+  - it: must_not_accept_the_metrics_token_in_the_config
+    set:
+      config.observability.metrics_token: abcdefghijklmnopqrstuvwxyz
+    asserts:
+      - failedTemplate:
+          errorPattern: config.observability.metrics_token is a secret
+
+  - it: must_not_accept_plain_ldap
+    set:
+      config.auth.ldap.enabled: true
+      config.auth.ldap.url: ldap://ldap.example.com:389
+      config.auth.ldap.bind_dn: cn=x
+      secrets.entries.ldapBindPassword: true
+    asserts:
+      - failedTemplate:
+          errorPattern: ldap:// together with starttls
+
+  - it: must_not_accept_an_unknown_variant
+    set:
+      image.variant: alpine
+    asserts:
+      - failedTemplate:
+          errorPattern: image.variant

@@ -1,0 +1,28 @@
+apiVersion: v2
+name: rustryx
+description: Rustryx artifact manager (stateless nodes, PostgreSQL metadata, S3 or shared-volume blobs)
+type: application
+# version and appVersion both follow the release tag (OPS-70): one source, checked by the release job.
+version: 0.1.0
+appVersion: "0.1.0"
+# 1.30 is the first release where the native preStop `sleep` action is GA. The runtime image is
+# distroless and has no `sleep` binary, so an exec preStop cannot work and the chart depends on the action.
+kubeVersion: ">=1.30.0-0"
+home: https://github.com/rustryx/rustryx
+sources:
+  - https://github.com/rustryx/rustryx
+keywords:
+  - artifact-manager
+  - registry
+  - maven
+  - npm
+  - pypi
+  - oci
+  - helm
+  - pub
+maintainers:
+  - name: Rustryx maintainers
+    url: https://github.com/rustryx/rustryx
+annotations:
+  artifacthub.io/license: MIT
+  artifacthub.io/containsSecurityUpdates: "false"

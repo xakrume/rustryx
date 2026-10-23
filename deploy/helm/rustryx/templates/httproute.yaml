@@ -1,0 +1,33 @@
+{{- if .Values.gateway.enabled }}
+{{- $fullname := include "rustryx.fullname" . -}}
+{{- $conn := .Values.config.docker.subdomainConnector -}}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "rustryx.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    {{- toYaml .Values.gateway.parentRefs | nindent 4 }}
+  {{- $hostnames := concat .Values.gateway.hostnames .Values.gateway.docker.hostnames }}
+  {{- if $conn.enabled }}
+  {{- $hostnames = append $hostnames (printf "*.%s" $conn.baseDomain) }}
+  {{- end }}
+  {{- with $hostnames }}
+  hostnames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      {{- with .Values.gateway.timeouts }}
+      timeouts:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      backendRefs:
+        - name: {{ $fullname }}
+          port: {{ .Values.service.http.port }}
+{{- end }}

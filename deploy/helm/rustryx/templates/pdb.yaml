@@ -1,0 +1,20 @@
+{{- if .Values.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "rustryx.fullname" . }}
+  labels:
+    {{- include "rustryx.labels" . | nindent 4 }}
+spec:
+  {{- if not (kindIs "invalid" .Values.pdb.minAvailable) }}
+  minAvailable: {{ .Values.pdb.minAvailable }}
+  {{- else }}
+  maxUnavailable: {{ .Values.pdb.maxUnavailable }}
+  {{- end }}
+  {{- with .Values.pdb.unhealthyPodEvictionPolicy }}
+  unhealthyPodEvictionPolicy: {{ . }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "rustryx.selectorLabels" . | nindent 6 }}
+{{- end }}

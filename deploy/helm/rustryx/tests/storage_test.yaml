@@ -1,0 +1,178 @@
+suite: storage
+templates:
+  - templates/pvc.yaml
+  - templates/deployment.yaml
+  - templates/validate.yaml
+  - templates/configmap.yaml
+values:
+  - ../ci/base-values.yaml
+tests:
+  - it: creates no PVC with S3 storage
+    template: templates/pvc.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: S3 deployments have no PVC volume and no blob mount
+    template: templates/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.volumes[?(@.name == "blobs")]
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts[?(@.name == "blobs")]
+
+  - it: creates a PVC only for local storage
+    template: templates/pvc.yaml
+    values:
+      - ../ci/local-single-values.yaml
+    asserts:
+      - isKind:
+          of: PersistentVolumeClaim
+      - equal:
+          path: spec.resources.requests.storage
+          value: 20Gi
+      - equal:
+          path: spec.accessModes
+          value:
+            - ReadWriteOnce
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: mounts the PVC at the blob path for local storage
+    template: templates/deployment.yaml
+    values:
+      - ../ci/local-single-values.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: blobs
+            mountPath: /var/lib/rustryx/blobs
+      - equal:
+          path: spec.template.spec.volumes[?(@.name == "blobs")].persistentVolumeClaim.claimName
+          value: RELEASE-NAME-rustryx-blobs
+
+  - it: uses the Recreate strategy on a ReadWriteOnce volume (a rolling update would wait for the volume forever)
+    template: templates/deployment.yaml
+    values:
+      - ../ci/local-single-values.yaml
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+      - notExists:
+          path: spec.strategy.rollingUpdate
+
+  - it: keeps the rolling update on a confirmed ReadWriteMany volume
+    template: templates/deployment.yaml
+    values:
+      - ../ci/local-rwx-values.yaml
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+
+  - it: must_not_run_local_storage_with_two_replicas
+    template: templates/validate.yaml
+    set:
+      storage.type: local
+      replicaCount: 2
+    asserts:
+      - failedTemplate:
+          errorPattern: incompatible with HA
+
+  - it: must_not_run_local_storage_with_an_HPA_that_can_exceed_one_replica
+    template: templates/validate.yaml
+    set:
+      storage.type: local
+      replicaCount: 1
+      autoscaling.enabled: true
+      autoscaling.minReplicas: 1
+      autoscaling.maxReplicas: 3
+      config.environment: development
+    asserts:
+      - failedTemplate:
+          errorPattern: incompatible with HA
+
+  - it: must_not_accept_ReadWriteMany_without_explicit_confirmation
+    template: templates/validate.yaml
+    set:
+      storage.type: local
+      replicaCount: 2
+      storage.local.accessModes:
+        - ReadWriteMany
+    asserts:
+      - failedTemplate:
+          errorPattern: confirmReadWriteMany
+
+  - it: must_not_accept_a_confirmation_on_a_ReadWriteOnce_volume
+    template: templates/validate.yaml
+    set:
+      storage.type: local
+      replicaCount: 2
+      storage.local.confirmReadWriteMany: true
+    asserts:
+      - failedTemplate:
+          errorPattern: incompatible with HA
+
+  - it: accepts local storage with two replicas on a confirmed ReadWriteMany volume
+    template: templates/validate.yaml
+    values:
+      - ../ci/local-rwx-values.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: accepts local storage with an existing claim that the operator confirms as ReadWriteMany
+    template: templates/validate.yaml
+    set:
+      storage.type: local
+      replicaCount: 2
+      storage.local.existingClaim: shared-blobs
+      storage.local.confirmReadWriteMany: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: creates no PVC when an existing claim is given
+    template: templates/pvc.yaml
+    set:
+      storage.type: local
+      allowSingleReplica: true
+      replicaCount: 1
+      storage.local.existingClaim: shared-blobs
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the S3 settings as blob.s3_* but never keys into the config
+    template: templates/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "kind: s3"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "s3_bucket: rustryx"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "s3_path_style: true"
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "(?i)s3_access_key|s3_secret_key|password"
+
+  - it: renders the local path into the config for local storage
+    template: templates/configmap.yaml
+    values:
+      - ../ci/local-single-values.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "local_path: /var/lib/rustryx/blobs"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "kind: local"
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "s3_"

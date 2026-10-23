@@ -1,0 +1,108 @@
+suite: service
+templates:
+  - templates/service.yaml
+values:
+  - ../ci/base-values.yaml
+tests:
+  - it: exposes the API port on a ClusterIP Service
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-rustryx
+    asserts:
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.ports
+          value:
+            - name: http
+              port: 80
+              targetPort: http
+              protocol: TCP
+
+  - it: adds a separate ops port when a dedicated ops listener is configured
+    set:
+      containerPorts.ops: 9191
+      service.ops.port: 7777
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-rustryx
+    asserts:
+      - equal:
+          path: spec.ports[1]
+          value:
+            name: ops
+            port: 7777
+            targetPort: ops
+            protocol: TCP
+
+  - it: targets named container ports so the Service port can differ from the container port
+    set:
+      service.http.port: 8888
+      containerPorts.http: 8181
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-rustryx
+    asserts:
+      - equal:
+          path: spec.ports[0].targetPort
+          value: http
+      - equal:
+          path: spec.ports[0].port
+          value: 8888
+
+  - it: adds extra Service ports
+    set:
+      service.extraPorts:
+        - name: registry
+          port: 5000
+          targetPort: 8082
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-rustryx
+    asserts:
+      - lengthEqual:
+          path: spec.ports
+          count: 2
+      - equal:
+          path: spec.ports[1].targetPort
+          value: 8082
+
+  - it: selects only server pods
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-rustryx
+    asserts:
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/component: server
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/name: rustryx
+
+  - it: scrapes through a headless Service that keeps NotReady pods (targets must survive a PostgreSQL outage)
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-rustryx-metrics
+    asserts:
+      - equal:
+          path: spec.clusterIP
+          value: None
+      - equal:
+          path: spec.publishNotReadyAddresses
+          value: true
+      - equal:
+          path: spec.ports[0]
+          value:
+            name: http
+            port: 8081
+            targetPort: http
+            protocol: TCP
+
+  - it: must_not_publish_not_ready_addresses_on_the_traffic_Service
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-rustryx
+    asserts:
+      - notExists:
+          path: spec.publishNotReadyAddresses

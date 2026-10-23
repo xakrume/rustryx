@@ -1,0 +1,8 @@
+# HPA on CPU and on the per-pod request rate.
+replicaCount: 3
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 9
+  requestsPerSecond:
+    enabled: true

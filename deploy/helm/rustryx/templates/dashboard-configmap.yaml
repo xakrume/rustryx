@@ -1,0 +1,19 @@
+{{- if .Values.dashboards.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rustryx.fullname" . }}-dashboard
+  namespace: {{ default .Release.Namespace .Values.dashboards.namespace }}
+  labels:
+    {{- include "rustryx.labels" . | nindent 4 }}
+    # The Grafana sidecar picks up ConfigMaps by this label; the value is configurable because
+    # sidecar installations differ.
+    {{ .Values.dashboards.label }}: {{ .Values.dashboards.labelValue | quote }}
+  annotations:
+    {{- with .Values.dashboards.folder }}
+    grafana_folder: {{ . | quote }}
+    {{- end }}
+data:
+  rustryx.json: |-
+    {{- .Files.Get "files/rustryx-dashboard.json" | nindent 4 }}
+{{- end }}

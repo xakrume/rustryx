@@ -1,0 +1,147 @@
+# Production contour: HA, S3, PDB, HPA, default-deny NetworkPolicy, image pinned by digest.
+# Every host, CIDR and name below is a placeholder to replace for the site; there is no secret
+# value in this file and there must never be one (OPS-30, OPS-83).
+# The digest is a release input, not a file value: requireDigest makes the chart refuse to render
+# until it is given, which keeps a mutable tag out of production.
+#   helm upgrade --install rustryx deploy/helm/rustryx -f values-prod.yaml \
+#     --set image.digest=sha256:<digest of the signed image>
+image:
+  variant: musl
+  requireDigest: true
+
+config:
+  environment: production
+  server:
+    base_url: https://rustryx.example.com
+    # Pod CIDR (or node CIDR) of the ingress controller: the client address of the login guard and
+    # of the audit log is taken from X-Forwarded-For only when the direct peer is listed. REPLACE.
+    trusted_proxies:
+      - 10.42.0.0/16
+  database:
+    # Sum over all nodes (max replicas x this) plus reserve must stay below the server limit.
+    pool_size: 20
+  observability:
+    # The metrics token guards /metrics, which shares the API port. The ServiceMonitor reads the
+    # same token from the Secret (monitoring below), so scraper and app agree.
+    metrics_public: false
+    otlp_endpoint: http://otel-collector.observability:4317
+  auth:
+    oidc:
+      enabled: true
+      issuer: https://keycloak.example.com/realms/rustryx
+      client_id: rustryx-ui
+      admin_groups:
+        - /rustryx/admins
+    ldap:
+      enabled: true
+      url: ldaps://ldap.example.com:636
+      bind_dn: cn=rustryx,ou=services,dc=example,dc=com
+      user_base_dn: ou=people,dc=example,dc=com
+      admin_groups:
+        - cn=rustryx-admins,ou=groups,dc=example,dc=com
+
+storage:
+  type: s3
+  s3:
+    endpoint: https://s3.example.com
+    bucket: rustryx
+    region: us-east-1
+
+# Three replicas as the floor so one node drain or one zone failure leaves capacity for the load;
+# the HPA owns the count above that.
+replicaCount: 3
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  requestsPerSecond:
+    # Needs the metrics adapter described in docs/helm.md; CPU alone scales without it.
+    enabled: true
+
+pdb:
+  enabled: true
+  maxUnavailable: 1
+
+# Hard zone spread: a zone failure must not remove most replicas. Hostname spread stays soft so
+# the HPA can still add pods when nodes are scarce.
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+
+# SRE-33 starting values. OPS-34: replace with load test results before the first production
+# release; the memory limit has to cover peak concurrent uploads.
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    memory: 1Gi
+
+# Clients push multi-GB blobs: give a node time to finish them before the pod is killed.
+# terminationGracePeriodSeconds is derived: preStop 10 + drain 120 + slack 15 = 145 s.
+shutdown:
+  timeoutSeconds: 120
+
+secrets:
+  existingSecret: rustryx
+  mode: file
+  entries:
+    oidcClientSecret: true
+    ldapBindPassword: true
+
+ingress:
+  enabled: true
+  certManager:
+    enabled: true
+    issuerName: letsencrypt-prod
+  hosts:
+    - host: rustryx.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: rustryx-tls
+      hosts:
+        - rustryx.example.com
+
+# Replace every peer with the real address or selector. An empty peer list fails the render, so
+# nothing here can be forgotten silently.
+networkPolicy:
+  egress:
+    postgresql:
+      to:
+        - ipBlock:
+            cidr: 10.0.10.10/32
+    s3:
+      to:
+        - ipBlock:
+            cidr: 10.0.20.20/32
+    keycloak:
+      to:
+        - ipBlock:
+            cidr: 10.0.30.10/32
+    ldap:
+      to:
+        - ipBlock:
+            cidr: 10.0.30.20/32
+    upstream:
+      cidrs: []
+  # With Cilium, name the upstream registries instead of resolving CIDRs. Read the shared-IP trap
+  # in docs/helm.md before relying on this as a boundary.
+  cilium:
+    enabled: false
+    upstreamHosts: []
+
+monitoring:
+  serviceMonitor:
+    enabled: true
+  rules:
+    enabled: true
+    alertLabels:
+      contour: prod
+dashboards:
+  enabled: true

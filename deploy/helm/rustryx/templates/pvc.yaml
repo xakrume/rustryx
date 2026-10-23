@@ -1,0 +1,26 @@
+{{- /*
+A PVC exists only for the local blob store and only when the operator did not bring a claim.
+It is annotated to survive `helm uninstall`: deleting the release must not delete the blobs.
+*/ -}}
+{{- if and (eq .Values.storage.type "local") (not .Values.storage.local.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "rustryx.pvcName" . }}
+  labels:
+    {{- include "rustryx.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+    {{- with .Values.storage.local.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.storage.local.accessModes | nindent 4 }}
+  {{- with .Values.storage.local.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.local.size | quote }}
+{{- end }}

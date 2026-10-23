@@ -1,0 +1,128 @@
+suite: configuration file
+# The file uses the application's own key names (docs/config.md). Unknown keys are startup errors in
+# the config loader, so these tests pin the exact keys the chart writes.
+templates:
+  - templates/configmap.yaml
+values:
+  - ../ci/base-values.yaml
+tests:
+  - it: renders a read-only config file from values
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "base_url: https://rustryx.example.com"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "environment: production"
+
+  - it: derives the listen address from containerPorts so file and pod spec agree
+    set:
+      containerPorts.http: 8181
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "listen_addr: 0.0.0.0:8181"
+
+  - it: derives the shutdown deadline from shutdown.timeoutSeconds
+    set:
+      shutdown.timeoutSeconds: 120
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "shutdown_timeout_secs: 120"
+
+  - it: must_not_write_keys_the_config_schema_does_not_know
+    values:
+      - ../ci/full-values.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "(^|\\n)(http|tracing|redis|metrics|storage|env):|ops_listen|subdomain"
+
+  - it: drops empty optional values instead of passing empty strings to the app
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "public_issuer_url|default_role|otlp_endpoint|client_id|ca_file"
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: '""'
+
+  - it: keeps booleans that are false
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "anonymous_enabled: false"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "enabled: false"
+
+  - it: the subdomain connector flag is routing only and writes no application key
+    values:
+      - ../ci/subdomain-connector-values.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "subdomain|docker|registry.example.com"
+
+  - it: merges extra settings on top
+    set:
+      config.extra.limits.max_body_mb: 20
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "max_body_mb: 20"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "base_url: https://rustryx.example.com"
+
+  - it: passes limits, upstream and gc settings through unchanged
+    set:
+      config.limits.max_blob_bytes: 10737418240
+      config.upstream.allowed_hosts:
+        - registry.npmjs.org
+      config.gc.interval_secs: 7200
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "max_blob_bytes: 10737418240"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "- registry.npmjs.org"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "interval_secs: 7200"
+
+  - it: must_not_put_secrets_into_the_config_file
+    values:
+      - ../ci/full-values.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "(?i)password|secret|jwt_key|cookie_key|metrics_token|redis_url|BEGIN [A-Z ]*PRIVATE KEY"
+
+  - it: renders the identity provider, lock and trust settings from non-sensitive values
+    values:
+      - ../ci/full-values.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "issuer: https://keycloak.example.com/realms/rustryx"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "url: ldap://ldap.example.com:389"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "starttls: true"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "ca_file: /etc/rustryx/ca/ca-bundle.crt"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "backend: redis"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "10.42.0.0/16"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "otlp_endpoint: http://otel-collector.observability:4317"

@@ -1,0 +1,36 @@
+# Layer 0 of the CI matrix: the minimum a production-mode install needs. Every other file in ci/
+# is layered on top with a second `-f`. Peers are documentation addresses (RFC 5737 style
+# placeholders, /32) and carry no secrets. S3 and NetworkPolicy are on, everything optional is off.
+config:
+  environment: production
+  server:
+    base_url: https://rustryx.example.com
+storage:
+  type: s3
+  s3:
+    endpoint: https://s3.example.com
+    bucket: rustryx
+    region: us-east-1
+    path_style: true
+networkPolicy:
+  egress:
+    postgresql:
+      to:
+        - ipBlock:
+            cidr: 10.0.10.10/32
+    redis:
+      to:
+        - ipBlock:
+            cidr: 10.0.10.20/32
+    s3:
+      to:
+        - ipBlock:
+            cidr: 10.0.20.20/32
+    keycloak:
+      to:
+        - ipBlock:
+            cidr: 10.0.30.10/32
+    ldap:
+      to:
+        - ipBlock:
+            cidr: 10.0.30.20/32

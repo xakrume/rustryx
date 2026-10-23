@@ -1,0 +1,198 @@
+# promtool unit tests for rustryx-alerts.yaml. Run: promtool test rules tests/rustryx-alerts_test.yaml
+# (from deploy/monitoring). Each test pins a behaviour that would otherwise rot silently: an alert
+# that cannot fire is indistinguishable from a healthy system.
+rule_files:
+  - ../rustryx-alerts.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # The SLI must read 1 while there is traffic and no 5xx series yet. Without the `or 0 * ...`
+  # term the division returns nothing and the dashboard shows "no data" instead of 100%.
+  - name: sli_is_one_without_5xx_series
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="rustryx",namespace="ryx",route="/repository/{name}/{path}",method="GET",status="200"}'
+        values: "0+60x20"
+    promql_expr_test:
+      - expr: rustryx:sli_availability:ratio_rate5m
+        eval_time: 15m
+        exp_samples:
+          - labels: 'rustryx:sli_availability:ratio_rate5m{namespace="ryx"}'
+            value: 1
+
+  # Probe and metrics routes are excluded from the SLI (SRE-14): 100% failing /readyz must not
+  # count as errors.
+  - name: probe_routes_do_not_count
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="rustryx",namespace="ryx",route="/repository/{name}/{path}",method="GET",status="200"}'
+        values: "0+60x20"
+      - series: 'http_requests_total{job="rustryx",namespace="ryx",route="/readyz",method="GET",status="503"}'
+        values: "0+600x20"
+    promql_expr_test:
+      - expr: rustryx:sli_availability:ratio_rate5m
+        eval_time: 15m
+        exp_samples:
+          - labels: 'rustryx:sli_availability:ratio_rate5m{namespace="ryx"}'
+            value: 1
+
+  # http_requests_total is a generic name. Another service in the same namespace that exports it
+  # must not move the Rustryx SLI: the selectors carry job="rustryx".
+  - name: other_services_with_the_same_metric_name_are_ignored
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="rustryx",namespace="ryx",route="/repository/{name}/{path}",method="GET",status="200"}'
+        values: "0+60x20"
+      - series: 'http_requests_total{job="billing",namespace="ryx",route="/pay",method="POST",status="500"}'
+        values: "0+600x20"
+    promql_expr_test:
+      - expr: rustryx:sli_availability:ratio_rate5m
+        eval_time: 15m
+        exp_samples:
+          - labels: 'rustryx:sli_availability:ratio_rate5m{namespace="ryx"}'
+            value: 1
+
+  - name: high_5xx_fires_and_idle_does_not
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="rustryx",namespace="ryx",route="/repository/{name}/{path}",method="GET",status="200"}'
+        values: "0+90x30"
+      - series: 'http_requests_total{job="rustryx",namespace="ryx",route="/repository/{name}/{path}",method="GET",status="500"}'
+        values: "0+10x30"
+      # A second namespace with no traffic at all must stay silent.
+      - series: 'http_requests_total{job="rustryx",namespace="idle",route="/repository/{name}/{path}",method="GET",status="200"}'
+        values: "5x30"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: RustryxHigh5xx
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              namespace: ryx
+            exp_annotations:
+              summary: "More than 2% of Rustryx requests fail with 5xx in ryx"
+              description: "Availability over 5m is 90%. Probe and metrics routes are excluded."
+              runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxhigh5xx
+
+  - name: all_targets_down_is_critical
+    interval: 1m
+    input_series:
+      - series: 'up{job="rustryx",namespace="ryx",pod="rustryx-0"}'
+        values: "0x10"
+      - series: 'up{job="rustryx",namespace="ryx",pod="rustryx-1"}'
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: RustryxDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: ryx
+            exp_annotations:
+              summary: "No Rustryx replica is reachable by the scraper in ryx"
+              description: "Every scrape target of job rustryx reports up=0. The scrape goes through the headless metrics Service that keeps NotReady pods, so this means the pods are gone or unreachable, not merely NotReady."
+              runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxdown
+
+  # One replica down must warn but must not page as "all down".
+  - name: one_replica_down_is_not_all_down
+    interval: 1m
+    input_series:
+      - series: 'up{job="rustryx",namespace="ryx",pod="rustryx-0"}'
+        values: "0x10"
+      - series: 'up{job="rustryx",namespace="ryx",pod="rustryx-1"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: RustryxDown
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: RustryxReplicaDown
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              namespace: ryx
+              pod: rustryx-0
+              job: rustryx
+            exp_annotations:
+              summary: "Rustryx replica rustryx-0 is not scraped"
+              description: "One replica does not answer on the ops port while others may be fine. Capacity is reduced."
+              runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxreplicadown
+
+  - name: targets_absent
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="rustryx",namespace="ryx",route="/x",method="GET",status="200"}'
+        values: "0+1x10"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: RustryxTargetsAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: rustryx
+            exp_annotations:
+              summary: "Prometheus has no Rustryx scrape targets at all"
+              description: 'The series up{job="rustryx"} does not exist. The ServiceMonitor is missing, the Service has no endpoints or the job was renamed.'
+              runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxtargetsabsent
+
+  - name: db_unavailable
+    interval: 1m
+    input_series:
+      - series: 'db_up{job="rustryx",namespace="ryx",pod="rustryx-0"}'
+        values: "0x10"
+      - series: 'db_up{job="rustryx",namespace="ryx",pod="rustryx-1"}'
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: RustryxDbUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: ryx
+            exp_annotations:
+              summary: "Rustryx cannot reach PostgreSQL in ryx"
+              description: "SELECT 1 fails on every node. All pods are NotReady by design and are not restarted. Nothing but already cached data can be served."
+              runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxdbunavailable
+
+  # Job staleness uses the per-job threshold table and the exported_job label (the exposed `job`
+  # label is renamed on scrape). blob_gc is stale after two days, audit_rotation is not.
+  - name: job_stale_uses_per_job_threshold
+    interval: 1m
+    input_series:
+      - series: 'background_job_last_success_timestamp_seconds{job="rustryx",namespace="ryx",exported_job="blob_gc"}'
+        values: "0x4400"
+      - series: 'background_job_last_success_timestamp_seconds{job="rustryx",namespace="ryx",exported_job="audit_rotation"}'
+        values: "0x4400"
+    alert_rule_test:
+      - eval_time: 72h
+        alertname: RustryxJobStale
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              namespace: ryx
+              exported_job: blob_gc
+            exp_annotations:
+              summary: "Background job blob_gc has not succeeded within its allowed interval"
+              description: "Last success was 3d 0h 0m 0s ago."
+              runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxjobstale
+
+  # Rare events use increase(): one failed run must raise the alert even though its per-second
+  # rate is tiny.
+  - name: single_job_failure_alerts
+    interval: 1m
+    input_series:
+      - series: 'background_job_runs_total{job="rustryx",namespace="ryx",exported_job="cleanup",result="error"}'
+        values: "0 0 0 0 0 1 1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: RustryxJobFailed
+        exp_alerts:
+          - exp_labels:
+              severity: medium
+              namespace: ryx
+              exported_job: cleanup
+            exp_annotations:
+              summary: "Background job cleanup failed"
+              description: "1 failed runs in the last hour. A failed run leaves state that the next run picks up (jobs are idempotent)."
+              runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxjobfailed

@@ -1,0 +1,101 @@
+suite: ingress and gateway
+templates:
+  - templates/ingress.yaml
+  - templates/httproute.yaml
+values:
+  - ../ci/base-values.yaml
+tests:
+  - it: renders neither Ingress nor HTTPRoute by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders an nginx Ingress with large-upload annotations
+    template: templates/ingress.yaml
+    values:
+      - ../ci/ingress-values.yaml
+    asserts:
+      - equal:
+          path: spec.ingressClassName
+          value: nginx
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-body-size"]
+          value: "0"
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-request-buffering"]
+          value: "off"
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-read-timeout"]
+          value: "600"
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.number
+          value: 80
+      - equal:
+          path: spec.tls[0].secretName
+          value: rustryx-tls
+
+  - it: writes the nginx annotations only for the nginx class
+    template: templates/ingress.yaml
+    values:
+      - ../ci/ingress-values.yaml
+    set:
+      ingress.className: traefik
+    asserts:
+      - notExists:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-body-size"]
+
+  - it: renders an HTTPRoute with the parent Gateway
+    template: templates/httproute.yaml
+    values:
+      - ../ci/gateway-values.yaml
+    asserts:
+      - isKind:
+          of: HTTPRoute
+      - equal:
+          path: spec.parentRefs[0].name
+          value: public
+      - equal:
+          path: spec.hostnames
+          value:
+            - rustryx.example.com
+      - equal:
+          path: spec.rules[0].backendRefs[0].port
+          value: 80
+
+  - it: renders both when allowWithIngress is set deliberately
+    template: templates/httproute.yaml
+    values:
+      - ../ci/ingress-values.yaml
+      - ../ci/gateway-values.yaml
+    set:
+      gateway.allowWithIngress: true
+    asserts:
+      - isKind:
+          of: HTTPRoute
+
+  - it: serves Docker clients from a dedicated host and the subdomain connector wildcard
+    template: templates/ingress.yaml
+    values:
+      - ../ci/subdomain-connector-values.yaml
+    asserts:
+      - equal:
+          path: spec.rules[1].host
+          value: registry.example.com
+      - equal:
+          path: spec.rules[2].host
+          value: "*.registry.example.com"
+
+  - it: adds the subdomain wildcard to the HTTPRoute
+    template: templates/httproute.yaml
+    values:
+      - ../ci/gateway-values.yaml
+      - ../ci/subdomain-connector-values.yaml
+    set:
+      ingress.enabled: false
+    asserts:
+      - contains:
+          path: spec.hostnames
+          content: "*.registry.example.com"

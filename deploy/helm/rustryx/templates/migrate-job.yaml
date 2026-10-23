@@ -1,0 +1,104 @@
+{{- if .Values.migrations.enabled }}
+{{- /*
+Schema migration as a Helm hook (README 8.2, OPS-40). `rustryx migrate` takes a PostgreSQL
+advisory lock, so a concurrent second run waits or exits cleanly; the Deployment never migrates.
+With ArgoCD, pre-install and pre-upgrade hooks run as PreSync.
+
+Hook ordering trap: on a first install no regular resource exists yet when a pre-install hook
+runs. The Job therefore gets its own hook copies of the ServiceAccount and the ConfigMap
+(weight -10, created before the Job at weight -5) and reads the Secret that the operator created
+beforehand. The Secret cannot be a chart resource unless externalSecret.hook is set.
+*/ -}}
+{{- $name := printf "%s-migrate" (include "rustryx.fullname" .) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "rustryx.migrateLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "rustryx.migrateLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+data:
+  config.yaml: |
+    {{- include "rustryx.configYaml" . | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "rustryx.migrateLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  {{- with .Values.migrations.ttlSecondsAfterFinished }}
+  ttlSecondsAfterFinished: {{ . }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "rustryx.migrateLabels" . | nindent 8 }}
+      {{- with .Values.migrations.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          # Same image as the server pods it prepares the schema for.
+          image: {{ include "rustryx.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            {{- toYaml .Values.migrations.args | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            {{- include "rustryx.commonEnv" . | nindent 12 }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if or (include "rustryx.commonEnvFrom" . | trim) .Values.extraEnvFrom }}
+          envFrom:
+            {{- include "rustryx.commonEnvFrom" . | nindent 12 }}
+            {{- with .Values.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "rustryx.commonVolumeMounts" . | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $name }}
+        {{- include "rustryx.commonVolumes" . | nindent 8 }}
+{{- end }}

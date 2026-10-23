@@ -1,0 +1,46 @@
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+{{- $sm := .Values.monitoring.serviceMonitor }}
+{{- $isVM := eq .Values.monitoring.flavor "victoriametrics" }}
+apiVersion: {{ ternary "operator.victoriametrics.com/v1beta1" "monitoring.coreos.com/v1" $isVM }}
+kind: {{ ternary "VMServiceScrape" "ServiceMonitor" $isVM }}
+metadata:
+  name: {{ include "rustryx.fullname" . }}
+  labels:
+    {{- include "rustryx.labels" . | nindent 4 }}
+    {{- with $sm.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  # The `job` label of every series becomes the value of the Service label app.kubernetes.io/name,
+  # i.e. "rustryx", whatever the release is called. The alert rules select up{job="rustryx"}.
+  jobLabel: app.kubernetes.io/name
+  # Scrape through the headless metrics Service so NotReady pods stay targets (see service.yaml).
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "rustryx.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/service-role: metrics
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: {{ include "rustryx.opsPortName" . }}
+      path: /metrics
+      interval: {{ $sm.interval }}
+      scrapeTimeout: {{ $sm.scrapeTimeout }}
+      # false on purpose: the background job metrics carry a `job` label of their own, which must
+      # become `exported_job` instead of overwriting the scrape job (see rustryx-alerts.yaml).
+      honorLabels: false
+      {{- /* The pods demand a Bearer token on /metrics unless metrics_public is on. The default token
+             source is the very Secret the pods read, so the scraper and the app cannot disagree. */}}
+      {{- if not .Values.config.observability.metrics_public }}
+      bearerTokenSecret:
+        {{- if $sm.bearerTokenSecret.name }}
+        name: {{ $sm.bearerTokenSecret.name }}
+        key: {{ required "monitoring.serviceMonitor.bearerTokenSecret.key is required with a name" $sm.bearerTokenSecret.key }}
+        {{- else }}
+        name: {{ include "rustryx.secretName" . }}
+        key: RUSTRYX_OBSERVABILITY_METRICS_TOKEN
+        {{- end }}
+      {{- end }}
+{{- end }}

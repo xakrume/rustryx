@@ -1,0 +1,72 @@
+# Everything switched on: OIDC, LDAP over StartTLS, Redis lock backend, file-mounted secrets,
+# ExternalSecret, custom CA, Cilium FQDN allowlist, hard anti-affinity, digest pin. Gateway next to
+# Ingress is NOT used here (mutual exclusion is tested separately).
+replicaCount: 3
+image:
+  variant: glibc
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  requireDigest: true
+imagePullSecrets:
+  - name: registry-pull
+affinity:
+  podAntiAffinity:
+    mode: hard
+secrets:
+  mode: file
+  entries:
+    databaseDirectUrl: true
+    lockRedisUrl: true
+    oidcClientSecret: true
+    ldapBindPassword: true
+externalSecret:
+  enabled: true
+  hook: true
+  creationPolicy: Orphan
+  secretStoreRef:
+    name: platform-vault
+    kind: ClusterSecretStore
+  serviceAccount:
+    create: true
+  data:
+    - secretKey: RUSTRYX_DATABASE_URL
+      remoteRef:
+        key: rustryx/database
+        property: url
+    - secretKey: RUSTRYX_AUTH_INTERNAL_JWT_KEY
+      remoteRef:
+        key: rustryx/auth
+        property: internal_jwt_key
+tls:
+  customCA:
+    enabled: true
+    existingConfigMap: internal-ca
+config:
+  lock:
+    backend: redis
+  auth:
+    oidc:
+      enabled: true
+      issuer: https://keycloak.example.com/realms/rustryx
+      client_id: rustryx-ui
+      admin_groups:
+        - /rustryx/admins
+    ldap:
+      enabled: true
+      url: ldap://ldap.example.com:389
+      starttls: true
+      bind_dn: cn=rustryx,ou=services,dc=example,dc=com
+      user_base_dn: ou=people,dc=example,dc=com
+      ca_file: /etc/rustryx/ca/ca-bundle.crt
+      admin_groups:
+        - cn=rustryx-admins,ou=groups,dc=example,dc=com
+  server:
+    trusted_proxies:
+      - 10.42.0.0/16
+  observability:
+    otlp_endpoint: http://otel-collector.observability:4317
+networkPolicy:
+  cilium:
+    enabled: true
+    upstreamHosts:
+      - registry.npmjs.org
+      - "*.maven.org"

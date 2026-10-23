@@ -1,0 +1,22 @@
+suite: template level defences (run with --skip-schema-validation)
+# values.schema.json already rejects these inputs. Helm can be run with --skip-schema-validation,
+# and OPS-18 (no latest tag) must hold even then, so the template checks too. test.sh runs this
+# directory with the schema check disabled.
+templates:
+  - templates/deployment.yaml
+values:
+  - ../../ci/base-values.yaml
+tests:
+  - it: must_not_render_the_latest_tag
+    set:
+      image.tag: latest
+    asserts:
+      - failedTemplate:
+          errorPattern: latest
+
+  - it: must_not_render_the_latest_tag_with_any_case
+    set:
+      image.tag: LATEST
+    asserts:
+      - failedTemplate:
+          errorPattern: latest

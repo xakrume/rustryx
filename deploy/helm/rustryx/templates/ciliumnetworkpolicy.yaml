@@ -1,0 +1,47 @@
+{{- /*
+Optional FQDN allowlist for upstream registries (proxy repositories). Plain NetworkPolicy cannot
+match host names. Cilium resolves the names through its DNS proxy and allows the resulting IPs.
+Trap to know before enabling: the allowance is per IP identity, so when an allowed name shares an
+IP with other names (a CDN edge) every name on that IP becomes reachable. Treat this as a coarse
+allowlist, not as a per-site boundary, and test with a connection to a name that is NOT listed.
+*/ -}}
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.cilium.enabled }}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "rustryx.fullname" . }}-upstream-fqdn
+  labels:
+    {{- include "rustryx.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- include "rustryx.selectorLabels" . | nindent 6 }}
+  egress:
+    # The DNS proxy rule is required: without it Cilium never learns which IPs a name resolves
+    # to and toFQDNs matches nothing.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchPattern: "*"
+    - toFQDNs:
+        {{- range .Values.networkPolicy.cilium.upstreamHosts }}
+        {{- if contains "*" . }}
+        - matchPattern: {{ . | quote }}
+        {{- else }}
+        - matchName: {{ . | quote }}
+        {{- end }}
+        {{- end }}
+      toPorts:
+        - ports:
+            {{- range .Values.networkPolicy.cilium.upstreamPorts }}
+            - port: {{ . | quote }}
+              protocol: TCP
+            {{- end }}
+{{- end }}

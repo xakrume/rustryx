@@ -1,0 +1,79 @@
+{{- if .Values.ingress.enabled }}
+{{- $fullname := include "rustryx.fullname" . -}}
+{{- $svcPort := .Values.service.http.port -}}
+{{- $conn := .Values.config.docker.subdomainConnector -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "rustryx.labels" . | nindent 4 }}
+  annotations:
+    {{- if and .Values.ingress.largeUploads.enabled (eq .Values.ingress.className "nginx") }}
+    {{- /* Without these nginx caps bodies at 1m and buffers requests to disk, which breaks
+           docker push, mvn deploy and npm publish of large artifacts. */}}
+    nginx.ingress.kubernetes.io/proxy-body-size: {{ .Values.ingress.largeUploads.proxyBodySize | quote }}
+    nginx.ingress.kubernetes.io/proxy-request-buffering: {{ .Values.ingress.largeUploads.requestBuffering | quote }}
+    nginx.ingress.kubernetes.io/proxy-buffering: {{ .Values.ingress.largeUploads.responseBuffering | quote }}
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: {{ .Values.ingress.largeUploads.connectTimeoutSeconds | quote }}
+    nginx.ingress.kubernetes.io/proxy-read-timeout: {{ .Values.ingress.largeUploads.readTimeoutSeconds | quote }}
+    nginx.ingress.kubernetes.io/proxy-send-timeout: {{ .Values.ingress.largeUploads.sendTimeoutSeconds | quote }}
+    {{- end }}
+    {{- if .Values.ingress.certManager.enabled }}
+    {{- if eq .Values.ingress.certManager.issuerKind "ClusterIssuer" }}
+    cert-manager.io/cluster-issuer: {{ required "ingress.certManager.issuerName is required" .Values.ingress.certManager.issuerName }}
+    {{- else }}
+    cert-manager.io/issuer: {{ required "ingress.certManager.issuerName is required" .Values.ingress.certManager.issuerName }}
+    {{- end }}
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ default "Prefix" .pathType }}
+            backend:
+              service:
+                name: {{ $fullname }}
+                port:
+                  number: {{ $svcPort }}
+          {{- end }}
+    {{- end }}
+    {{- range .Values.ingress.docker.hosts }}
+    - host: {{ . | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname }}
+                port:
+                  number: {{ $svcPort }}
+    {{- end }}
+    {{- if $conn.enabled }}
+    {{- /* Subdomain connector: <repository>.<baseDomain> reaches the same Service; the app maps the
+           host to the Docker repository. The TLS certificate must be a wildcard for baseDomain. */}}
+    - host: {{ printf "*.%s" $conn.baseDomain | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname }}
+                port:
+                  number: {{ $svcPort }}
+    {{- end }}
+{{- end }}

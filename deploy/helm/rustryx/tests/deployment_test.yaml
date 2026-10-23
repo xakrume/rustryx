@@ -1,0 +1,347 @@
+suite: deployment
+templates:
+  - templates/deployment.yaml
+values:
+  - ../ci/base-values.yaml
+tests:
+  - it: runs two replicas by default
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+      - isKind:
+          of: Deployment
+
+  - it: omits replicas when the HPA owns the count
+    values:
+      - ../ci/autoscaling-values.yaml
+    asserts:
+      - notExists:
+          path: spec.replicas
+
+  - it: rolls out with maxUnavailable 0 and maxSurge 1
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 1
+
+  - it: hardens the container (non-root 10001, no escalation, read-only rootfs, drop ALL, seccomp)
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsUser
+          value: 10001
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsGroup
+          value: 10001
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          value:
+            - ALL
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.fsGroup
+          value: 10001
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+
+  - it: must_not_mount_the_service_account_token
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: must_not_allow_weakening_the_security_context_through_values
+    set:
+      securityContext.readOnlyRootFilesystem: false
+    asserts:
+      - failedTemplate:
+          errorPattern: readOnlyRootFilesystem
+
+  - it: must_not_allow_privilege_escalation_through_values
+    set:
+      securityContext.allowPrivilegeEscalation: true
+    asserts:
+      - failedTemplate:
+          errorPattern: allowPrivilegeEscalation
+
+  - it: must_not_run_as_root_through_values
+    set:
+      podSecurityContext.runAsNonRoot: false
+    asserts:
+      - failedTemplate:
+          errorPattern: runAsNonRoot
+
+  - it: serve never migrates
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - serve
+
+  - it: writes only to an emptyDir on /tmp and mounts the config read-only
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: tmp
+            emptyDir:
+              sizeLimit: 1Gi
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: tmp
+            mountPath: /tmp
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: config
+            mountPath: /etc/rustryx/config
+            readOnly: true
+      - notExists:
+          path: spec.template.spec.volumes[?(@.persistentVolumeClaim)]
+
+  - it: points the app at the rendered config file
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RUSTRYX_CONFIG
+            value: /etc/rustryx/config/config.yaml
+      - equal:
+          path: spec.template.spec.containers[0].ports
+          value:
+            - name: http
+              containerPort: 8081
+              protocol: TCP
+
+  - it: must_not_inject_service_link_variables
+    asserts:
+      - equal:
+          path: spec.template.spec.enableServiceLinks
+          value: false
+
+  - it: must_not_carry_vault_variables_or_secret_literals
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name =~ /VAULT_.*/)]
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name =~ /PASSWORD|SECRET|KEY|TOKEN|DATABASE_URL|DSN/ && @.value =~ /^[^\/]/)]
+
+  - it: takes the secrets through envFrom of the existing Secret in env mode
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].envFrom
+          value:
+            - secretRef:
+                name: rustryx
+
+  - it: mounts the Secret read-only and uses _FILE variables in file mode
+    set:
+      secrets.mode: file
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].envFrom
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: secrets
+            mountPath: /var/run/secrets/rustryx
+            readOnly: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RUSTRYX_DATABASE_URL_FILE
+            value: /var/run/secrets/rustryx/RUSTRYX_DATABASE_URL
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RUSTRYX_BLOB_S3_SECRET_KEY_FILE
+            value: /var/run/secrets/rustryx/RUSTRYX_BLOB_S3_SECRET_KEY
+      - equal:
+          path: spec.template.spec.volumes[?(@.name == "secrets")].secret.secretName
+          value: rustryx
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name =~ /PASSWORD|SECRET|KEY|TOKEN|DATABASE_URL|DSN/ && @.value =~ /^[^\/]/)]
+
+  - it: renders _FILE variables only for enabled secret entries
+    set:
+      secrets.mode: file
+      secrets.entries.s3AccessKey: false
+      secrets.entries.s3SecretKey: false
+      secrets.entries.bootstrapAdminPassword: false
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name == "RUSTRYX_BLOB_S3_ACCESS_KEY_FILE")]
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name == "RUSTRYX_AUTH_BOOTSTRAP_ADMIN_PASSWORD_FILE")]
+      - exists:
+          path: spec.template.spec.containers[0].env[?(@.name == "RUSTRYX_AUTH_INTERNAL_JWT_KEY_FILE")]
+
+  - it: lets uploads finish on shutdown (native preStop sleep, derived grace period)
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.sleep.seconds
+          value: 10
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 55
+      - notExists:
+          path: spec.template.spec.containers[0].lifecycle.preStop.exec
+
+  - it: derives the grace period from the drain deadline (preStop + drain + slack)
+    set:
+      shutdown.timeoutSeconds: 120
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 145
+
+  - it: honours an explicit grace period
+    set:
+      terminationGracePeriodSeconds: 600
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 600
+
+  - it: keeps the preStop pause at least as long as readiness needs to leave the balancer
+    asserts:
+      # readiness periodSeconds 5 x failureThreshold 2 = 10 s <= preStop 10 s
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.periodSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.failureThreshold
+          value: 2
+
+  - it: prefers spreading over nodes with a soft anti-affinity
+    asserts:
+      - equal:
+          path: spec.template.spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.topologyKey
+          value: kubernetes.io/hostname
+      - notExists:
+          path: spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution
+
+  - it: requires spreading with a hard anti-affinity
+    set:
+      affinity.podAntiAffinity.mode: hard
+    asserts:
+      - equal:
+          path: spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution[0].topologyKey
+          value: kubernetes.io/hostname
+      - notExists:
+          path: spec.template.spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution
+
+  - it: renders no affinity with mode none
+    set:
+      affinity.podAntiAffinity.mode: none
+    asserts:
+      - notExists:
+          path: spec.template.spec.affinity
+
+  - it: spreads over zones and nodes with whenUnsatisfiable from values and a label selector
+    set:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+        - maxSkew: 2
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.topologySpreadConstraints
+          count: 2
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].whenUnsatisfiable
+          value: DoNotSchedule
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[1].maxSkew
+          value: 2
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].labelSelector.matchLabels
+          value:
+            app.kubernetes.io/component: server
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/name: rustryx
+
+  - it: supports imagePullSecrets
+    set:
+      imagePullSecrets:
+        - name: registry-pull
+    asserts:
+      - equal:
+          path: spec.template.spec.imagePullSecrets
+          value:
+            - name: registry-pull
+
+  - it: restarts pods when the config changes
+    asserts:
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/config"]
+          pattern: "^[a-f0-9]{64}$"
+
+  - it: selects pods with a component label so a migration pod never receives traffic
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/component: server
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/name: rustryx
+
+  - it: declares the container ports from containerPorts (dedicated ops listener)
+    set:
+      containerPorts.http: 8181
+      containerPorts.ops: 9191
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: http
+            containerPort: 8181
+            protocol: TCP
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: ops
+            containerPort: 9191
+            protocol: TCP
+
+  - it: custom CA is mounted read-only and announced through SSL_CERT_FILE
+    set:
+      tls.customCA.enabled: true
+      tls.customCA.existingConfigMap: internal-ca
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSL_CERT_FILE
+            value: /etc/rustryx/ca/ca-bundle.crt
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: custom-ca
+            mountPath: /etc/rustryx/ca
+            readOnly: true

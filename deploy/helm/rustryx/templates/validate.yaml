@@ -1,0 +1,5 @@
+{{- /*
+Renders nothing. It exists so that every `helm template`, `helm lint` and `helm install` runs the
+cross-field validation, whichever resources the values happen to enable.
+*/ -}}
+{{- include "rustryx.validate" . -}}

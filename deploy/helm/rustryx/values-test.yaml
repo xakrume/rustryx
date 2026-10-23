@@ -1,0 +1,98 @@
+# Test contour: smallest footprint, test identity providers and object store, observation of the
+# whole path including NetworkPolicy and monitoring. No secret value appears here: the Secret
+# named in secrets.existingSecret is created in the cluster by the operator or by ESO.
+# Layer over values.yaml: helm upgrade --install rustryx deploy/helm/rustryx -f values-test.yaml
+config:
+  # `production` on purpose: the test contour must refuse weak credentials and missing keys exactly
+  # where production would, so a bad Secret fails here first. Only the replica count is relaxed.
+  environment: production
+  server:
+    base_url: https://rustryx.test.example.com
+  auth:
+    oidc:
+      enabled: true
+      issuer: https://keycloak.test.example.com/realms/rustryx-test
+      client_id: rustryx-ui
+      admin_groups:
+        - /rustryx/admins
+    ldap:
+      enabled: true
+      url: ldaps://ldap.test.example.com:636
+      bind_dn: cn=rustryx,ou=services,dc=test,dc=example,dc=com
+      user_base_dn: ou=people,dc=test,dc=example,dc=com
+      admin_groups:
+        - cn=rustryx-admins,ou=groups,dc=test,dc=example,dc=com
+  observability:
+    # Full sampling on test: low traffic, and every trace is wanted when a rollout is verified.
+    otlp_sample_ratio: 1
+
+storage:
+  type: s3
+  s3:
+    endpoint: https://minio.test.example.com
+    bucket: rustryx-test
+    region: us-east-1
+    path_style: true
+
+# One replica is enough on test; the rolling update still waits for readiness (maxUnavailable 0).
+# A one-replica PDB would block every node drain, so it is off. allowSingleReplica lifts the
+# two-replica floor that production mode enforces.
+replicaCount: 1
+allowSingleReplica: true
+pdb:
+  enabled: false
+affinity:
+  podAntiAffinity:
+    mode: none
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+secrets:
+  existingSecret: rustryx
+  entries:
+    oidcClientSecret: true
+    ldapBindPassword: true
+
+ingress:
+  enabled: true
+  hosts:
+    - host: rustryx.test.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: rustryx-test-tls
+      hosts:
+        - rustryx.test.example.com
+
+# Dependencies run in one namespace of the test cluster; peers are selected by namespace.
+networkPolicy:
+  egress:
+    postgresql:
+      to: &deps
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: rustryx-test-deps
+    s3:
+      to: *deps
+    keycloak:
+      to: *deps
+    ldap:
+      to: *deps
+
+monitoring:
+  serviceMonitor:
+    enabled: true
+  rules:
+    enabled: true
+    alertLabels:
+      contour: test
+    # No Redis on the test contour.
+    disabled:
+      - RustryxRedisUnavailable
+dashboards:
+  enabled: true

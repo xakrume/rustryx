@@ -1,0 +1,23 @@
+# Manifest scanner policy for test.sh (OPS-42): the default checks plus the hardening checks the
+# chart promises, with the one exclusion below. Probe presence is not checked here: the migration
+# Job runs to completion and has none by design; check_rendered.py asserts the server probes. Stylistic checks such as sorted-keys are not enabled.
+checks:
+  exclude:
+    # Names such as RUSTRYX_STORAGE_S3_SECRET_KEY_FILE hold a FILE PATH under the mounted Secret,
+    # not a value. The check matches on the word SECRET in the name. Literal values are caught by
+    # check_rendered.py, which knows the difference between X and X_FILE.
+    - env-var-secret
+  include:
+    - no-read-only-root-fs
+    - run-as-non-root
+    - privilege-escalation-container
+    - privileged-container
+    - drop-net-raw-capability
+    - host-network
+    - host-pid
+    - host-ipc
+    - docker-sock
+    - sensitive-host-mounts
+    - writable-host-mount
+    - unset-memory-requirements
+    - pdb-unhealthy-pod-eviction-policy

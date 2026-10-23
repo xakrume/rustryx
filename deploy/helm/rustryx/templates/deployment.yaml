@@ -1,0 +1,173 @@
+{{- $selector := dict "matchLabels" (dict "app.kubernetes.io/name" (include "rustryx.name" .) "app.kubernetes.io/instance" .Release.Name "app.kubernetes.io/component" "server") -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rustryx.fullname" . }}
+  labels:
+    {{- include "rustryx.labels" . | nindent 4 }}
+spec:
+  {{- /* With an HPA the HPA owns the replica count; writing it here would reset it on every upgrade. */}}
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  selector:
+    matchLabels:
+      {{- include "rustryx.selectorLabels" . | nindent 6 }}
+  {{- if and (eq .Values.storage.type "local") (not (include "rustryx.localIsRWX" .)) }}
+  {{- /* A ReadWriteOnce volume cannot be mounted by the surge pod while the old pod holds it, so a
+         rolling update would hang. Recreate trades a short outage for a rollout that completes. */}}
+  strategy:
+    type: Recreate
+  {{- else }}
+  strategy:
+    {{- toYaml .Values.strategy | nindent 4 }}
+  {{- end }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include "rustryx.configYaml" . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "rustryx.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+        app.kubernetes.io/part-of: rustryx
+        {{- with .Values.commonLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "rustryx.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      # Service links inject RUSTRYX_SERVICE_* and RUSTRYX_PORT* variables for the Service named
+      # rustryx. The config loader skips them, but they are noise in every env dump and a trap for
+      # any future key that starts with those words.
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ include "rustryx.terminationGracePeriodSeconds" . }}
+      {{- if .Values.affinity.custom }}
+      affinity:
+        {{- toYaml .Values.affinity.custom | nindent 8 }}
+      {{- else if ne .Values.affinity.podAntiAffinity.mode "none" }}
+      affinity:
+        podAntiAffinity:
+          {{- if eq .Values.affinity.podAntiAffinity.mode "hard" }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "rustryx.selectorLabels" . | nindent 18 }}
+              topologyKey: {{ .Values.affinity.podAntiAffinity.topologyKey }}
+          {{- else }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "rustryx.selectorLabels" . | nindent 20 }}
+                topologyKey: {{ .Values.affinity.podAntiAffinity.topologyKey }}
+          {{- end }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- range . }}
+        {{- $constraint := set (deepCopy .) "labelSelector" $selector }}
+        - {{ toYaml $constraint | indent 10 | trim }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: rustryx
+          image: {{ include "rustryx.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            {{- toYaml .Values.args | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.containerPorts.http }}
+              protocol: TCP
+            {{- with .Values.containerPorts.ops }}
+            - name: ops
+              containerPort: {{ . }}
+              protocol: TCP
+            {{- end }}
+          env:
+            {{- include "rustryx.commonEnv" . | nindent 12 }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if or (include "rustryx.commonEnvFrom" . | trim) .Values.extraEnvFrom }}
+          envFrom:
+            {{- include "rustryx.commonEnvFrom" . | nindent 12 }}
+            {{- with .Values.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          {{- /* The three probes are rendered here, once, and never inside a range over service
+                 ports. Each one targets the listener's containerPort (see the rustryx.probe helper). */}}
+          {{- if .Values.probes.startup.enabled }}
+          startupProbe:
+            {{- include "rustryx.probe" (dict "probe" .Values.probes.startup "name" "startup" "root" $) | nindent 12 }}
+          {{- end }}
+          {{- if .Values.probes.readiness.enabled }}
+          readinessProbe:
+            # Readiness depends on PostgreSQL only, and the cascade risk is accepted: without the
+            # database a node cannot serve a single metadata request. Liveness does not depend on
+            # it, so a database outage takes the pods out of the balancer but never restarts them.
+            # Redis, Keycloak, LDAP, S3 and upstream registries do not influence /readyz (SRE-03).
+            {{- include "rustryx.probe" (dict "probe" .Values.probes.readiness "name" "readiness" "root" $) | nindent 12 }}
+          {{- end }}
+          {{- if .Values.probes.liveness.enabled }}
+          livenessProbe:
+            {{- include "rustryx.probe" (dict "probe" .Values.probes.liveness "name" "liveness" "root" $) | nindent 12 }}
+          {{- end }}
+          lifecycle:
+            preStop:
+              {{- /* Native sleep action: the distroless image has no shell and no sleep binary,
+                     so `exec: sleep` would fail and skip the pause. */}}
+              sleep:
+                seconds: {{ .Values.shutdown.preStopSleepSeconds }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "rustryx.commonVolumeMounts" . | nindent 12 }}
+            {{- if eq .Values.storage.type "local" }}
+            - name: blobs
+              mountPath: {{ .Values.storage.local.mountPath }}
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "rustryx.fullname" . }}
+        {{- include "rustryx.commonVolumes" . | nindent 8 }}
+        {{- if eq .Values.storage.type "local" }}
+        - name: blobs
+          persistentVolumeClaim:
+            claimName: {{ include "rustryx.pvcName" . }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}

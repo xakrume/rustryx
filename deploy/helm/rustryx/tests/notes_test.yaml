@@ -1,0 +1,31 @@
+suite: install notes
+templates:
+  - templates/NOTES.txt
+values:
+  - ../ci/base-values.yaml
+tests:
+  - it: tells the operator which Secret keys the pods expect
+    asserts:
+      - matchRegexRaw:
+          pattern: "RUSTRYX_DATABASE_URL"
+      - matchRegexRaw:
+          pattern: "RUSTRYX_OBSERVABILITY_METRICS_TOKEN"
+
+  - it: gives a probe check that targets the listener port
+    asserts:
+      - matchRegexRaw:
+          pattern: "port-forward deploy/RELEASE-NAME-rustryx 8081:8081"
+      - matchRegexRaw:
+          pattern: "curl -fsS localhost:8081/readyz"
+
+  - it: warns about the Recreate strategy on a local ReadWriteOnce store
+    values:
+      - ../ci/local-single-values.yaml
+    asserts:
+      - matchRegexRaw:
+          pattern: "Recreate strategy"
+
+  - it: warns when proxy repositories have no egress allowlist
+    asserts:
+      - matchRegexRaw:
+          pattern: "allows no egress to upstream registries"

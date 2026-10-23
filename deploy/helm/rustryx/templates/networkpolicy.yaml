@@ -1,0 +1,128 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $eg := .Values.networkPolicy.egress }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "rustryx.fullname" . }}
+  labels:
+    {{- include "rustryx.labels" . | nindent 4 }}
+spec:
+  # Selecting the pods with both policyTypes is what makes this a default deny: anything not
+  # allowed below, in either direction, is dropped.
+  podSelector:
+    matchLabels:
+      {{- include "rustryx.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- $http := .Values.containerPorts.http }}
+    {{- if .Values.containerPorts.ops }}
+    {{- /* Dedicated ops listener: the API port is for traffic, the ops port for the scraper only. */}}
+    {{- with .Values.networkPolicy.ingress.controllers }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ $http }}
+    {{- end }}
+    {{- with .Values.networkPolicy.ingress.metricsScrapers }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ $.Values.containerPorts.ops }}
+    {{- end }}
+    {{- else }}
+    {{- /* One listener serves traffic and /metrics: the scraper and the controller share the port. */}}
+    {{- with concat .Values.networkPolicy.ingress.controllers .Values.networkPolicy.ingress.metricsScrapers }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ $http }}
+    {{- end }}
+    {{- end }}
+    {{- range .Values.networkPolicy.ingress.extra }}
+    - {{ toYaml . | indent 6 | trim }}
+    {{- end }}
+  egress:
+    {{- if $eg.dns.enabled }}
+    - to:
+        {{- toYaml $eg.dns.to | nindent 8 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    {{- with $eg.postgresql.to }}
+    {{- include "rustryx.egressRule" (dict "to" . "ports" $eg.postgresql.ports) | nindent 4 }}
+    {{- end }}
+    {{- if eq .Values.config.lock.backend "redis" }}
+    {{- with $eg.redis.to }}
+    {{- include "rustryx.egressRule" (dict "to" . "ports" $eg.redis.ports) | nindent 4 }}
+    {{- end }}
+    {{- end }}
+    {{- if eq .Values.storage.type "s3" }}
+    {{- with $eg.s3.to }}
+    {{- include "rustryx.egressRule" (dict "to" . "ports" $eg.s3.ports) | nindent 4 }}
+    {{- end }}
+    {{- end }}
+    {{- if .Values.config.auth.oidc.enabled }}
+    {{- with $eg.keycloak.to }}
+    {{- include "rustryx.egressRule" (dict "to" . "ports" $eg.keycloak.ports) | nindent 4 }}
+    {{- end }}
+    {{- end }}
+    {{- if .Values.config.auth.ldap.enabled }}
+    {{- with $eg.ldap.to }}
+    {{- include "rustryx.egressRule" (dict "to" . "ports" $eg.ldap.ports) | nindent 4 }}
+    {{- end }}
+    {{- end }}
+    {{- if $eg.upstream.cidrs }}
+    - to:
+        {{- range $eg.upstream.cidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      ports:
+        {{- range $eg.upstream.ports }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- end }}
+    {{- range $eg.extra }}
+    - {{ toYaml . | indent 6 | trim }}
+    {{- end }}
+---
+# The migration Job gets its own policy: PostgreSQL and DNS only, nothing inbound. It carries a
+# different `component` label, so the server policy above does not apply to it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "rustryx.fullname" . }}-migrate
+  labels:
+    {{- include "rustryx.migrateLabels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "rustryx.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: migrate
+  policyTypes:
+    - Ingress
+    - Egress
+  egress:
+    {{- if $eg.dns.enabled }}
+    - to:
+        {{- toYaml $eg.dns.to | nindent 8 }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    {{- with $eg.postgresql.to }}
+    {{- include "rustryx.egressRule" (dict "to" . "ports" $eg.postgresql.ports) | nindent 4 }}
+    {{- end }}
+{{- end }}

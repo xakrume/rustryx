@@ -1,0 +1,32 @@
+Rustryx {{ .Chart.AppVersion }} deployed as {{ include "rustryx.fullname" . }} in namespace {{ .Release.Namespace }}.
+
+Image:   {{ include "rustryx.image" . }}
+Storage: {{ .Values.storage.type }}
+Replicas: {{ include "rustryx.minReplicas" . }}{{ if .Values.autoscaling.enabled }} to {{ .Values.autoscaling.maxReplicas }} (HPA){{ end }}
+
+The Secret "{{ .Values.secrets.existingSecret }}" must contain these keys ({{ .Values.secrets.mode }} mode):
+{{- range (include "rustryx.secretEnvNames" . | fromJsonArray) }}
+  - {{ . }}
+{{- end }}
+{{- if .Values.migrations.enabled }}
+
+Schema migrations ran as the Helm hook Job {{ include "rustryx.fullname" . }}-migrate before this release. The Deployment never migrates.
+If the Job failed, the old pods keep serving; read its log: kubectl -n {{ .Release.Namespace }} logs job/{{ include "rustryx.fullname" . }}-migrate
+{{- end }}
+
+Check the probe paths on a live pod before you rely on this release (SRE-05):
+  kubectl -n {{ .Release.Namespace }} port-forward deploy/{{ include "rustryx.fullname" . }} {{ include "rustryx.opsPort" . }}:{{ include "rustryx.opsPort" . }} &
+  curl -fsS localhost:{{ include "rustryx.opsPort" . }}/healthz
+  curl -fsS localhost:{{ include "rustryx.opsPort" . }}/readyz
+{{- if eq .Values.storage.type "local" }}
+
+WARNING: storage.type=local. A local blob store is not compatible with HA. {{ if include "rustryx.localIsRWX" . }}The volume is confirmed ReadWriteMany.{{ else }}The volume is ReadWriteOnce, so the Deployment uses the Recreate strategy and every rollout has a short outage.{{ end }}
+{{- end }}
+{{- if and .Values.networkPolicy.enabled (not .Values.networkPolicy.egress.upstream.cidrs) (not .Values.networkPolicy.cilium.enabled) }}
+
+NOTE: networkPolicy allows no egress to upstream registries (networkPolicy.egress.upstream.cidrs is empty), so proxy repositories cannot fetch. Add CIDRs or enable networkPolicy.cilium for an FQDN allowlist.
+{{- end }}
+{{- if and .Values.ingress.enabled (not .Values.networkPolicy.ingress.controllers) .Values.networkPolicy.enabled }}
+
+WARNING: ingress is enabled but networkPolicy.ingress.controllers is empty, so the ingress controller cannot reach the pods.
+{{- end }}

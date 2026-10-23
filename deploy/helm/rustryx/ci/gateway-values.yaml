@@ -1,0 +1,11 @@
+# Gateway API HTTPRoute instead of Ingress.
+gateway:
+  enabled: true
+  parentRefs:
+    - name: public
+      namespace: gateway-system
+      sectionName: https
+  hostnames:
+    - rustryx.example.com
+  timeouts:
+    request: 0s

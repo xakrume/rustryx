@@ -1,0 +1,152 @@
+suite: probes
+templates:
+  - templates/deployment.yaml
+values:
+  - ../ci/base-values.yaml
+tests:
+  - it: renders startup, readiness and liveness probes from values
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /healthz
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /readyz
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /healthz
+
+  - it: probe port equals the containerPort of the single listener (default numbers)
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.port
+          value: 8081
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: 8081
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: 8081
+      - equal:
+          path: spec.template.spec.containers[0].ports[?(@.name == "http")].containerPort
+          value: 8081
+
+  - it: probe port follows containerPorts.http and never the Service port
+    set:
+      containerPorts.http: 8181
+      service.http.port: 8888
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.port
+          value: 8181
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: 8181
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: 8181
+      - equal:
+          path: spec.template.spec.containers[0].ports[?(@.name == "http")].containerPort
+          value: 8181
+
+  - it: probes move to the dedicated ops containerPort when there is one
+    set:
+      containerPorts.ops: 9191
+      service.ops.port: 7777
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.port
+          value: 9191
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: 9191
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: 9191
+      - equal:
+          path: spec.template.spec.containers[0].ports[?(@.name == "ops")].containerPort
+          value: 9191
+
+  - it: probes are rendered once each, outside any range over service ports
+    set:
+      service.extraPorts:
+        - name: registry
+          port: 5000
+        - name: alt
+          port: 5001
+          targetPort: 5002
+        - name: third
+          port: 5003
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 1
+      - lengthEqual:
+          path: spec.template.spec.containers[0].ports
+          count: 1
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: 8081
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: 8081
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.port
+          value: 8081
+
+  - it: liveness is /healthz and readiness is /readyz, never an aggregated endpoint
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          pattern: "readyz|actuator|/health$"
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /readyz
+
+  - it: must_not_accept_an_aggregated_health_endpoint_for_liveness
+    set:
+      probes.liveness.httpGet.path: /actuator/health
+    asserts:
+      - failedTemplate:
+          errorPattern: aggregated health endpoint
+
+  - it: must_not_accept_a_bare_health_path
+    set:
+      probes.readiness.httpGet.path: /health
+    asserts:
+      - failedTemplate:
+          errorPattern: aggregated health endpoint
+
+  - it: must_not_accept_a_probe_port_that_differs_from_the_containerPort
+    set:
+      probes.liveness.httpGet.port: 8080
+    asserts:
+      - failedTemplate:
+          errorPattern: must equal the container port
+
+  - it: must_not_set_initialDelaySeconds_while_the_startupProbe_is_enabled
+    set:
+      probes.readiness.initialDelaySeconds: 10
+    asserts:
+      - failedTemplate:
+          errorPattern: initialDelaySeconds must not be set
+
+  - it: allows initialDelaySeconds when the startupProbe is off
+    set:
+      probes.startup.enabled: false
+      probes.liveness.initialDelaySeconds: 10
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].startupProbe
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.initialDelaySeconds
+          value: 10
+
+  - it: startup budget is period x failureThreshold and gives 150 s by default
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.periodSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 30

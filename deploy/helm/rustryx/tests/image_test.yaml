@@ -1,0 +1,97 @@
+suite: image
+templates:
+  - templates/deployment.yaml
+values:
+  - ../ci/base-values.yaml
+tests:
+  - it: defaults to the musl variant tagged with appVersion
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/rustryx/rustryx:0.1.0-musl
+
+  - it: selects the glibc variant by tag suffix
+    set:
+      image.variant: glibc
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/rustryx/rustryx:0.1.0-glibc
+
+  - it: selects a variant by repository suffix when the registry is laid out that way
+    set:
+      image.variant: glibc
+      image.variants.glibc.tagSuffix: ""
+      image.variants.glibc.repositorySuffix: -glibc
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/rustryx/rustryx-glibc:0.1.0
+
+  - it: does not double the variant suffix
+    set:
+      image.tag: 1.2.3-musl
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/rustryx/rustryx:1.2.3-musl
+
+  - it: pins by digest and drops the tag
+    set:
+      image.digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/rustryx/rustryx@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+  - it: must_not_accept_a_malformed_digest
+    set:
+      image.digest: sha256:short
+    asserts:
+      - failedTemplate:
+          errorPattern: image.digest
+
+  - it: must_not_render_without_a_digest_when_one_is_required
+    set:
+      image.requireDigest: true
+    asserts:
+      - failedTemplate:
+          errorPattern: requireDigest
+
+  - it: renders with a digest when one is required
+    set:
+      image.requireDigest: true
+      image.digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "@sha256:b{64}$"
+
+  - it: must_not_accept_an_unknown_variant
+    set:
+      image.variant: alpine
+    asserts:
+      - failedTemplate:
+          errorPattern: variant
+
+  - it: must_not_accept_a_tag_inside_the_repository
+    set:
+      image.repository: ghcr.io/rustryx/rustryx:latest
+    asserts:
+      - failedTemplate:
+          errorPattern: must not contain a tag
+
+
+  - it: must_not_accept_latest_in_the_values_schema
+    set:
+      image.tag: latest
+    asserts:
+      - failedTemplate:
+          errorPattern: /image/tag
+
+  - it: must_not_accept_latest_in_any_case_in_the_values_schema
+    set:
+      image.tag: Latest
+    asserts:
+      - failedTemplate:
+          errorPattern: /image/tag

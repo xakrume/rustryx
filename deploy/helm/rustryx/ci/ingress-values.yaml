@@ -1,0 +1,10 @@
+# Ingress (nginx) with TLS, large-upload annotations and cert-manager.
+ingress:
+  enabled: true
+  certManager:
+    enabled: true
+    issuerName: letsencrypt
+  tls:
+    - secretName: rustryx-tls
+      hosts:
+        - rustryx.example.com

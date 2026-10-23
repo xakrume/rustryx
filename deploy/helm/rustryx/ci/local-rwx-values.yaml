@@ -1,0 +1,10 @@
+# Local blob store shared by two replicas: allowed only on ReadWriteMany with explicit confirmation.
+replicaCount: 2
+storage:
+  type: local
+  local:
+    size: 100Gi
+    storageClassName: shared-rwx
+    accessModes:
+      - ReadWriteMany
+    confirmReadWriteMany: true

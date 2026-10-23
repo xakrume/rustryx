@@ -1,0 +1,195 @@
+suite: network policy
+templates:
+  - templates/networkpolicy.yaml
+  - templates/ciliumnetworkpolicy.yaml
+values:
+  - ../ci/base-values.yaml
+tests:
+  - it: is default deny in both directions for the server pods
+    template: templates/networkpolicy.yaml
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-rustryx
+    asserts:
+      - equal:
+          path: spec.policyTypes
+          value:
+            - Ingress
+            - Egress
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/component"]
+          value: server
+
+  - it: allows ingress only from the controller and the scraper, on the one listener port
+    template: templates/networkpolicy.yaml
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-rustryx
+    asserts:
+      - lengthEqual:
+          path: spec.ingress
+          count: 1
+      - equal:
+          path: spec.ingress[0].ports
+          value:
+            - protocol: TCP
+              port: 8081
+      - lengthEqual:
+          path: spec.ingress[0].from
+          count: 2
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: ingress-nginx
+      - equal:
+          path: spec.ingress[0].from[1].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: monitoring
+
+  - it: gives the scraper only the ops port when a dedicated ops listener exists
+    template: templates/networkpolicy.yaml
+    set:
+      containerPorts.ops: 9191
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-rustryx
+    asserts:
+      - lengthEqual:
+          path: spec.ingress
+          count: 2
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 8081
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: ingress-nginx
+      - equal:
+          path: spec.ingress[1].ports[0].port
+          value: 9191
+      - equal:
+          path: spec.ingress[1].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: monitoring
+
+  - it: allows egress to DNS, PostgreSQL and S3 and nothing else when optional features are off
+    template: templates/networkpolicy.yaml
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-rustryx
+    asserts:
+      - lengthEqual:
+          path: spec.egress
+          count: 3
+      - equal:
+          path: spec.egress[0].ports[0].port
+          value: 53
+      - equal:
+          path: spec.egress[1].ports[0].port
+          value: 5432
+      - equal:
+          path: spec.egress[2].ports[0].port
+          value: 443
+
+  - it: adds Redis (lock backend), Keycloak and LDAP egress only when those features are enabled
+    template: templates/networkpolicy.yaml
+    values:
+      - ../ci/full-values.yaml
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-rustryx
+    asserts:
+      - lengthEqual:
+          path: spec.egress
+          count: 6
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - ipBlock:
+                  cidr: 10.0.10.20/32
+            ports:
+              - protocol: TCP
+                port: 6379
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - ipBlock:
+                  cidr: 10.0.30.20/32
+            ports:
+              - protocol: TCP
+                port: 636
+
+  - it: must_not_allow_egress_to_upstream_registries_without_an_allowlist
+    template: templates/networkpolicy.yaml
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-rustryx
+    asserts:
+      - notContains:
+          path: spec.egress
+          content:
+            ports:
+              - protocol: TCP
+                port: 80
+
+  - it: allows egress to the configured upstream CIDR allowlist
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy.egress.upstream.cidrs:
+        - 203.0.113.0/24
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-rustryx
+    asserts:
+      - lengthEqual:
+          path: spec.egress
+          count: 4
+      - equal:
+          path: spec.egress[3].to[0].ipBlock.cidr
+          value: 203.0.113.0/24
+
+  - it: restricts the migration Job to PostgreSQL and DNS with nothing inbound
+    template: templates/networkpolicy.yaml
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-rustryx-migrate
+    asserts:
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/component"]
+          value: migrate
+      - lengthEqual:
+          path: spec.egress
+          count: 2
+      - notExists:
+          path: spec.ingress
+
+  - it: must_not_render_when_disabled
+    template: templates/networkpolicy.yaml
+    set:
+      networkPolicy.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a Cilium FQDN policy for the upstream allowlist when enabled
+    template: templates/ciliumnetworkpolicy.yaml
+    values:
+      - ../ci/full-values.yaml
+    asserts:
+      - isKind:
+          of: CiliumNetworkPolicy
+      - contains:
+          path: spec.egress[1].toFQDNs
+          content:
+            matchName: registry.npmjs.org
+      - contains:
+          path: spec.egress[1].toFQDNs
+          content:
+            matchPattern: "*.maven.org"
+      - equal:
+          path: spec.egress[0].toPorts[0].rules.dns[0].matchPattern
+          value: "*"
+
+  - it: renders no Cilium policy by default
+    template: templates/ciliumnetworkpolicy.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

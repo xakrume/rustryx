@@ -1,0 +1,55 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rustryx.fullname" . }}
+  labels:
+    {{- include "rustryx.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "rustryx.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.http.port }}
+      targetPort: http
+      protocol: TCP
+    {{- if .Values.containerPorts.ops }}
+    - name: ops
+      port: {{ .Values.service.ops.port }}
+      targetPort: ops
+      protocol: TCP
+    {{- end }}
+    {{- range .Values.service.extraPorts }}
+    - name: {{ .name }}
+      port: {{ .port }}
+      targetPort: {{ default .port .targetPort }}
+      protocol: TCP
+    {{- end }}
+{{- /*
+Headless Service used only for scraping. A normal Service publishes Ready pods only, and during a
+PostgreSQL outage every pod is NotReady by design, so Prometheus would lose the targets exactly
+when the dependency metrics matter and `up == 0` would never fire (the series vanishes instead).
+publishNotReadyAddresses keeps the targets visible.
+*/}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rustryx.fullname" . }}-metrics
+  labels:
+    {{- include "rustryx.labels" . | nindent 4 }}
+    app.kubernetes.io/service-role: metrics
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "rustryx.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: {{ include "rustryx.opsPortName" . }}
+      port: {{ include "rustryx.opsPort" . }}
+      targetPort: {{ include "rustryx.opsPortName" . }}
+      protocol: TCP

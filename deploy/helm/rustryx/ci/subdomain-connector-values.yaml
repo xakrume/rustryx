@@ -1,0 +1,16 @@
+# Docker registry on its own host plus the subdomain connector (wildcard host).
+config:
+  docker:
+    subdomainConnector:
+      enabled: true
+      baseDomain: registry.example.com
+ingress:
+  enabled: true
+  tls:
+    - secretName: rustryx-wildcard-tls
+      hosts:
+        - rustryx.example.com
+        - "*.registry.example.com"
+  docker:
+    hosts:
+      - registry.example.com

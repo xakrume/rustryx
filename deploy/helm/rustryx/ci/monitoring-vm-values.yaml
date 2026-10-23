@@ -1,0 +1,11 @@
+# VMServiceScrape and VMRule for the VictoriaMetrics operator.
+monitoring:
+  flavor: victoriametrics
+  serviceMonitor:
+    enabled: true
+  rules:
+    enabled: true
+    kubeStateMetrics: false
+dashboards:
+  enabled: true
+  namespace: monitoring

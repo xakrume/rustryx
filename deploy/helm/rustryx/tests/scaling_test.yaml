@@ -1,0 +1,88 @@
+suite: autoscaling and disruption budget
+templates:
+  - templates/hpa.yaml
+  - templates/pdb.yaml
+values:
+  - ../ci/base-values.yaml
+tests:
+  - it: renders no HPA by default
+    template: templates/hpa.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders an autoscaling/v2 HPA on CPU and on the request rate
+    template: templates/hpa.yaml
+    values:
+      - ../ci/autoscaling-values.yaml
+    asserts:
+      - equal:
+          path: apiVersion
+          value: autoscaling/v2
+      - equal:
+          path: spec.minReplicas
+          value: 3
+      - equal:
+          path: spec.maxReplicas
+          value: 9
+      - equal:
+          path: spec.metrics[0].resource.name
+          value: cpu
+      - equal:
+          path: spec.metrics[1].pods.metric.name
+          value: http_requests_per_second
+      - equal:
+          path: spec.scaleTargetRef.kind
+          value: Deployment
+
+  - it: must_not_add_the_request_rate_metric_unless_enabled
+    template: templates/hpa.yaml
+    values:
+      - ../ci/autoscaling-values.yaml
+    set:
+      autoscaling.requestsPerSecond.enabled: false
+    asserts:
+      - lengthEqual:
+          path: spec.metrics
+          count: 1
+
+  - it: scales down slowly so a node is not killed mid-upload
+    template: templates/hpa.yaml
+    values:
+      - ../ci/autoscaling-values.yaml
+    asserts:
+      - equal:
+          path: spec.behavior.scaleDown.stabilizationWindowSeconds
+          value: 300
+
+  - it: renders a PDB that never blocks a drain with two replicas
+    template: templates/pdb.yaml
+    asserts:
+      - equal:
+          path: spec.maxUnavailable
+          value: 1
+      - notExists:
+          path: spec.minAvailable
+      - equal:
+          path: spec.unhealthyPodEvictionPolicy
+          value: AlwaysAllow
+
+  - it: supports minAvailable below the replica count
+    template: templates/pdb.yaml
+    set:
+      pdb.minAvailable: 1
+      pdb.maxUnavailable: null
+    asserts:
+      - equal:
+          path: spec.minAvailable
+          value: 1
+      - notExists:
+          path: spec.maxUnavailable
+
+  - it: renders no PDB when disabled
+    template: templates/pdb.yaml
+    set:
+      pdb.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

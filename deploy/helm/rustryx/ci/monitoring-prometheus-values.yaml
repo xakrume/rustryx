@@ -1,0 +1,20 @@
+# ServiceMonitor, PrometheusRule and dashboard ConfigMap for the Prometheus operator.
+monitoring:
+  flavor: prometheus
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+    bearerTokenSecret:
+      name: rustryx-metrics-token
+      key: token
+  rules:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+    alertLabels:
+      team: platform
+    disabled:
+      - RustryxRedisUnavailable
+dashboards:
+  enabled: true

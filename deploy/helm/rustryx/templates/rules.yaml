@@ -1,0 +1,60 @@
+{{- if .Values.monitoring.rules.enabled }}
+{{- /*
+The rule source is files/rustryx-alerts.yaml, a plain Prometheus rule file that is also usable
+without Helm. It is read, filtered and re-serialised here instead of being pasted as text so that
+`monitoring.rules.disabled`, extra alert labels and the runbook base URL stay values. The output of
+toYaml is data and is not templated again, so the {{ "{{ $labels.x }}" }} expressions inside the
+annotations reach Prometheus unchanged.
+*/ -}}
+{{- $isVM := eq .Values.monitoring.flavor "victoriametrics" }}
+{{- $r := .Values.monitoring.rules }}
+{{- $fullname := include "rustryx.fullname" . }}
+{{- $doc := .Files.Get "files/rustryx-alerts.yaml" | fromYaml }}
+{{- $defaultBase := "https://github.com/rustryx/rustryx/blob/main/docs/runbook.md" }}
+{{- $groups := list }}
+{{- /* fromYaml reports a parse error as a map with an "Error" key and no groups. Rendering an empty
+       rule set from that would look healthy, so refuse instead. */}}
+{{- if not $doc.groups }}
+{{- fail (printf "files/rustryx-alerts.yaml has no rule groups (missing or invalid YAML): %v" (default "empty file" $doc.Error)) }}
+{{- end }}
+{{- range $doc.groups }}
+{{- if or (ne .name "rustryx.kube") $r.kubeStateMetrics }}
+{{- $rules := list }}
+{{- range .rules }}
+{{- if not (and .alert (has .alert $r.disabled)) }}
+{{- $rule := deepCopy . }}
+{{- if .alert }}
+{{- $labels := mergeOverwrite (deepCopy $rule.labels) (deepCopy $r.alertLabels) }}
+{{- $_ := set $rule "labels" $labels }}
+{{- $ann := deepCopy $rule.annotations }}
+{{- if not $ann.runbook_url }}
+{{- fail (printf "alert %s has no runbook_url annotation (OPS-41: every alert links a runbook)" .alert) }}
+{{- end }}
+{{- $_ = set $ann "runbook_url" (replace $defaultBase $r.runbookBaseUrl $ann.runbook_url) }}
+{{- $_ = set $rule "annotations" $ann }}
+{{- end }}
+{{- if and $rule.expr (ne $fullname "rustryx") }}
+{{- /* The kube group names the default release `rustryx`; point it at this release's objects. */}}
+{{- $_ := set $rule "expr" (replace "job_name=~\"rustryx-migrate\"" (printf "job_name=~\"%s-migrate\"" $fullname) $rule.expr) }}
+{{- $_ = set $rule "expr" (replace "deployment=\"rustryx\"" (printf "deployment=\"%s\"" $fullname) $rule.expr) }}
+{{- end }}
+{{- $rules = append $rules $rule }}
+{{- end }}
+{{- end }}
+{{- $group := set (deepCopy .) "rules" $rules }}
+{{- $groups = append $groups $group }}
+{{- end }}
+{{- end }}
+apiVersion: {{ ternary "operator.victoriametrics.com/v1beta1" "monitoring.coreos.com/v1" $isVM }}
+kind: {{ ternary "VMRule" "PrometheusRule" $isVM }}
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "rustryx.labels" . | nindent 4 }}
+    {{- with $r.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    {{- toYaml $groups | nindent 4 }}
+{{- end }}

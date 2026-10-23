@@ -1,0 +1,9 @@
+# Local blob store: one replica on a ReadWriteOnce volume (Recreate strategy, no PDB).
+allowSingleReplica: true
+replicaCount: 1
+storage:
+  type: local
+  local:
+    size: 20Gi
+pdb:
+  enabled: false

@@ -1,0 +1,315 @@
+suite: render-time validation
+# Every rule in templates/_validate.tpl has a test here. They select validate.yaml because that
+# is the template that runs the validation for every render.
+templates:
+  - templates/validate.yaml
+values:
+  - ../ci/base-values.yaml
+tests:
+  - it: renders cleanly for the base values
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: must_not_run_production_with_one_replica
+    set:
+      replicaCount: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: at least 2 replicas
+
+  - it: allows one replica in production only when allowSingleReplica is set
+    set:
+      replicaCount: 1
+      allowSingleReplica: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: allows one replica outside production
+    set:
+      replicaCount: 1
+      config.environment: development
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: counts the HPA minimum as the replica floor in production
+    set:
+      replicaCount: 1
+      autoscaling.enabled: true
+      autoscaling.minReplicas: 2
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: must_not_render_without_base_url
+    set:
+      config.server.base_url: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: config.server.base_url is required
+
+  - it: must_not_accept_a_plain_http_base_url_in_production
+    set:
+      config.server.base_url: http://rustryx.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: must be https
+
+
+
+  - it: must_not_accept_a_database_url_in_the_config
+    set:
+      config.database.url: postgres://rustryx:hunter2@db/rustryx
+    asserts:
+      - failedTemplate:
+          errorPattern: /config/database/url
+
+
+  - it: must_not_enable_oidc_without_a_client_secret_entry
+    set:
+      config.auth.oidc.enabled: true
+      config.auth.oidc.issuer: https://keycloak.example.com/realms/r
+      config.auth.oidc.client_id: rustryx-ui
+    asserts:
+      - failedTemplate:
+          errorPattern: oidcClientSecret
+
+  - it: must_not_enable_oidc_without_an_issuer
+    set:
+      config.auth.oidc.enabled: true
+      config.auth.oidc.client_id: rustryx-ui
+      secrets.entries.oidcClientSecret: true
+    asserts:
+      - failedTemplate:
+          errorPattern: requires issuer and client_id
+
+
+
+
+  - it: must_not_accept_an_unknown_secrets_mode
+    set:
+      secrets.mode: vault
+    asserts:
+      - failedTemplate:
+          errorPattern: /secrets/mode
+
+  - it: must_not_enable_an_ExternalSecret_without_a_store
+    set:
+      externalSecret.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: secretStoreRef.name
+
+  - it: must_not_enable_an_ExternalSecret_without_data
+    set:
+      externalSecret.enabled: true
+      externalSecret.secretStoreRef.name: vault
+    asserts:
+      - failedTemplate:
+          errorPattern: externalSecret.data is empty
+
+  - it: must_not_accept_a_Cilium_policy_without_hosts
+    set:
+      networkPolicy.cilium.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: upstreamHosts
+
+  - it: must_not_enable_a_custom_CA_without_a_source
+    set:
+      tls.customCA.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: existingSecret or existingConfigMap
+
+  - it: must_not_accept_an_unknown_monitoring_flavor
+    set:
+      monitoring.flavor: datadog
+    asserts:
+      - failedTemplate:
+          errorPattern: /monitoring/flavor
+
+  - it: must_not_render_without_a_secret_name
+    set:
+      secrets.existingSecret: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: existingSecret
+
+  - it: must_not_render_both_Ingress_and_Gateway_by_default
+    values:
+      - ../ci/ingress-values.yaml
+      - ../ci/gateway-values.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: mutually exclusive
+
+  - it: must_not_render_a_Gateway_without_parentRefs
+    set:
+      gateway.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: parentRefs
+
+  - it: must_not_enable_the_subdomain_connector_without_a_base_domain
+    set:
+      config.docker.subdomainConnector.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: baseDomain
+
+  - it: must_not_accept_minReplicas_below_replicaCount
+    values:
+      - ../ci/autoscaling-values.yaml
+    set:
+      replicaCount: 4
+      autoscaling.minReplicas: 3
+    asserts:
+      - failedTemplate:
+          errorPattern: minReplicas must not be below replicaCount
+
+  - it: must_not_accept_maxReplicas_below_minReplicas
+    values:
+      - ../ci/autoscaling-values.yaml
+    set:
+      autoscaling.maxReplicas: 2
+    asserts:
+      - failedTemplate:
+          errorPattern: maxReplicas
+
+  - it: must_not_accept_a_PDB_that_blocks_every_drain
+    set:
+      pdb.minAvailable: 2
+      pdb.maxUnavailable: null
+    asserts:
+      - failedTemplate:
+          errorPattern: would block every node drain
+
+  - it: must_not_accept_both_minAvailable_and_maxUnavailable
+    set:
+      pdb.minAvailable: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: mutually exclusive
+
+  - it: must_not_accept_maxUnavailable_zero
+    set:
+      pdb.maxUnavailable: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: at least 1
+
+  - it: must_not_render_when_a_required_peer_is_missing
+    set:
+      networkPolicy.egress.postgresql.to: []
+    asserts:
+      - failedTemplate:
+          errorPattern: postgresql.to is empty
+
+  - it: must_not_accept_credentials_inside_a_URL
+    set:
+      config.observability.otlp_endpoint: http://user:hunter2@otel.example.com:4317
+    asserts:
+      - failedTemplate:
+          errorPattern: /config/observability/otlp_endpoint
+
+  - it: must_not_accept_ldap_without_tls
+    set:
+      config.auth.ldap.url: ldap://ldap.example.com:389
+    asserts:
+      - failedTemplate:
+          errorPattern: ldap:// together with starttls
+
+  - it: accepts ldap over StartTLS
+    set:
+      config.auth.ldap.url: ldap://ldap.example.com:389
+      config.auth.ldap.starttls: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: must_not_use_the_redis_lock_backend_without_the_redis_url_secret
+    set:
+      config.lock.backend: redis
+    asserts:
+      - failedTemplate:
+          errorPattern: lockRedisUrl
+
+  - it: accepts the redis lock backend with its secret entry
+    set:
+      config.lock.backend: redis
+      secrets.entries.lockRedisUrl: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: must_not_render_without_the_database_secret_entry
+    set:
+      secrets.entries.databaseUrl: false
+    asserts:
+      - failedTemplate:
+          errorPattern: databaseUrl must be true
+
+  - it: must_not_accept_an_s3_store_without_endpoint_bucket_and_region
+    set:
+      storage.s3.bucket: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: storage.s3.endpoint, bucket and region
+
+  - it: must_not_start_production_without_the_signing_cookie_and_admin_secrets
+    set:
+      secrets.entries.internalJwtKey: false
+    asserts:
+      - failedTemplate:
+          errorPattern: internalJwtKey, cookieKey and bootstrapAdminPassword
+
+  - it: allows development without those secrets
+    set:
+      config.environment: development
+      secrets.entries.cookieKey: false
+      secrets.entries.internalJwtKey: false
+      secrets.entries.bootstrapAdminPassword: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: must_not_serve_metrics_without_a_token_unless_public
+    set:
+      secrets.entries.metricsToken: false
+    asserts:
+      - failedTemplate:
+          errorPattern: Bearer token
+
+  - it: accepts public metrics without a token
+    set:
+      secrets.entries.metricsToken: false
+      config.observability.metrics_public: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: accepts disabled metrics without a token
+    set:
+      secrets.entries.metricsToken: false
+      config.observability.metrics_enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: must_not_accept_a_secret_key_in_the_config_extra
+    set:
+      config.extra.auth.cookie_key: abc
+    asserts:
+      - failedTemplate:
+          errorPattern: config.auth.cookie_key is a secret
+
+  - it: must_not_accept_the_bootstrap_password_in_the_config_extra
+    set:
+      config.extra.auth.bootstrap_admin.password: abc
+    asserts:
+      - failedTemplate:
+          errorPattern: config.auth.bootstrap_admin.password is a secret
+

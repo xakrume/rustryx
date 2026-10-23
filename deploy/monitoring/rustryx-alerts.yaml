@@ -1,0 +1,422 @@
+# Rustryx recording and alerting rules. Plain Prometheus rule file: Prometheus, vmalert and the
+# chart (PrometheusRule / VMRule, templates/rules.yaml) all load this same source. The chart copy
+# under deploy/helm/rustryx/files/ is synced by deploy/monitoring/sync-to-chart.sh and checked for
+# drift by deploy/helm/test.sh.
+#
+# Conventions
+#   * Metric names are exactly the ones rustryx-observability exports (crates/rustryx-observability,
+#     names.rs): generic, without a product prefix, as SRE-08 spells them. Because `http_requests_total`
+#     also exists in half of the services of a cluster, EVERY selector here carries job="rustryx"
+#     (the scrape job, see below); the recording rules keep the `rustryx:` prefix. The catalogue and
+#     the assumptions about labels and not-yet-exported series are in docs/slo.md.
+#     `up{job="rustryx"}` relies on the scrape job being named `rustryx`; the chart's ServiceMonitor
+#     guarantees it with jobLabel app.kubernetes.io/name.
+#   * The `job` label of the background job metrics collides with the scrape target label `job`.
+#     Prometheus and vmagent rename the exposed one to `exported_job` unless honor_labels is on,
+#     so these rules select `exported_job` for the job name and job="rustryx" for the scrape job. A rule
+#     written against `job="blob_gc"` would match nothing and stay green forever.
+#   * Rare events (auth failures, circuit breaker, lock loss, job failure) use increase(), never
+#     rate() (SRE-10): a rate of 0.0003 per second cannot be read or alerted on sensibly.
+#   * Every alert carries severity (critical, high, medium), summary and runbook_url. The anchor of
+#     runbook_url is the lower-cased alert name and exists in docs/runbook.md (checked by test.sh).
+#   * Series that exist only when a feature is on (Redis, local blob store, LDAP) make their alert
+#     silent when the feature is off, which is the intended behaviour.
+#   * Group `rustryx.kube` needs kube-state-metrics and cAdvisor. The chart drops it when
+#     monitoring.rules.kubeStateMetrics is false. The names `rustryx` and `rustryx-migrate` in it are
+#     the defaults for a release called `rustryx`; the chart rewrites them to the real fullname.
+
+groups:
+  - name: rustryx.sli
+    interval: 1m
+    rules:
+      # SLI (SRE-14): share of requests without 5xx. 4xx never count (429 included) and the probe
+      # and metrics routes are excluded. The `or 0 * ...` term keeps the series at 1 when no 5xx
+      # series exists yet; without it the division returns nothing and the SLI looks like no data.
+      - record: rustryx:sli_availability:ratio_rate5m
+        expr: |
+          1 - (
+            (
+              sum by (namespace) (rate(http_requests_total{job="rustryx",route!~"/(healthz|readyz|metrics)",status=~"5.."}[5m]))
+              or 0 * sum by (namespace) (rate(http_requests_total{job="rustryx",route!~"/(healthz|readyz|metrics)"}[5m]))
+            )
+            / sum by (namespace) (rate(http_requests_total{job="rustryx",route!~"/(healthz|readyz|metrics)"}[5m]))
+          )
+      - record: rustryx:sli_availability:ratio_rate30m
+        expr: |
+          1 - (
+            (
+              sum by (namespace) (rate(http_requests_total{job="rustryx",route!~"/(healthz|readyz|metrics)",status=~"5.."}[30m]))
+              or 0 * sum by (namespace) (rate(http_requests_total{job="rustryx",route!~"/(healthz|readyz|metrics)"}[30m]))
+            )
+            / sum by (namespace) (rate(http_requests_total{job="rustryx",route!~"/(healthz|readyz|metrics)"}[30m]))
+          )
+      - record: rustryx:sli_availability:ratio_rate1h
+        expr: |
+          1 - (
+            (
+              sum by (namespace) (rate(http_requests_total{job="rustryx",route!~"/(healthz|readyz|metrics)",status=~"5.."}[1h]))
+              or 0 * sum by (namespace) (rate(http_requests_total{job="rustryx",route!~"/(healthz|readyz|metrics)"}[1h]))
+            )
+            / sum by (namespace) (rate(http_requests_total{job="rustryx",route!~"/(healthz|readyz|metrics)"}[1h]))
+          )
+      - record: rustryx:sli_availability:ratio_rate6h
+        expr: |
+          1 - (
+            (
+              sum by (namespace) (rate(http_requests_total{job="rustryx",route!~"/(healthz|readyz|metrics)",status=~"5.."}[6h]))
+              or 0 * sum by (namespace) (rate(http_requests_total{job="rustryx",route!~"/(healthz|readyz|metrics)"}[6h]))
+            )
+            / sum by (namespace) (rate(http_requests_total{job="rustryx",route!~"/(healthz|readyz|metrics)"}[6h]))
+          )
+      # Latency SLIs (SRE-15). The histogram measures time to response headers, which for a
+      # streamed download is the time to first byte. Both rules assume the histogram carries the
+      # labels `class` (metadata, download, upload, api, other) and `cache` (hit, miss, none):
+      # the route template alone cannot tell a maven-metadata.xml from an artifact, because both
+      # sit under one /repository/{name}/* route. See docs/slo.md, assumption A2.
+      - record: rustryx:http_request_duration_seconds:p95_metadata_5m
+        expr: |
+          histogram_quantile(0.95,
+            sum by (namespace, le) (rate(http_request_duration_seconds_bucket{job="rustryx",class="metadata"}[5m])))
+      - record: rustryx:http_request_duration_seconds:p95_download_hit_5m
+        expr: |
+          histogram_quantile(0.95,
+            sum by (namespace, le) (rate(http_request_duration_seconds_bucket{job="rustryx",class="download",cache="hit"}[5m])))
+
+  - name: rustryx.sli.30d
+    # A 30 day window is expensive; five minutes between evaluations is plenty for a budget panel.
+    interval: 5m
+    rules:
+      - record: rustryx:sli_availability:ratio_rate30d
+        expr: |
+          1 - (
+            (
+              sum by (namespace) (increase(http_requests_total{job="rustryx",route!~"/(healthz|readyz|metrics)",status=~"5.."}[30d]))
+              or 0 * sum by (namespace) (increase(http_requests_total{job="rustryx",route!~"/(healthz|readyz|metrics)"}[30d]))
+            )
+            / sum by (namespace) (increase(http_requests_total{job="rustryx",route!~"/(healthz|readyz|metrics)"}[30d]))
+          )
+      # 1 means the whole budget is left, 0 means it is spent, negative means the SLO is missed.
+      # 0.001 is the budget of the 99.9% objective.
+      - record: rustryx:slo_error_budget_remaining:ratio30d
+        expr: 1 - ((1 - rustryx:sli_availability:ratio_rate30d) / 0.001)
+
+  - name: rustryx.slo
+    rules:
+      # Two-window burn rates (SRE-13). Budget is 0.001, so 14.4x burns 2% of the 30 day budget in
+      # one hour and 6x burns 5% in six hours. Both windows must agree: the short one makes the
+      # alert reset quickly, the long one stops a brief spike from paging.
+      - alert: RustryxErrorBudgetBurnFast
+        expr: |
+          (1 - rustryx:sli_availability:ratio_rate5m) > (14.4 * 0.001)
+          and
+          (1 - rustryx:sli_availability:ratio_rate1h) > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Rustryx burns the 30 day error budget 14.4 times too fast in {{ $labels.namespace }}"
+          description: "5xx share is {{ $value | humanizePercentage }} over 5m and above 1.44% over 1h. At this rate the monthly budget lasts about two days."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxerrorbudgetburnfast
+      - alert: RustryxErrorBudgetBurnSlow
+        expr: |
+          (1 - rustryx:sli_availability:ratio_rate30m) > (6 * 0.001)
+          and
+          (1 - rustryx:sli_availability:ratio_rate6h) > (6 * 0.001)
+        for: 15m
+        labels:
+          severity: high
+        annotations:
+          summary: "Rustryx burns the 30 day error budget 6 times too fast in {{ $labels.namespace }}"
+          description: "5xx share is {{ $value | humanizePercentage }} over 30m and above 0.6% over 6h."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxerrorbudgetburnslow
+
+  - name: rustryx.job_thresholds
+    rules:
+      # Per-job staleness threshold in seconds (SRE-13: "threshold set per job").
+      - record: rustryx:job_stale_threshold:seconds
+        expr: |
+          label_replace(vector(2 * 86400), "exported_job", "blob_gc", "", "")
+          or label_replace(vector(2 * 86400), "exported_job", "cleanup", "", "")
+          or label_replace(vector(35 * 86400), "exported_job", "audit_rotation", "", "")
+
+  - name: rustryx.alerts
+    rules:
+      # Availability of the service itself ---------------------------------------------------------
+      - alert: RustryxDown
+        expr: sum by (namespace) (up{job="rustryx"}) == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No Rustryx replica is reachable by the scraper in {{ $labels.namespace }}"
+          description: "Every scrape target of job rustryx reports up=0. The scrape goes through the headless metrics Service that keeps NotReady pods, so this means the pods are gone or unreachable, not merely NotReady."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxdown
+      - alert: RustryxTargetsAbsent
+        expr: absent(up{job="rustryx"})
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus has no Rustryx scrape targets at all"
+          description: "The series up{job=\"rustryx\"} does not exist. The ServiceMonitor is missing, the Service has no endpoints or the job was renamed."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxtargetsabsent
+      - alert: RustryxReplicaDown
+        expr: up{job="rustryx"} == 0
+        for: 5m
+        labels:
+          severity: high
+        annotations:
+          summary: "Rustryx replica {{ $labels.pod }} is not scraped"
+          description: "One replica does not answer on the ops port while others may be fine. Capacity is reduced."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxreplicadown
+      - alert: RustryxHigh5xx
+        expr: rustryx:sli_availability:ratio_rate5m < 0.98
+        for: 10m
+        labels:
+          severity: high
+        annotations:
+          summary: "More than 2% of Rustryx requests fail with 5xx in {{ $labels.namespace }}"
+          description: "Availability over 5m is {{ $value | humanizePercentage }}. Probe and metrics routes are excluded."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxhigh5xx
+      - alert: RustryxMetadataLatencyP95
+        expr: rustryx:http_request_duration_seconds:p95_metadata_5m > 0.3
+        for: 15m
+        labels:
+          severity: high
+        annotations:
+          summary: "p95 metadata latency is above the 300 ms objective in {{ $labels.namespace }}"
+          description: "p95 over 5m is {{ $value | humanizeDuration }}. Metadata covers the REST API, listings, search, maven-metadata.xml, npm packuments and pub package documents."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxmetadatalatencyp95
+      - alert: RustryxDownloadTtfbP95
+        expr: rustryx:http_request_duration_seconds:p95_download_hit_5m > 0.15
+        for: 15m
+        labels:
+          severity: high
+        annotations:
+          summary: "p95 time to first byte of cache-hit downloads is above 150 ms in {{ $labels.namespace }}"
+          description: "p95 over 5m is {{ $value | humanizeDuration }}. Cache-miss downloads through a proxy repository are not part of this objective."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxdownloadttfbp95
+      - alert: RustryxLoadShedding
+        expr: sum by (namespace, reason) (increase(http_shed_total{job="rustryx"}[10m])) > 50
+        for: 5m
+        labels:
+          severity: medium
+        annotations:
+          summary: "Rustryx rejects requests with 429 or 503 to protect itself ({{ $labels.reason }})"
+          description: "{{ $value }} requests were shed in 10 minutes. Concurrency limits or the blocking-task semaphore are saturated."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxloadshedding
+      - alert: RustryxTokioSaturated
+        expr: max by (namespace, pod) (tokio_busy_ratio{job="rustryx"}) > 0.9
+        for: 15m
+        labels:
+          severity: medium
+        annotations:
+          summary: "Tokio workers of {{ $labels.pod }} are busy more than 90% of the time"
+          description: "Sustained saturation of the async runtime. Check CPU requests, hashing or blocking work on the async path."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxtokiosaturated
+
+      # Dependencies ---------------------------------------------------------------------------------
+      - alert: RustryxDbUnavailable
+        expr: max by (namespace) (db_up{job="rustryx"}) == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Rustryx cannot reach PostgreSQL in {{ $labels.namespace }}"
+          description: "SELECT 1 fails on every node. All pods are NotReady by design and are not restarted. Nothing but already cached data can be served."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxdbunavailable
+      - alert: RustryxDbPoolWait
+        expr: |
+          (sum by (namespace, pod, instance) (increase(db_pool_wait_total{job="rustryx"}[5m])) > 0)
+          and on (instance)
+          (max by (instance) (db_pool_idle{job="rustryx"}) == 0)
+        for: 5m
+        labels:
+          severity: high
+        annotations:
+          summary: "The PostgreSQL pool of {{ $labels.pod }} is exhausted"
+          description: "Requests waited for a connection in the last 5 minutes and no idle connection was left."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxdbpoolwait
+      - alert: RustryxRedisUnavailable
+        expr: max by (namespace) (redis_up{job="rustryx"}) == 0
+        for: 5m
+        labels:
+          severity: high
+        annotations:
+          summary: "Rustryx cannot reach Redis in {{ $labels.namespace }}"
+          description: "Cache is degraded. With lock.backend=redis the singleton jobs (cleanup, blob GC) do not start while Redis is down. Requests are still served and the pods stay Ready."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxredisunavailable
+      - alert: RustryxBlobStoreErrors
+        expr: sum by (namespace, store) (increase(blob_store_ops_total{job="rustryx",result="error"}[10m])) > 5
+        for: 5m
+        labels:
+          severity: high
+        annotations:
+          summary: "Blob store {{ $labels.store }} returns errors (S3 or disk)"
+          description: "{{ $value }} failed blob operations in 10 minutes. Uploads and cache-miss downloads fail; the pods stay Ready because S3 never influences /readyz."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxblobstoreerrors
+      - alert: RustryxDiskLow
+        expr: (blob_store_free_bytes{job="rustryx"} / blob_store_total_bytes{job="rustryx"}) < 0.15
+        for: 10m
+        labels:
+          severity: high
+        annotations:
+          summary: "Local blob store {{ $labels.store }} has less than 15% free space on {{ $labels.pod }}"
+          description: "Free space is {{ $value | humanizePercentage }}. Writes are rejected with 507 below 10%."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxdisklow
+      - alert: RustryxDiskCritical
+        expr: (blob_store_free_bytes{job="rustryx"} / blob_store_total_bytes{job="rustryx"}) < 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Local blob store {{ $labels.store }} has less than 5% free space on {{ $labels.pod }}"
+          description: "Free space is {{ $value | humanizePercentage }}. Writes are rejected; reads and deletes still work."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxdiskcritical
+      - alert: RustryxUpstreamErrors
+        expr: sum by (namespace, repo) (increase(upstream_errors_total{job="rustryx"}[10m])) > 20
+        for: 5m
+        labels:
+          severity: medium
+        annotations:
+          summary: "Upstream of proxy repository {{ $labels.repo }} fails"
+          description: "{{ $value }} upstream errors in 10 minutes (timeout, connect, 5xx or open circuit)."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxupstreamerrors
+      - alert: RustryxUpstreamCircuitOpen
+        expr: sum by (namespace, repo) (increase(upstream_errors_total{job="rustryx",kind="circuit_open"}[10m])) > 0
+        labels:
+          severity: medium
+        annotations:
+          summary: "The circuit breaker of proxy repository {{ $labels.repo }} rejected requests"
+          description: "The breaker is open: requests to the upstream are not sent and stale cache is served where it exists."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxupstreamcircuitopen
+
+      # Background jobs: a probe cannot see "alive but not working" (SRE-13) -----------------------
+      # The staleness threshold of each job is one row of the table below (seconds). A job without
+      # a row is never alerted on as stale, so a new job in rustryx-tasks needs a row here. The
+      # gauge must be initialised to the process start time by the application, otherwise a job
+      # that never ran has no series and never goes stale.
+      - alert: RustryxJobStale
+        expr: |
+          (time() - max by (namespace, exported_job) (background_job_last_success_timestamp_seconds{job="rustryx"}))
+          > on (exported_job) group_left ()
+          rustryx:job_stale_threshold:seconds
+        for: 15m
+        labels:
+          severity: high
+        annotations:
+          summary: "Background job {{ $labels.exported_job }} has not succeeded within its allowed interval"
+          description: "Last success was {{ $value | humanizeDuration }} ago."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxjobstale
+      - alert: RustryxJobFailed
+        expr: sum by (namespace, exported_job) (increase(background_job_runs_total{job="rustryx",result="error"}[1h])) > 0
+        labels:
+          severity: medium
+        annotations:
+          summary: "Background job {{ $labels.exported_job }} failed"
+          description: "{{ $value }} failed runs in the last hour. A failed run leaves state that the next run picks up (jobs are idempotent)."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxjobfailed
+      - alert: RustryxJobRunningTooLong
+        expr: max by (namespace, exported_job) (background_job_running{job="rustryx"}) == 1
+        for: 6h
+        labels:
+          severity: medium
+        annotations:
+          summary: "Background job {{ $labels.exported_job }} has been running for more than six hours"
+          description: "A job that never finishes holds its distributed lock. If the holder is hung, release the lock (see runbook)."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxjobrunningtoolong
+      - alert: RustryxLockLost
+        expr: sum by (namespace, key_class) (increase(distlock_lost_total{job="rustryx"}[1h])) > 0
+        labels:
+          severity: high
+        annotations:
+          summary: "A distributed lock was lost ({{ $labels.key_class }})"
+          description: "{{ $value }} lock losses in one hour. The job stopped writing as designed; the cause is a slow lock backend, a network partition or a node pause."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxlocklost
+
+      # Identity ---------------------------------------------------------------------------------------
+      - alert: RustryxOidcJwksStale
+        expr: max by (namespace) (oidc_jwks_age_seconds{job="rustryx"}) > 3600
+        for: 10m
+        labels:
+          severity: medium
+        annotations:
+          summary: "The cached Keycloak JWKS is older than one hour in {{ $labels.namespace }}"
+          description: "Age is {{ $value | humanizeDuration }}. Tokens still validate against the last good key set; rotated keys will be rejected until the refresh works again."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxoidcjwksstale
+      - alert: RustryxOidcRefreshFailures
+        expr: sum by (namespace, op) (increase(oidc_requests_total{job="rustryx",op=~"jwks|discovery",result!="ok"}[30m])) > 3
+        labels:
+          severity: medium
+        annotations:
+          summary: "Refreshing OIDC {{ $labels.op }} from Keycloak fails"
+          description: "{{ $value }} failures in 30 minutes. Causes: Keycloak down, a certificate that no longer validates (expired or unknown CA), DNS or egress policy."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxoidcrefreshfailures
+      - alert: RustryxLdapErrors
+        expr: sum by (namespace) (increase(ldap_requests_total{job="rustryx",result=~"error|timeout"}[10m])) > 5
+        labels:
+          severity: medium
+        annotations:
+          summary: "LDAP requests fail or time out"
+          description: "{{ $value }} failed LDAP operations in 10 minutes. LDAP users lose access after the 5 minute group cache ends; local users and tokens are unaffected."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxldaperrors
+      - alert: RustryxAuthFailSpike
+        expr: sum by (namespace, method) (increase(auth_attempts_total{job="rustryx",result="denied"}[10m])) > 100
+        labels:
+          severity: medium
+        annotations:
+          summary: "Many denied authentication attempts ({{ $labels.method }})"
+          description: "{{ $value }} denied attempts in 10 minutes. Possible credential stuffing, or a misconfigured CI client."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxauthfailspike
+      - alert: RustryxBreakGlassLogin
+        expr: sum by (namespace) (increase(auth_breakglass_logins_total{job="rustryx"}[10m])) > 0
+        labels:
+          severity: high
+        annotations:
+          summary: "The break-glass administrator logged in"
+          description: "Every use of the break-glass account must be explained. The login is also in the audit log with level warning."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxbreakglasslogin
+
+  - name: rustryx.kube
+    rules:
+      # `rustryx-migrate` is the migration Job of a release named `rustryx`; the chart rewrites it.
+      # The Job is kept for a day after it finishes (migrations.ttlSecondsAfterFinished), so a
+      # failure stays visible long enough to be caught.
+      - alert: RustryxMigrationFailed
+        expr: kube_job_status_failed{job_name=~"rustryx-migrate"} > 0
+        labels:
+          severity: high
+        annotations:
+          summary: "The Rustryx migration Job {{ $labels.job_name }} failed in {{ $labels.namespace }}"
+          description: "The upgrade stopped before the new pods rolled out. Old pods keep serving. Read the Job log before retrying."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxmigrationfailed
+      - alert: RustryxNoReadyReplicas
+        expr: kube_deployment_status_replicas_available{deployment="rustryx"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No Rustryx pod is Ready in {{ $labels.namespace }}"
+          description: "The Service has no endpoints. Check /readyz first: PostgreSQL unreachable, schema older than the binary, or the listener not up."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxnoreadyreplicas
+      - alert: RustryxContainerRestarts
+        expr: increase(kube_pod_container_status_restarts_total{container="rustryx"}[30m]) > 0
+        labels:
+          severity: high
+        annotations:
+          summary: "Container rustryx restarted in pod {{ $labels.pod }}"
+          description: "Probes are designed so that a dependency outage never restarts a pod. A restart means a crash, an OOM kill or a failing liveness probe."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxcontainerrestarts
+      - alert: RustryxMemoryNearLimit
+        expr: |
+          max by (namespace, pod) (container_memory_working_set_bytes{container="rustryx"})
+          / on (namespace, pod)
+          max by (namespace, pod) (kube_pod_container_resource_limits{container="rustryx",resource="memory"})
+          > 0.9
+        for: 10m
+        labels:
+          severity: high
+        annotations:
+          summary: "Pod {{ $labels.pod }} uses more than 90% of its memory limit"
+          description: "Working set is {{ $value | humanizePercentage }} of the limit. Uploads are streamed, so memory should be bounded by buffers and concurrency, not by artifact size: look for a leak or too many concurrent uploads."
+          runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxmemorynearlimit

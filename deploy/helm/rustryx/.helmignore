@@ -1,0 +1,10 @@
+# Test inputs and unit tests are not part of the packaged chart: they would only add weight to the
+# OCI artifact. They stay in git and run from test.sh.
+ci/
+tests/
+.git/
+.gitignore
+*.swp
+*.bak
+*.tmp
+.DS_Store
