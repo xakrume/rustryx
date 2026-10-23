@@ -142,11 +142,7 @@ impl Webhook {
                 "webhook name must be 1 to 128 characters",
             ));
         }
-        if self.url.chars().count() > MAX_WEBHOOK_URL_CHARS || !self.url.starts_with("https://") {
-            return Err(DomainError::invalid(
-                "webhook URL must be an https URL of at most 2048 characters",
-            ));
-        }
+        validate_webhook_url(&self.url)?;
         if self.events.is_empty() || self.events.len() > MAX_WEBHOOK_EVENTS {
             return Err(DomainError::invalid(
                 "a webhook subscribes to 1 to 32 events",
@@ -289,6 +285,38 @@ impl WebhookDelivery {
         }
         Ok(())
     }
+}
+
+/// Checks a webhook target: `https` only, at most 2048 characters, no whitespace or control
+/// characters, a non-empty host, no user info and no fragment.
+///
+/// User info (`https://user:pass@host`) would put a credential into a column and a log line that
+/// are not treated as secrets, and it is a classic way to make a URL read as one host while it
+/// goes to another. The signing secret and the optional auth header are the only places a
+/// credential may live. Whether the HOST is allowed (private ranges, metadata addresses) is
+/// decided at delivery time by the egress policy, which also sees the resolved address.
+fn validate_webhook_url(url: &str) -> Result<(), DomainError> {
+    let invalid = |reason: &str| DomainError::invalid(format!("webhook URL {reason}"));
+    if url.chars().count() > MAX_WEBHOOK_URL_CHARS {
+        return Err(invalid("must be at most 2048 characters"));
+    }
+    let rest = url
+        .strip_prefix("https://")
+        .ok_or_else(|| invalid("must be an https URL"))?;
+    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(invalid("must not contain whitespace or control characters"));
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.is_empty() {
+        return Err(invalid("must have a host"));
+    }
+    if authority.contains('@') {
+        return Err(invalid("must not contain user info"));
+    }
+    if url.contains('#') {
+        return Err(invalid("must not contain a fragment"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -480,5 +508,34 @@ mod tests {
         let json = round_trip_json(&delivery);
         assert_eq!(json["created_at"], "2026-10-24T10:00:00Z");
         assert_eq!(json["event_kind"], "push");
+    }
+
+    #[test]
+    fn must_not_accept_user_info_fragments_or_control_characters_in_the_url() {
+        for bad in [
+            "https://user:pass@hooks.example.org/x",
+            "https://hooks.example.org@evil.example/x",
+            "https://hooks.example.org/x#frag",
+            "https://hooks.example.org/a b",
+            "https://hooks.example.org/\u{7}",
+            "https://",
+            "https:///path",
+            "https://?q=1",
+            "http://hooks.example.org/x",
+            "ftp://hooks.example.org/x",
+        ] {
+            let mut hook = webhook();
+            hook.url = bad.to_owned();
+            assert!(hook.validate().is_err(), "{bad:?}");
+        }
+        for good in [
+            "https://hooks.example.org",
+            "https://hooks.example.org:8443/rustryx?token=abc",
+            "https://[2001:db8::1]/hook",
+        ] {
+            let mut hook = webhook();
+            hook.url = good.to_owned();
+            assert!(hook.validate().is_ok(), "{good:?}");
+        }
     }
 }
