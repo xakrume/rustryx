@@ -1,0 +1,12 @@
+node_modules
+dist
+dist-mock
+playwright-report
+test-results
+coverage
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.vite

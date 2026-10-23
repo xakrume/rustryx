@@ -1,0 +1,6363 @@
+{
+ "specVersion": "1.0.0-draft.1",
+ "operations": [
+  {
+   "operationId": "getLoginProviders",
+   "method": "get",
+   "path": "/api/v1/auth/providers",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "local": {
+     "enabled": true
+    },
+    "ldap": {
+     "enabled": false
+    },
+    "oidc": {
+     "enabled": true,
+     "available": true,
+     "display_name": "Corporate SSO",
+     "login_path": "/api/v1/auth/oidc/login"
+    }
+   }
+  },
+  {
+   "operationId": "getAuthProvidersDetails",
+   "method": "get",
+   "path": "/api/v1/auth/providers/details",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "source": "file",
+    "editable": false,
+    "local": {
+     "min_password_length": 12,
+     "max_password_length": 1024,
+     "lockout_threshold": 5,
+     "max_lockout_secs": 1800
+    },
+    "ldap": {
+     "enabled": false,
+     "url": null,
+     "starttls": false,
+     "admin_groups": [],
+     "ca_configured": false,
+     "bind_password_set": false
+    },
+    "oidc": {
+     "enabled": true,
+     "issuer": "https://sso.example.org/realms/rustryx",
+     "public_issuer_url": null,
+     "client_id": "rustryx-ui",
+     "client_secret_set": true,
+     "scopes": [
+      "openid",
+      "profile",
+      "email"
+     ],
+     "groups_claim": "groups",
+     "admin_groups": [
+      "/rustryx/admins"
+     ],
+     "default_role": null,
+     "clock_skew_secs": 60,
+     "redirect_uri": "https://repo.example.org/api/v1/auth/oidc/callback",
+     "discovery": {
+      "loaded": true,
+      "reachable": true,
+      "last_success_at": "2026-10-24T09:15:30Z",
+      "jwks_keys": 2
+     }
+    }
+   }
+  },
+  {
+   "operationId": "login",
+   "method": "post",
+   "path": "/api/v1/auth/login",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "authenticated": true,
+    "user": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000005",
+     "username": "alice",
+     "display_name": "Alice Example",
+     "source": "oidc"
+    },
+    "auth_method": "internal_jwt",
+    "csrf_token": "Zm9vYmFyYmF6cXV4",
+    "issued_at": "2026-10-24T09:15:30Z",
+    "idle_expires_at": "2026-10-24T09:45:30Z",
+    "absolute_expires_at": "2026-10-24T17:15:30Z",
+    "idle_timeout_secs": 1800,
+    "absolute_timeout_secs": 28800
+   }
+  },
+  {
+   "operationId": "logout",
+   "method": "post",
+   "path": "/api/v1/auth/logout",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "redirect_url": null
+   }
+  },
+  {
+   "operationId": "getSession",
+   "method": "get",
+   "path": "/api/v1/auth/session",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "authenticated": true,
+    "user": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000005",
+     "username": "alice",
+     "display_name": "Alice Example",
+     "source": "oidc"
+    },
+    "auth_method": "internal_jwt",
+    "csrf_token": "Zm9vYmFyYmF6cXV4",
+    "issued_at": "2026-10-24T09:15:30Z",
+    "idle_expires_at": "2026-10-24T09:45:30Z",
+    "absolute_expires_at": "2026-10-24T17:15:30Z",
+    "idle_timeout_secs": 1800,
+    "absolute_timeout_secs": 28800
+   }
+  },
+  {
+   "operationId": "refreshSession",
+   "method": "post",
+   "path": "/api/v1/auth/session/refresh",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "authenticated": true,
+    "user": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000005",
+     "username": "alice",
+     "display_name": "Alice Example",
+     "source": "oidc"
+    },
+    "auth_method": "internal_jwt",
+    "csrf_token": "Zm9vYmFyYmF6cXV4",
+    "issued_at": "2026-10-24T09:15:30Z",
+    "idle_expires_at": "2026-10-24T09:45:30Z",
+    "absolute_expires_at": "2026-10-24T17:15:30Z",
+    "idle_timeout_secs": 1800,
+    "absolute_timeout_secs": 28800
+   }
+  },
+  {
+   "operationId": "getCsrfToken",
+   "method": "get",
+   "path": "/api/v1/auth/csrf",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "csrf_token": "Zm9vYmFyYmF6cXV4"
+   }
+  },
+  {
+   "operationId": "getMe",
+   "method": "get",
+   "path": "/api/v1/me",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "authenticated": true,
+    "user": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000005",
+     "username": "alice",
+     "display_name": "Alice Example",
+     "email": "alice@example.org",
+     "source": "oidc",
+     "issuer": "https://sso.example.org/realms/rustryx",
+     "subject": "9f1c2f0e-1d2b-4b53-8f55-0a5f4cbb2c11",
+     "enabled": true,
+     "created_at": "2026-10-20T07:02:11Z"
+    },
+    "auth_method": "internal_jwt",
+    "roles": [
+     {
+      "role": {
+       "id": "0192f6c4-5a1e-7000-8000-00000000000b",
+       "name": "nx-developer"
+      },
+      "origin": "oidc",
+      "groups": [
+       "/rustryx/team-payments/publishers"
+      ]
+     }
+    ],
+    "groups": [
+     "/rustryx/team-payments/publishers"
+    ],
+    "groups_confirmed_at": "2026-10-24T09:15:30Z",
+    "token": null,
+    "permissions": {
+     "is_admin": false,
+     "admin_areas": [],
+     "repository_grants": [
+      {
+       "privilege": "nx-repository-view-*-*",
+       "repository": "*",
+       "format": null,
+       "actions": [
+        "browse",
+        "read"
+       ],
+       "selector": false
+      }
+     ],
+     "can": {
+      "create_repository": false,
+      "upload": false,
+      "create_personal_token": true,
+      "view_audit": false,
+      "administer": false
+     }
+    },
+    "token_policy": {
+     "default_ttl_days": 90,
+     "max_ttl_days": 365,
+     "require_expiry": true
+    },
+    "system": {
+     "read_only": false,
+     "anonymous_enabled": false,
+     "base_url_configured": true
+    }
+   }
+  },
+  {
+   "operationId": "changeMyPassword",
+   "method": "put",
+   "path": "/api/v1/me/password",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "signOutEverywhere",
+   "method": "post",
+   "path": "/api/v1/me/actions/sign-out-everywhere",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "listMyTokens",
+   "method": "get",
+   "path": "/api/v1/me/tokens",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000003d",
+      "user_id": "0192f6c4-5a1e-7000-8000-000000000005",
+      "name": "ci-publisher",
+      "display_prefix": "ryx_Qk3T",
+      "scopes": [
+       "repo:maven-releases:write"
+      ],
+      "expires_at": "2027-01-22T09:15:30Z",
+      "revoked_at": null,
+      "last_used_at": "2026-10-24T09:15:30Z",
+      "created_at": "2026-10-20T07:02:11Z",
+      "kind": "personal",
+      "state": "active",
+      "owner": {
+       "id": "0192f6c4-5a1e-7000-8000-000000000005",
+       "username": "alice",
+       "display_name": "Alice Example",
+       "source": "oidc"
+      },
+      "never_used": false,
+      "project_id": null
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createMyToken",
+   "method": "post",
+   "path": "/api/v1/me/tokens",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000003d",
+    "user_id": "0192f6c4-5a1e-7000-8000-000000000005",
+    "name": "ci-publisher",
+    "display_prefix": "ryx_Qk3T",
+    "scopes": [
+     "repo:maven-releases:write"
+    ],
+    "expires_at": "2027-01-22T09:15:30Z",
+    "revoked_at": null,
+    "last_used_at": null,
+    "created_at": "2026-10-24T09:15:30Z",
+    "kind": "personal",
+    "state": "active",
+    "owner": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000005",
+     "username": "alice",
+     "display_name": "Alice Example",
+     "source": "oidc"
+    },
+    "never_used": true,
+    "project_id": null,
+    "secret": "ryx_EXAMPLE_ONLY_NOT_A_REAL_TOKEN_0000000000"
+   }
+  },
+  {
+   "operationId": "revokeMyToken",
+   "method": "post",
+   "path": "/api/v1/me/tokens/{token_id}/actions/revoke",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000003d",
+    "user_id": "0192f6c4-5a1e-7000-8000-000000000005",
+    "name": "ci-publisher",
+    "display_prefix": "ryx_Qk3T",
+    "scopes": [
+     "repo:maven-releases:write"
+    ],
+    "expires_at": "2027-01-22T09:15:30Z",
+    "revoked_at": "2026-10-24T09:15:30Z",
+    "last_used_at": "2026-10-24T09:15:30Z",
+    "created_at": "2026-10-20T07:02:11Z",
+    "kind": "personal",
+    "state": "revoked",
+    "owner": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000005",
+     "username": "alice",
+     "display_name": "Alice Example",
+     "source": "oidc"
+    },
+    "never_used": false,
+    "project_id": null
+   }
+  },
+  {
+   "operationId": "listApiTokens",
+   "method": "get",
+   "path": "/api/v1/api-tokens",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000003d",
+      "user_id": "0192f6c4-5a1e-7000-8000-000000000005",
+      "name": "ci-publisher",
+      "display_prefix": "ryx_Qk3T",
+      "scopes": [
+       "repo:maven-releases:write"
+      ],
+      "expires_at": "2027-01-22T09:15:30Z",
+      "revoked_at": null,
+      "last_used_at": "2026-10-24T09:15:30Z",
+      "created_at": "2026-10-20T07:02:11Z",
+      "kind": "personal",
+      "state": "active",
+      "owner": {
+       "id": "0192f6c4-5a1e-7000-8000-000000000005",
+       "username": "alice",
+       "display_name": "Alice Example",
+       "source": "oidc"
+      },
+      "never_used": false,
+      "project_id": null
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createRobotToken",
+   "method": "post",
+   "path": "/api/v1/api-tokens",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000003d",
+    "user_id": "0192f6c4-5a1e-7000-8000-000000000005",
+    "name": "ci-publisher",
+    "display_prefix": "ryx_Qk3T",
+    "scopes": [
+     "repo:maven-releases:write"
+    ],
+    "expires_at": "2027-01-22T09:15:30Z",
+    "revoked_at": null,
+    "last_used_at": null,
+    "created_at": "2026-10-24T09:15:30Z",
+    "kind": "personal",
+    "state": "active",
+    "owner": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000005",
+     "username": "alice",
+     "display_name": "Alice Example",
+     "source": "oidc"
+    },
+    "never_used": true,
+    "project_id": null,
+    "secret": "ryx_EXAMPLE_ONLY_NOT_A_REAL_TOKEN_0000000000"
+   }
+  },
+  {
+   "operationId": "getApiToken",
+   "method": "get",
+   "path": "/api/v1/api-tokens/{token_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000003d",
+    "user_id": "0192f6c4-5a1e-7000-8000-000000000005",
+    "name": "ci-publisher",
+    "display_prefix": "ryx_Qk3T",
+    "scopes": [
+     "repo:maven-releases:write"
+    ],
+    "expires_at": "2027-01-22T09:15:30Z",
+    "revoked_at": null,
+    "last_used_at": "2026-10-24T09:15:30Z",
+    "created_at": "2026-10-20T07:02:11Z",
+    "kind": "personal",
+    "state": "active",
+    "owner": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000005",
+     "username": "alice",
+     "display_name": "Alice Example",
+     "source": "oidc"
+    },
+    "never_used": false,
+    "project_id": null
+   }
+  },
+  {
+   "operationId": "revokeApiToken",
+   "method": "post",
+   "path": "/api/v1/api-tokens/{token_id}/actions/revoke",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000003d",
+    "user_id": "0192f6c4-5a1e-7000-8000-000000000005",
+    "name": "ci-publisher",
+    "display_prefix": "ryx_Qk3T",
+    "scopes": [
+     "repo:maven-releases:write"
+    ],
+    "expires_at": "2027-01-22T09:15:30Z",
+    "revoked_at": "2026-10-24T09:15:30Z",
+    "last_used_at": "2026-10-24T09:15:30Z",
+    "created_at": "2026-10-20T07:02:11Z",
+    "kind": "personal",
+    "state": "revoked",
+    "owner": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000005",
+     "username": "alice",
+     "display_name": "Alice Example",
+     "source": "oidc"
+    },
+    "never_used": false,
+    "project_id": null
+   }
+  },
+  {
+   "operationId": "listUsers",
+   "method": "get",
+   "path": "/api/v1/users",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000005",
+      "username": "alice",
+      "source": "oidc",
+      "issuer": "https://sso.example.org/realms/rustryx",
+      "subject": "9f1c2f0e-1d2b-4b53-8f55-0a5f4cbb2c11",
+      "email": "alice@example.org",
+      "display_name": "Alice Example",
+      "enabled": true,
+      "created_at": "2026-10-20T07:02:11Z",
+      "last_login_at": "2026-10-24T09:15:30Z",
+      "roles": [
+       {
+        "role": {
+         "id": "0192f6c4-5a1e-7000-8000-00000000000b",
+         "name": "nx-developer"
+        },
+        "origin": "oidc",
+        "groups": [
+         "/rustryx/team-payments/publishers"
+        ]
+       }
+      ],
+      "groups_seen": [
+       "/rustryx/team-payments/publishers"
+      ],
+      "token_count": 1,
+      "tokens_valid_after": null,
+      "editable_fields": [
+       "enabled",
+       "roles"
+      ],
+      "read_only_reason": "Profile fields come from the identity provider."
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createUser",
+   "method": "post",
+   "path": "/api/v1/users",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000005",
+    "username": "bob",
+    "source": "local",
+    "issuer": null,
+    "subject": null,
+    "email": "alice@example.org",
+    "display_name": "Alice Example",
+    "enabled": true,
+    "created_at": "2026-10-20T07:02:11Z",
+    "last_login_at": "2026-10-24T09:15:30Z",
+    "roles": [
+     {
+      "role": {
+       "id": "0192f6c4-5a1e-7000-8000-00000000000b",
+       "name": "nx-developer"
+      },
+      "origin": "oidc",
+      "groups": [
+       "/rustryx/team-payments/publishers"
+      ]
+     }
+    ],
+    "groups_seen": [
+     "/rustryx/team-payments/publishers"
+    ],
+    "token_count": 1,
+    "tokens_valid_after": null,
+    "editable_fields": [
+     "enabled",
+     "roles"
+    ],
+    "read_only_reason": "Profile fields come from the identity provider."
+   }
+  },
+  {
+   "operationId": "getUser",
+   "method": "get",
+   "path": "/api/v1/users/{user_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000005",
+    "username": "alice",
+    "source": "oidc",
+    "issuer": "https://sso.example.org/realms/rustryx",
+    "subject": "9f1c2f0e-1d2b-4b53-8f55-0a5f4cbb2c11",
+    "email": "alice@example.org",
+    "display_name": "Alice Example",
+    "enabled": true,
+    "created_at": "2026-10-20T07:02:11Z",
+    "last_login_at": "2026-10-24T09:15:30Z",
+    "roles": [
+     {
+      "role": {
+       "id": "0192f6c4-5a1e-7000-8000-00000000000b",
+       "name": "nx-developer"
+      },
+      "origin": "oidc",
+      "groups": [
+       "/rustryx/team-payments/publishers"
+      ]
+     }
+    ],
+    "groups_seen": [
+     "/rustryx/team-payments/publishers"
+    ],
+    "token_count": 1,
+    "tokens_valid_after": null,
+    "editable_fields": [
+     "enabled",
+     "roles"
+    ],
+    "read_only_reason": "Profile fields come from the identity provider."
+   }
+  },
+  {
+   "operationId": "patchUser",
+   "method": "patch",
+   "path": "/api/v1/users/{user_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000005",
+    "username": "alice",
+    "source": "oidc",
+    "issuer": "https://sso.example.org/realms/rustryx",
+    "subject": "9f1c2f0e-1d2b-4b53-8f55-0a5f4cbb2c11",
+    "email": "alice@example.org",
+    "display_name": "Alice Example",
+    "enabled": true,
+    "created_at": "2026-10-20T07:02:11Z",
+    "last_login_at": "2026-10-24T09:15:30Z",
+    "roles": [
+     {
+      "role": {
+       "id": "0192f6c4-5a1e-7000-8000-00000000000b",
+       "name": "nx-developer"
+      },
+      "origin": "oidc",
+      "groups": [
+       "/rustryx/team-payments/publishers"
+      ]
+     }
+    ],
+    "groups_seen": [
+     "/rustryx/team-payments/publishers"
+    ],
+    "token_count": 1,
+    "tokens_valid_after": null,
+    "editable_fields": [
+     "enabled",
+     "roles"
+    ],
+    "read_only_reason": "Profile fields come from the identity provider."
+   }
+  },
+  {
+   "operationId": "deleteUser",
+   "method": "delete",
+   "path": "/api/v1/users/{user_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "setUserRoles",
+   "method": "put",
+   "path": "/api/v1/users/{user_id}/roles",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000005",
+    "username": "alice",
+    "source": "oidc",
+    "issuer": "https://sso.example.org/realms/rustryx",
+    "subject": "9f1c2f0e-1d2b-4b53-8f55-0a5f4cbb2c11",
+    "email": "alice@example.org",
+    "display_name": "Alice Example",
+    "enabled": true,
+    "created_at": "2026-10-20T07:02:11Z",
+    "last_login_at": "2026-10-24T09:15:30Z",
+    "roles": [
+     {
+      "role": {
+       "id": "0192f6c4-5a1e-7000-8000-00000000000b",
+       "name": "nx-developer"
+      },
+      "origin": "oidc",
+      "groups": [
+       "/rustryx/team-payments/publishers"
+      ]
+     }
+    ],
+    "groups_seen": [
+     "/rustryx/team-payments/publishers"
+    ],
+    "token_count": 1,
+    "tokens_valid_after": null,
+    "editable_fields": [
+     "enabled",
+     "roles"
+    ],
+    "read_only_reason": "Profile fields come from the identity provider."
+   }
+  },
+  {
+   "operationId": "resetUserPassword",
+   "method": "post",
+   "path": "/api/v1/users/{user_id}/actions/reset-password",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "signOutUser",
+   "method": "post",
+   "path": "/api/v1/users/{user_id}/actions/sign-out",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "listPrivileges",
+   "method": "get",
+   "path": "/api/v1/privileges",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000047",
+      "name": "maven-releases-write",
+      "description": "Publish to maven-releases",
+      "builtin": false,
+      "grant": {
+       "type": "repository-view",
+       "format": "maven2",
+       "repository": "maven-releases"
+      },
+      "actions": [
+       "browse",
+       "read",
+       "write"
+      ],
+      "roles": [
+       {
+        "id": "0192f6c4-5a1e-7000-8000-00000000000c",
+        "name": "maven-publishers"
+       }
+      ],
+      "selector": null
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createPrivilege",
+   "method": "post",
+   "path": "/api/v1/privileges",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000047",
+    "name": "maven-releases-write",
+    "description": "Publish to maven-releases",
+    "builtin": false,
+    "grant": {
+     "type": "repository-view",
+     "format": "maven2",
+     "repository": "maven-releases"
+    },
+    "actions": [
+     "browse",
+     "read",
+     "write"
+    ],
+    "roles": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000000c",
+      "name": "maven-publishers"
+     }
+    ],
+    "selector": null
+   }
+  },
+  {
+   "operationId": "getPrivilege",
+   "method": "get",
+   "path": "/api/v1/privileges/{privilege_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000047",
+    "name": "maven-releases-write",
+    "description": "Publish to maven-releases",
+    "builtin": false,
+    "grant": {
+     "type": "repository-view",
+     "format": "maven2",
+     "repository": "maven-releases"
+    },
+    "actions": [
+     "browse",
+     "read",
+     "write"
+    ],
+    "roles": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000000c",
+      "name": "maven-publishers"
+     }
+    ],
+    "selector": null
+   }
+  },
+  {
+   "operationId": "updatePrivilege",
+   "method": "put",
+   "path": "/api/v1/privileges/{privilege_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000047",
+    "name": "maven-releases-write",
+    "description": "Publish to maven-releases",
+    "builtin": false,
+    "grant": {
+     "type": "repository-view",
+     "format": "maven2",
+     "repository": "maven-releases"
+    },
+    "actions": [
+     "browse",
+     "read",
+     "write"
+    ],
+    "roles": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000000c",
+      "name": "maven-publishers"
+     }
+    ],
+    "selector": null
+   }
+  },
+  {
+   "operationId": "deletePrivilege",
+   "method": "delete",
+   "path": "/api/v1/privileges/{privilege_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "listRoles",
+   "method": "get",
+   "path": "/api/v1/roles",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000000c",
+      "name": "maven-publishers",
+      "description": "Publish Maven artifacts",
+      "builtin": false,
+      "privilege_ids": [
+       "0192f6c4-5a1e-7000-8000-000000000047"
+      ],
+      "nested_role_ids": [
+       "0192f6c4-5a1e-7000-8000-00000000000b"
+      ],
+      "privileges": [
+       {
+        "id": "0192f6c4-5a1e-7000-8000-000000000047",
+        "name": "maven-releases-write",
+        "builtin": false
+       }
+      ],
+      "nested_roles": [
+       {
+        "id": "0192f6c4-5a1e-7000-8000-00000000000b",
+        "name": "nx-developer"
+       }
+      ],
+      "assigned_users": 2,
+      "mapped_groups": 1
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createRole",
+   "method": "post",
+   "path": "/api/v1/roles",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000000c",
+    "name": "maven-publishers",
+    "description": "Publish Maven artifacts",
+    "builtin": false,
+    "privilege_ids": [
+     "0192f6c4-5a1e-7000-8000-000000000047"
+    ],
+    "nested_role_ids": [
+     "0192f6c4-5a1e-7000-8000-00000000000b"
+    ],
+    "privileges": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000047",
+      "name": "maven-releases-write",
+      "builtin": false
+     }
+    ],
+    "nested_roles": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000000b",
+      "name": "nx-developer"
+     }
+    ],
+    "assigned_users": 2,
+    "mapped_groups": 1
+   }
+  },
+  {
+   "operationId": "getRole",
+   "method": "get",
+   "path": "/api/v1/roles/{role_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000000c",
+    "name": "maven-publishers",
+    "description": "Publish Maven artifacts",
+    "builtin": false,
+    "privilege_ids": [
+     "0192f6c4-5a1e-7000-8000-000000000047"
+    ],
+    "nested_role_ids": [
+     "0192f6c4-5a1e-7000-8000-00000000000b"
+    ],
+    "privileges": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000047",
+      "name": "maven-releases-write",
+      "builtin": false
+     }
+    ],
+    "nested_roles": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000000b",
+      "name": "nx-developer"
+     }
+    ],
+    "assigned_users": 2,
+    "mapped_groups": 1
+   }
+  },
+  {
+   "operationId": "updateRole",
+   "method": "put",
+   "path": "/api/v1/roles/{role_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000000c",
+    "name": "maven-publishers",
+    "description": "Publish Maven artifacts",
+    "builtin": false,
+    "privilege_ids": [
+     "0192f6c4-5a1e-7000-8000-000000000047"
+    ],
+    "nested_role_ids": [
+     "0192f6c4-5a1e-7000-8000-00000000000b"
+    ],
+    "privileges": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000047",
+      "name": "maven-releases-write",
+      "builtin": false
+     }
+    ],
+    "nested_roles": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000000b",
+      "name": "nx-developer"
+     }
+    ],
+    "assigned_users": 2,
+    "mapped_groups": 1
+   }
+  },
+  {
+   "operationId": "deleteRole",
+   "method": "delete",
+   "path": "/api/v1/roles/{role_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "getRoleEffectivePrivileges",
+   "method": "get",
+   "path": "/api/v1/roles/{role_id}/effective-privileges",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000047",
+      "name": "maven-releases-write",
+      "description": "Publish to maven-releases",
+      "builtin": false,
+      "grant": {
+       "type": "repository-view",
+       "format": "maven2",
+       "repository": "maven-releases"
+      },
+      "actions": [
+       "browse",
+       "read",
+       "write"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "listContentSelectors",
+   "method": "get",
+   "path": "/api/v1/content-selectors",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000051",
+      "name": "internal-libs",
+      "description": "Everything under com/example",
+      "expression": "format == \"maven2\" && path.startsWith(\"/com/example/\")",
+      "updated_at": "2026-10-24T09:15:30Z",
+      "used_by_privileges": [
+       {
+        "id": "0192f6c4-5a1e-7000-8000-000000000048",
+        "name": "internal-libs-read"
+       }
+      ]
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createContentSelector",
+   "method": "post",
+   "path": "/api/v1/content-selectors",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000051",
+    "name": "internal-libs",
+    "description": "Everything under com/example",
+    "expression": "format == \"maven2\" && path.startsWith(\"/com/example/\")",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "used_by_privileges": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000048",
+      "name": "internal-libs-read"
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "validateContentSelector",
+   "method": "post",
+   "path": "/api/v1/content-selectors/validate",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "valid": true,
+    "errors": []
+   }
+  },
+  {
+   "operationId": "testContentSelector",
+   "method": "post",
+   "path": "/api/v1/content-selectors/test",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "valid": true,
+    "errors": [],
+    "results": [
+     {
+      "index": 0,
+      "result": "match",
+      "reason": null
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "previewContentSelector",
+   "method": "post",
+   "path": "/api/v1/content-selectors/preview",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "valid": true,
+    "errors": [],
+    "items": [
+     {
+      "asset_id": "0192f6c4-5a1e-7000-8000-00000000005b",
+      "path": "com/example/lib/1.0/lib-1.0.jar",
+      "component_id": "0192f6c4-5a1e-7000-8000-00000000005f"
+     }
+    ],
+    "truncated": false
+   }
+  },
+  {
+   "operationId": "getSelectorLanguage",
+   "method": "get",
+   "path": "/api/v1/content-selectors/language",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "variables": [
+     {
+      "name": "path",
+      "type": "string",
+      "description": "Normalized path with a leading slash"
+     }
+    ],
+    "operators": [
+     {
+      "syntax": "a =~ \"re\"",
+      "description": "Regex must match the whole string"
+     }
+    ],
+    "limits": {
+     "max_expression_bytes": 1024,
+     "max_nesting": 32,
+     "max_in_items": 64,
+     "max_regex_bytes": 512,
+     "max_input_bytes": 8192,
+     "max_eval_nodes": 4096
+    }
+   }
+  },
+  {
+   "operationId": "getContentSelector",
+   "method": "get",
+   "path": "/api/v1/content-selectors/{selector_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000051",
+    "name": "internal-libs",
+    "description": "Everything under com/example",
+    "expression": "format == \"maven2\" && path.startsWith(\"/com/example/\")",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "used_by_privileges": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000048",
+      "name": "internal-libs-read"
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "updateContentSelector",
+   "method": "put",
+   "path": "/api/v1/content-selectors/{selector_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000051",
+    "name": "internal-libs",
+    "description": "Everything under com/example",
+    "expression": "format == \"maven2\" && path.startsWith(\"/com/example/\")",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "used_by_privileges": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000048",
+      "name": "internal-libs-read"
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "deleteContentSelector",
+   "method": "delete",
+   "path": "/api/v1/content-selectors/{selector_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "listIdpGroupMappings",
+   "method": "get",
+   "path": "/api/v1/idp-group-mappings",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000065",
+      "provider": "oidc",
+      "external_group": "/rustryx/team-payments/publishers",
+      "role_id": "0192f6c4-5a1e-7000-8000-00000000000c",
+      "priority": 100,
+      "role": {
+       "id": "0192f6c4-5a1e-7000-8000-00000000000c",
+       "name": "maven-publishers"
+      }
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createIdpGroupMapping",
+   "method": "post",
+   "path": "/api/v1/idp-group-mappings",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000065",
+    "provider": "oidc",
+    "external_group": "/rustryx/team-payments/publishers",
+    "role_id": "0192f6c4-5a1e-7000-8000-00000000000c",
+    "priority": 100,
+    "role": {
+     "id": "0192f6c4-5a1e-7000-8000-00000000000c",
+     "name": "maven-publishers"
+    }
+   }
+  },
+  {
+   "operationId": "testIdpGroupMappings",
+   "method": "post",
+   "path": "/api/v1/idp-group-mappings/test",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "roles": [
+     {
+      "role": {
+       "id": "0192f6c4-5a1e-7000-8000-00000000000c",
+       "name": "maven-publishers"
+      },
+      "via": "mapping",
+      "group": "/rustryx/team-payments/publishers",
+      "mapping_id": "0192f6c4-5a1e-7000-8000-000000000065"
+     }
+    ],
+    "unmatched_groups": [
+     "/rustryx/unknown"
+    ],
+    "denied": false
+   }
+  },
+  {
+   "operationId": "updateIdpGroupMapping",
+   "method": "put",
+   "path": "/api/v1/idp-group-mappings/{mapping_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000065",
+    "provider": "oidc",
+    "external_group": "/rustryx/team-payments/publishers",
+    "role_id": "0192f6c4-5a1e-7000-8000-00000000000c",
+    "priority": 100,
+    "role": {
+     "id": "0192f6c4-5a1e-7000-8000-00000000000c",
+     "name": "maven-publishers"
+    }
+   }
+  },
+  {
+   "operationId": "deleteIdpGroupMapping",
+   "method": "delete",
+   "path": "/api/v1/idp-group-mappings/{mapping_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "getAnonymousAccess",
+   "method": "get",
+   "path": "/api/v1/anonymous-access",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "global_enabled": false,
+    "global_editable": false,
+    "anonymous_role": {
+     "id": "0192f6c4-5a1e-7000-8000-00000000000d",
+     "name": "nx-anonymous"
+    },
+    "public_repository_count": 2,
+    "effective_repository_count": 0
+   }
+  },
+  {
+   "operationId": "updateAnonymousAccess",
+   "method": "put",
+   "path": "/api/v1/anonymous-access",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "global_enabled": false,
+    "global_editable": false,
+    "anonymous_role": {
+     "id": "0192f6c4-5a1e-7000-8000-00000000000d",
+     "name": "nx-anonymous"
+    },
+    "public_repository_count": 2,
+    "effective_repository_count": 0
+   }
+  },
+  {
+   "operationId": "setAnonymousRepositories",
+   "method": "put",
+   "path": "/api/v1/anonymous-access/repositories",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "updated": 2
+   }
+  },
+  {
+   "operationId": "listRepositories",
+   "method": "get",
+   "path": "/api/v1/repositories",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000001f",
+      "name": "maven-releases",
+      "format": "maven2",
+      "repo_type": "hosted",
+      "blob_store_id": "0192f6c4-5a1e-7000-8000-000000000029",
+      "write_policy": "allow_once",
+      "allow_anonymous": false,
+      "online": true,
+      "quota_bytes": null,
+      "cleanup_policy_ids": [
+       "0192f6c4-5a1e-7000-8000-00000000006f"
+      ],
+      "routing_rule_id": null,
+      "proxy": null,
+      "group": null,
+      "format_config": {
+       "version_policy": "release",
+       "layout_policy": "strict"
+      },
+      "created_at": "2026-10-20T07:02:11Z",
+      "updated_at": "2026-10-24T09:15:30Z",
+      "blob_store": {
+       "id": "0192f6c4-5a1e-7000-8000-000000000029",
+       "name": "default",
+       "kind": "local"
+      },
+      "url": "https://repo.example.org/repository/maven-releases/",
+      "cleanup_policies": [
+       {
+        "id": "0192f6c4-5a1e-7000-8000-00000000006f",
+        "name": "maven-old-snapshots"
+       }
+      ],
+      "routing_rule": null,
+      "stats": {
+       "component_count": 1240,
+       "asset_count": 5310,
+       "size_bytes": 8123456789,
+       "as_of": "2026-10-24T09:15:30Z"
+      },
+      "permissions": {
+       "browse": true,
+       "read": true,
+       "write": true,
+       "delete": false,
+       "admin": false
+      },
+      "upstream": null,
+      "anonymous_effective": false
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createRepository",
+   "method": "post",
+   "path": "/api/v1/repositories",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000001f",
+    "name": "maven-releases",
+    "format": "maven2",
+    "repo_type": "hosted",
+    "blob_store_id": "0192f6c4-5a1e-7000-8000-000000000029",
+    "write_policy": "allow_once",
+    "allow_anonymous": false,
+    "online": true,
+    "quota_bytes": null,
+    "cleanup_policy_ids": [
+     "0192f6c4-5a1e-7000-8000-00000000006f"
+    ],
+    "routing_rule_id": null,
+    "proxy": null,
+    "group": null,
+    "format_config": {
+     "version_policy": "release",
+     "layout_policy": "strict"
+    },
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "blob_store": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000029",
+     "name": "default",
+     "kind": "local"
+    },
+    "url": "https://repo.example.org/repository/maven-releases/",
+    "cleanup_policies": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000006f",
+      "name": "maven-old-snapshots"
+     }
+    ],
+    "routing_rule": null,
+    "stats": {
+     "component_count": 1240,
+     "asset_count": 5310,
+     "size_bytes": 8123456789,
+     "as_of": "2026-10-24T09:15:30Z"
+    },
+    "permissions": {
+     "browse": true,
+     "read": true,
+     "write": true,
+     "delete": false,
+     "admin": false
+    },
+    "upstream": null,
+    "anonymous_effective": false
+   }
+  },
+  {
+   "operationId": "getRepository",
+   "method": "get",
+   "path": "/api/v1/repositories/{name}",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000001f",
+    "name": "maven-releases",
+    "format": "maven2",
+    "repo_type": "hosted",
+    "blob_store_id": "0192f6c4-5a1e-7000-8000-000000000029",
+    "write_policy": "allow_once",
+    "allow_anonymous": false,
+    "online": true,
+    "quota_bytes": null,
+    "cleanup_policy_ids": [
+     "0192f6c4-5a1e-7000-8000-00000000006f"
+    ],
+    "routing_rule_id": null,
+    "proxy": null,
+    "group": null,
+    "format_config": {
+     "version_policy": "release",
+     "layout_policy": "strict"
+    },
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "blob_store": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000029",
+     "name": "default",
+     "kind": "local"
+    },
+    "url": "https://repo.example.org/repository/maven-releases/",
+    "cleanup_policies": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000006f",
+      "name": "maven-old-snapshots"
+     }
+    ],
+    "routing_rule": null,
+    "stats": {
+     "component_count": 1240,
+     "asset_count": 5310,
+     "size_bytes": 8123456789,
+     "as_of": "2026-10-24T09:15:30Z"
+    },
+    "permissions": {
+     "browse": true,
+     "read": true,
+     "write": true,
+     "delete": false,
+     "admin": false
+    },
+    "upstream": null,
+    "anonymous_effective": false
+   }
+  },
+  {
+   "operationId": "patchRepository",
+   "method": "patch",
+   "path": "/api/v1/repositories/{name}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000001f",
+    "name": "maven-releases",
+    "format": "maven2",
+    "repo_type": "hosted",
+    "blob_store_id": "0192f6c4-5a1e-7000-8000-000000000029",
+    "write_policy": "allow_once",
+    "allow_anonymous": false,
+    "online": true,
+    "quota_bytes": null,
+    "cleanup_policy_ids": [
+     "0192f6c4-5a1e-7000-8000-00000000006f"
+    ],
+    "routing_rule_id": null,
+    "proxy": null,
+    "group": null,
+    "format_config": {
+     "version_policy": "release",
+     "layout_policy": "strict"
+    },
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "blob_store": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000029",
+     "name": "default",
+     "kind": "local"
+    },
+    "url": "https://repo.example.org/repository/maven-releases/",
+    "cleanup_policies": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000006f",
+      "name": "maven-old-snapshots"
+     }
+    ],
+    "routing_rule": null,
+    "stats": {
+     "component_count": 1240,
+     "asset_count": 5310,
+     "size_bytes": 8123456789,
+     "as_of": "2026-10-24T09:15:30Z"
+    },
+    "permissions": {
+     "browse": true,
+     "read": true,
+     "write": true,
+     "delete": false,
+     "admin": false
+    },
+    "upstream": null,
+    "anonymous_effective": false
+   }
+  },
+  {
+   "operationId": "deleteRepository",
+   "method": "delete",
+   "path": "/api/v1/repositories/{name}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "invalidateRepositoryCache",
+   "method": "post",
+   "path": "/api/v1/repositories/{name}/actions/invalidate-cache",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "invalidated_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "setRepositoryBlocked",
+   "method": "post",
+   "path": "/api/v1/repositories/{name}/actions/set-blocked",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000001f",
+    "name": "maven-releases",
+    "format": "maven2",
+    "repo_type": "hosted",
+    "blob_store_id": "0192f6c4-5a1e-7000-8000-000000000029",
+    "write_policy": "allow_once",
+    "allow_anonymous": false,
+    "online": true,
+    "quota_bytes": null,
+    "cleanup_policy_ids": [
+     "0192f6c4-5a1e-7000-8000-00000000006f"
+    ],
+    "routing_rule_id": null,
+    "proxy": null,
+    "group": null,
+    "format_config": {
+     "version_policy": "release",
+     "layout_policy": "strict"
+    },
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "blob_store": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000029",
+     "name": "default",
+     "kind": "local"
+    },
+    "url": "https://repo.example.org/repository/maven-releases/",
+    "cleanup_policies": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000006f",
+      "name": "maven-old-snapshots"
+     }
+    ],
+    "routing_rule": null,
+    "stats": {
+     "component_count": 1240,
+     "asset_count": 5310,
+     "size_bytes": 8123456789,
+     "as_of": "2026-10-24T09:15:30Z"
+    },
+    "permissions": {
+     "browse": true,
+     "read": true,
+     "write": true,
+     "delete": false,
+     "admin": false
+    },
+    "upstream": null,
+    "anonymous_effective": false
+   }
+  },
+  {
+   "operationId": "listBlobStores",
+   "method": "get",
+   "path": "/api/v1/blob-stores",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000029",
+      "name": "default",
+      "kind": "local",
+      "config": {
+       "path": "/var/lib/rustryx/blobs"
+      },
+      "quota_bytes": null,
+      "created_at": "2026-10-20T07:02:11Z",
+      "usage": {
+       "used_bytes": 8123456789,
+       "blob_count": 15022,
+       "available_bytes": 91237654321,
+       "total_bytes": 107374182400,
+       "as_of": "2026-10-24T09:15:30Z"
+      },
+      "health": {
+       "state": "ok",
+       "checked_at": "2026-10-24T09:15:30Z",
+       "last_error_code": null
+      },
+      "repository_count": 4,
+      "credentials": null
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createBlobStore",
+   "method": "post",
+   "path": "/api/v1/blob-stores",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000029",
+    "name": "default",
+    "kind": "local",
+    "config": {
+     "path": "/var/lib/rustryx/blobs"
+    },
+    "quota_bytes": null,
+    "created_at": "2026-10-20T07:02:11Z",
+    "usage": {
+     "used_bytes": 8123456789,
+     "blob_count": 15022,
+     "available_bytes": 91237654321,
+     "total_bytes": 107374182400,
+     "as_of": "2026-10-24T09:15:30Z"
+    },
+    "health": {
+     "state": "ok",
+     "checked_at": "2026-10-24T09:15:30Z",
+     "last_error_code": null
+    },
+    "repository_count": 4,
+    "credentials": null
+   }
+  },
+  {
+   "operationId": "getBlobStore",
+   "method": "get",
+   "path": "/api/v1/blob-stores/{blob_store_name}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000029",
+    "name": "default",
+    "kind": "local",
+    "config": {
+     "path": "/var/lib/rustryx/blobs"
+    },
+    "quota_bytes": null,
+    "created_at": "2026-10-20T07:02:11Z",
+    "usage": {
+     "used_bytes": 8123456789,
+     "blob_count": 15022,
+     "available_bytes": 91237654321,
+     "total_bytes": 107374182400,
+     "as_of": "2026-10-24T09:15:30Z"
+    },
+    "health": {
+     "state": "ok",
+     "checked_at": "2026-10-24T09:15:30Z",
+     "last_error_code": null
+    },
+    "repository_count": 4,
+    "credentials": null
+   }
+  },
+  {
+   "operationId": "patchBlobStore",
+   "method": "patch",
+   "path": "/api/v1/blob-stores/{blob_store_name}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000029",
+    "name": "default",
+    "kind": "local",
+    "config": {
+     "path": "/var/lib/rustryx/blobs"
+    },
+    "quota_bytes": null,
+    "created_at": "2026-10-20T07:02:11Z",
+    "usage": {
+     "used_bytes": 8123456789,
+     "blob_count": 15022,
+     "available_bytes": 91237654321,
+     "total_bytes": 107374182400,
+     "as_of": "2026-10-24T09:15:30Z"
+    },
+    "health": {
+     "state": "ok",
+     "checked_at": "2026-10-24T09:15:30Z",
+     "last_error_code": null
+    },
+    "repository_count": 4,
+    "credentials": null
+   }
+  },
+  {
+   "operationId": "deleteBlobStore",
+   "method": "delete",
+   "path": "/api/v1/blob-stores/{blob_store_name}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "getBlobStoreUsage",
+   "method": "get",
+   "path": "/api/v1/blob-stores/{blob_store_name}/usage",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "used_bytes": 8123456789,
+    "blob_count": 15022,
+    "available_bytes": 91237654321,
+    "total_bytes": 107374182400,
+    "as_of": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "testBlobStoreConnection",
+   "method": "post",
+   "path": "/api/v1/blob-stores/{blob_store_name}/actions/test-connection",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "ok": true,
+    "latency_ms": 12,
+    "error_code": null
+   }
+  },
+  {
+   "operationId": "listFormats",
+   "method": "get",
+   "path": "/api/v1/formats",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "format": "maven2",
+      "label": "Maven 2",
+      "supports": {
+       "hosted": true,
+       "proxy": true,
+       "group": true
+      },
+      "default_write_policy": "allow_once",
+      "uploadable_in_ui": true,
+      "cleanup_criteria": [
+       "older_than_days",
+       "last_downloaded_days",
+       "keep_last_versions",
+       "name_pattern",
+       "release_type"
+      ],
+      "config_schema": {
+       "type": "object",
+       "properties": {
+        "version_policy": {
+         "enum": [
+          "release",
+          "snapshot",
+          "mixed"
+         ],
+         "default": "release"
+        },
+        "layout_policy": {
+         "enum": [
+          "strict",
+          "permissive"
+         ],
+         "default": "strict"
+        }
+       }
+      },
+      "client_ids": [
+       "mvn",
+       "gradle"
+      ]
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "getUploadSchema",
+   "method": "get",
+   "path": "/api/v1/formats/{format}/upload-schema",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "format": "maven2",
+    "uploadable": true,
+    "reason": null,
+    "multi_file": true,
+    "min_files": 1,
+    "max_files": 50,
+    "accepted_extensions": [
+     ".jar",
+     ".pom",
+     ".war",
+     ".zip"
+    ],
+    "max_file_bytes": 5368709120,
+    "fields": [
+     {
+      "name": "group_id",
+      "label": "Group ID",
+      "type": "string",
+      "required": true,
+      "scope": "component",
+      "description": null,
+      "pattern": "^[A-Za-z0-9_.-]+$",
+      "enum_values": null,
+      "derive_from": "pom"
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "listComponents",
+   "method": "get",
+   "path": "/api/v1/components",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000005f",
+      "repository_id": "0192f6c4-5a1e-7000-8000-00000000001f",
+      "format": "maven2",
+      "group_id": "com.example",
+      "name": "lib",
+      "version": "1.0",
+      "created_at": "2026-10-20T07:02:11Z",
+      "updated_at": "2026-10-20T07:02:11Z",
+      "repository": "maven-releases",
+      "asset_count": 3,
+      "size_bytes": 482113,
+      "attributes_summary": {
+       "packaging": "jar"
+      }
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "uploadComponent",
+   "method": "post",
+   "path": "/api/v1/components",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "component": {
+     "id": "0192f6c4-5a1e-7000-8000-00000000005f",
+     "repository_id": "0192f6c4-5a1e-7000-8000-00000000001f",
+     "format": "maven2",
+     "group_id": "com.example",
+     "name": "lib",
+     "version": "1.0",
+     "created_at": "2026-10-20T07:02:11Z",
+     "updated_at": "2026-10-20T07:02:11Z",
+     "repository": "maven-releases",
+     "asset_count": 3,
+     "size_bytes": 482113,
+     "attributes_summary": {
+      "packaging": "jar"
+     }
+    },
+    "assets": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000005b",
+      "repository_id": "0192f6c4-5a1e-7000-8000-00000000001f",
+      "component_id": "0192f6c4-5a1e-7000-8000-00000000005f",
+      "path": "com/example/lib/1.0/lib-1.0.jar",
+      "blob_id": "0192f6c4-5a1e-7000-8000-00000000005c",
+      "content_type": "application/java-archive",
+      "size_bytes": 482113,
+      "checksums": {
+       "sha1": "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12",
+       "sha256": "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592",
+       "md5": "9e107d9d372bb6826bd81d3542a419d6"
+      },
+      "last_downloaded_at": "2026-10-24T09:15:30Z",
+      "created_at": "2026-10-20T07:02:11Z",
+      "updated_at": "2026-10-20T07:02:11Z",
+      "repository": "maven-releases",
+      "download_url": "https://repo.example.org/repository/maven-releases/com/example/lib/1.0/lib-1.0.jar"
+     }
+    ],
+    "replaced": []
+   }
+  },
+  {
+   "operationId": "getComponent",
+   "method": "get",
+   "path": "/api/v1/components/{component_id}",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000005f",
+    "repository_id": "0192f6c4-5a1e-7000-8000-00000000001f",
+    "format": "maven2",
+    "group_id": "com.example",
+    "name": "lib",
+    "version": "1.0",
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-20T07:02:11Z",
+    "repository": "maven-releases",
+    "asset_count": 1,
+    "size_bytes": 482113,
+    "attributes_summary": {
+     "packaging": "jar"
+    },
+    "assets": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000005b",
+      "repository_id": "0192f6c4-5a1e-7000-8000-00000000001f",
+      "component_id": "0192f6c4-5a1e-7000-8000-00000000005f",
+      "path": "com/example/lib/1.0/lib-1.0.jar",
+      "blob_id": "0192f6c4-5a1e-7000-8000-00000000005c",
+      "content_type": "application/java-archive",
+      "size_bytes": 482113,
+      "checksums": {
+       "sha1": "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12",
+       "sha256": "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592",
+       "md5": "9e107d9d372bb6826bd81d3542a419d6"
+      },
+      "last_downloaded_at": "2026-10-24T09:15:30Z",
+      "created_at": "2026-10-20T07:02:11Z",
+      "updated_at": "2026-10-20T07:02:11Z",
+      "repository": "maven-releases",
+      "download_url": "https://repo.example.org/repository/maven-releases/com/example/lib/1.0/lib-1.0.jar"
+     }
+    ],
+    "assets_truncated": false,
+    "attributes": {
+     "packaging": "jar"
+    }
+   }
+  },
+  {
+   "operationId": "deleteComponent",
+   "method": "delete",
+   "path": "/api/v1/components/{component_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "listAssets",
+   "method": "get",
+   "path": "/api/v1/assets",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000005b",
+      "repository_id": "0192f6c4-5a1e-7000-8000-00000000001f",
+      "component_id": "0192f6c4-5a1e-7000-8000-00000000005f",
+      "path": "com/example/lib/1.0/lib-1.0.jar",
+      "blob_id": "0192f6c4-5a1e-7000-8000-00000000005c",
+      "content_type": "application/java-archive",
+      "size_bytes": 482113,
+      "checksums": {
+       "sha1": "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12",
+       "sha256": "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592",
+       "md5": "9e107d9d372bb6826bd81d3542a419d6"
+      },
+      "last_downloaded_at": "2026-10-24T09:15:30Z",
+      "created_at": "2026-10-20T07:02:11Z",
+      "updated_at": "2026-10-20T07:02:11Z",
+      "repository": "maven-releases",
+      "download_url": "https://repo.example.org/repository/maven-releases/com/example/lib/1.0/lib-1.0.jar"
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "getAsset",
+   "method": "get",
+   "path": "/api/v1/assets/{asset_id}",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000005b",
+    "repository_id": "0192f6c4-5a1e-7000-8000-00000000001f",
+    "component_id": "0192f6c4-5a1e-7000-8000-00000000005f",
+    "path": "com/example/lib/1.0/lib-1.0.jar",
+    "blob_id": "0192f6c4-5a1e-7000-8000-00000000005c",
+    "content_type": "application/java-archive",
+    "size_bytes": 482113,
+    "checksums": {
+     "sha1": "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12",
+     "sha256": "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592",
+     "md5": "9e107d9d372bb6826bd81d3542a419d6"
+    },
+    "last_downloaded_at": "2026-10-24T09:15:30Z",
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-20T07:02:11Z",
+    "repository": "maven-releases",
+    "download_url": "https://repo.example.org/repository/maven-releases/com/example/lib/1.0/lib-1.0.jar",
+    "attributes": {},
+    "download_count_30d": null,
+    "uploader": null,
+    "blob": {
+     "id": "0192f6c4-5a1e-7000-8000-00000000005c",
+     "blob_store": "default",
+     "key": null
+    },
+    "blob_state": "unknown"
+   }
+  },
+  {
+   "operationId": "deleteAsset",
+   "method": "delete",
+   "path": "/api/v1/assets/{asset_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "getRepositoryTree",
+   "method": "get",
+   "path": "/api/v1/repositories/{name}/tree",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "path": "/com/example/lib/1.0/",
+    "items": [
+     {
+      "name": "lib-1.0.jar",
+      "path": "/com/example/lib/1.0/lib-1.0.jar",
+      "kind": "asset",
+      "asset_id": "0192f6c4-5a1e-7000-8000-00000000005b",
+      "component_id": "0192f6c4-5a1e-7000-8000-00000000005f",
+      "size_bytes": 482113,
+      "content_type": "application/java-archive",
+      "updated_at": "2026-10-20T07:02:11Z",
+      "child_count": null,
+      "source_repository": null
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "searchComponents",
+   "method": "get",
+   "path": "/api/v1/search/components",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000005f",
+      "repository_id": "0192f6c4-5a1e-7000-8000-00000000001f",
+      "format": "maven2",
+      "group_id": "com.example",
+      "name": "lib",
+      "version": "1.0",
+      "created_at": "2026-10-20T07:02:11Z",
+      "updated_at": "2026-10-20T07:02:11Z",
+      "repository": "maven-releases",
+      "asset_count": 3,
+      "size_bytes": 482113,
+      "attributes_summary": {
+       "packaging": "jar"
+      }
+     }
+    ],
+    "next": null,
+    "truncated": false
+   }
+  },
+  {
+   "operationId": "searchAssets",
+   "method": "get",
+   "path": "/api/v1/search/assets",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000005b",
+      "repository_id": "0192f6c4-5a1e-7000-8000-00000000001f",
+      "component_id": "0192f6c4-5a1e-7000-8000-00000000005f",
+      "path": "com/example/lib/1.0/lib-1.0.jar",
+      "blob_id": "0192f6c4-5a1e-7000-8000-00000000005c",
+      "content_type": "application/java-archive",
+      "size_bytes": 482113,
+      "checksums": {
+       "sha1": "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12",
+       "sha256": "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592",
+       "md5": "9e107d9d372bb6826bd81d3542a419d6"
+      },
+      "last_downloaded_at": "2026-10-24T09:15:30Z",
+      "created_at": "2026-10-20T07:02:11Z",
+      "updated_at": "2026-10-20T07:02:11Z",
+      "repository": "maven-releases",
+      "download_url": "https://repo.example.org/repository/maven-releases/com/example/lib/1.0/lib-1.0.jar"
+     }
+    ],
+    "next": null,
+    "truncated": false
+   }
+  },
+  {
+   "operationId": "getClientSetup",
+   "method": "get",
+   "path": "/api/v1/client-setup",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "repository": {
+     "id": "0192f6c4-5a1e-7000-8000-00000000001f",
+     "name": "maven-releases",
+     "format": "maven2",
+     "repo_type": "hosted"
+    },
+    "base_url": "https://repo.example.org",
+    "base_url_configured": true,
+    "variant": "authenticated",
+    "publish_target": null,
+    "snippets": [
+     {
+      "id": "mvn-settings",
+      "client": "mvn",
+      "title": "Resolve through the repository",
+      "purpose": "resolve",
+      "language": "xml",
+      "file": "~/.m2/settings.xml",
+      "content": "<mirror>\n  <id>rustryx</id>\n  <mirrorOf>*</mirrorOf>\n  <url>https://repo.example.org/repository/maven-public/</url>\n</mirror>",
+      "placeholders": [],
+      "requires": "browse"
+     }
+    ],
+    "notes": [],
+    "private_ca": false
+   }
+  },
+  {
+   "operationId": "listCleanupPolicies",
+   "method": "get",
+   "path": "/api/v1/cleanup-policies",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000006f",
+      "name": "maven-old-snapshots",
+      "description": "Drop old versions",
+      "format": "maven2",
+      "criteria": {
+       "older_than_days": 90,
+       "last_downloaded_days": null,
+       "keep_last_versions": 5,
+       "name_pattern": null,
+       "release_type": null
+      },
+      "created_at": "2026-10-20T07:02:11Z",
+      "updated_at": "2026-10-24T09:15:30Z",
+      "attached_repositories": [
+       {
+        "id": "0192f6c4-5a1e-7000-8000-00000000001f",
+        "name": "maven-releases",
+        "format": "maven2",
+        "repo_type": "hosted"
+       }
+      ],
+      "last_run": {
+       "id": "0192f6c4-5a1e-7000-8000-000000000083",
+       "dry_run": true,
+       "status": "succeeded",
+       "finished_at": "2026-10-24T09:15:30Z",
+       "candidates": 42,
+       "bytes": 123456789
+      }
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createCleanupPolicy",
+   "method": "post",
+   "path": "/api/v1/cleanup-policies",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000006f",
+    "name": "maven-old-snapshots",
+    "description": "Drop old versions",
+    "format": "maven2",
+    "criteria": {
+     "older_than_days": 90,
+     "last_downloaded_days": null,
+     "keep_last_versions": 5,
+     "name_pattern": null,
+     "release_type": null
+    },
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "attached_repositories": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000001f",
+      "name": "maven-releases",
+      "format": "maven2",
+      "repo_type": "hosted"
+     }
+    ],
+    "last_run": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000083",
+     "dry_run": true,
+     "status": "succeeded",
+     "finished_at": "2026-10-24T09:15:30Z",
+     "candidates": 42,
+     "bytes": 123456789
+    }
+   }
+  },
+  {
+   "operationId": "getCleanupPolicy",
+   "method": "get",
+   "path": "/api/v1/cleanup-policies/{policy_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000006f",
+    "name": "maven-old-snapshots",
+    "description": "Drop old versions",
+    "format": "maven2",
+    "criteria": {
+     "older_than_days": 90,
+     "last_downloaded_days": null,
+     "keep_last_versions": 5,
+     "name_pattern": null,
+     "release_type": null
+    },
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "attached_repositories": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000001f",
+      "name": "maven-releases",
+      "format": "maven2",
+      "repo_type": "hosted"
+     }
+    ],
+    "last_run": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000083",
+     "dry_run": true,
+     "status": "succeeded",
+     "finished_at": "2026-10-24T09:15:30Z",
+     "candidates": 42,
+     "bytes": 123456789
+    }
+   }
+  },
+  {
+   "operationId": "updateCleanupPolicy",
+   "method": "put",
+   "path": "/api/v1/cleanup-policies/{policy_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000006f",
+    "name": "maven-old-snapshots",
+    "description": "Drop old versions",
+    "format": "maven2",
+    "criteria": {
+     "older_than_days": 90,
+     "last_downloaded_days": null,
+     "keep_last_versions": 5,
+     "name_pattern": null,
+     "release_type": null
+    },
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "attached_repositories": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000001f",
+      "name": "maven-releases",
+      "format": "maven2",
+      "repo_type": "hosted"
+     }
+    ],
+    "last_run": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000083",
+     "dry_run": true,
+     "status": "succeeded",
+     "finished_at": "2026-10-24T09:15:30Z",
+     "candidates": 42,
+     "bytes": 123456789
+    }
+   }
+  },
+  {
+   "operationId": "deleteCleanupPolicy",
+   "method": "delete",
+   "path": "/api/v1/cleanup-policies/{policy_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "previewCleanupPolicy",
+   "method": "post",
+   "path": "/api/v1/cleanup-policies/{policy_id}/actions/preview",
+   "status": 202,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000083",
+    "kind": "cleanup",
+    "policy_id": "0192f6c4-5a1e-7000-8000-00000000006f",
+    "policy_name": "maven-old-snapshots",
+    "dry_run": true,
+    "status": "queued",
+    "trigger": "manual",
+    "triggered_by": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000005",
+     "username": "alice",
+     "display_name": "Alice Example",
+     "source": "oidc"
+    },
+    "task_run_id": "0192f6c4-5a1e-7000-8000-00000000008d",
+    "queued_at": "2026-10-24T09:15:30Z",
+    "started_at": null,
+    "finished_at": null,
+    "summary": null,
+    "error_code": null,
+    "report_expires_at": "2026-11-23T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "listLifecycleRuns",
+   "method": "get",
+   "path": "/api/v1/lifecycle-runs",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000083",
+      "kind": "cleanup",
+      "policy_id": "0192f6c4-5a1e-7000-8000-00000000006f",
+      "policy_name": "maven-old-snapshots",
+      "dry_run": true,
+      "status": "succeeded",
+      "trigger": "manual",
+      "triggered_by": {
+       "id": "0192f6c4-5a1e-7000-8000-000000000005",
+       "username": "alice",
+       "display_name": "Alice Example",
+       "source": "oidc"
+      },
+      "task_run_id": "0192f6c4-5a1e-7000-8000-00000000008d",
+      "queued_at": "2026-10-24T09:15:30Z",
+      "started_at": "2026-10-24T09:15:30Z",
+      "finished_at": "2026-10-24T09:15:30Z",
+      "summary": {
+       "candidates": 42,
+       "bytes": 123456789,
+       "repositories": 1,
+       "protected": 0
+      },
+      "error_code": null,
+      "report_expires_at": "2026-11-23T09:15:30Z"
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "getLifecycleRun",
+   "method": "get",
+   "path": "/api/v1/lifecycle-runs/{run_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000083",
+    "kind": "cleanup",
+    "policy_id": "0192f6c4-5a1e-7000-8000-00000000006f",
+    "policy_name": "maven-old-snapshots",
+    "dry_run": true,
+    "status": "succeeded",
+    "trigger": "manual",
+    "triggered_by": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000005",
+     "username": "alice",
+     "display_name": "Alice Example",
+     "source": "oidc"
+    },
+    "task_run_id": "0192f6c4-5a1e-7000-8000-00000000008d",
+    "queued_at": "2026-10-24T09:15:30Z",
+    "started_at": "2026-10-24T09:15:30Z",
+    "finished_at": "2026-10-24T09:15:30Z",
+    "summary": {
+     "candidates": 42,
+     "bytes": 123456789,
+     "repositories": 1,
+     "protected": 0
+    },
+    "error_code": null,
+    "report_expires_at": "2026-11-23T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "listLifecycleCandidates",
+   "method": "get",
+   "path": "/api/v1/lifecycle-runs/{run_id}/candidates",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "repository": "maven-releases",
+      "component_id": "0192f6c4-5a1e-7000-8000-00000000005f",
+      "asset_id": null,
+      "coordinate": "com.example:lib:1.0",
+      "size_bytes": 482113,
+      "age_days": 120,
+      "last_downloaded_at": null,
+      "reason": "older_than_days",
+      "protected_by": null
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "listRoutingRules",
+   "method": "get",
+   "path": "/api/v1/routing-rules",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000079",
+      "name": "block-snapshots",
+      "description": "No snapshots from upstream",
+      "mode": "block",
+      "patterns": [
+       "^/.*-SNAPSHOT/.*$"
+      ],
+      "created_at": "2026-10-20T07:02:11Z",
+      "updated_at": "2026-10-24T09:15:30Z",
+      "assigned_repositories": [
+       {
+        "id": "0192f6c4-5a1e-7000-8000-000000000020",
+        "name": "maven-central",
+        "format": "maven2",
+        "repo_type": "proxy"
+       }
+      ]
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createRoutingRule",
+   "method": "post",
+   "path": "/api/v1/routing-rules",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000079",
+    "name": "block-snapshots",
+    "description": "No snapshots from upstream",
+    "mode": "block",
+    "patterns": [
+     "^/.*-SNAPSHOT/.*$"
+    ],
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "assigned_repositories": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000020",
+      "name": "maven-central",
+      "format": "maven2",
+      "repo_type": "proxy"
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "validateRoutingPatterns",
+   "method": "post",
+   "path": "/api/v1/routing-rules/validate",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "valid": false,
+    "errors": [
+     {
+      "index": 1,
+      "offset": 0,
+      "message": "look-around is not supported"
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "testDraftRoutingRule",
+   "method": "post",
+   "path": "/api/v1/routing-rules/test",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "path": "/a/b-SNAPSHOT/c.jar",
+      "outcome": "blocked",
+      "matched_pattern": "^/.*-SNAPSHOT/.*$",
+      "reason": "matches a block pattern"
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "getRoutingRule",
+   "method": "get",
+   "path": "/api/v1/routing-rules/{rule_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000079",
+    "name": "block-snapshots",
+    "description": "No snapshots from upstream",
+    "mode": "block",
+    "patterns": [
+     "^/.*-SNAPSHOT/.*$"
+    ],
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "assigned_repositories": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000020",
+      "name": "maven-central",
+      "format": "maven2",
+      "repo_type": "proxy"
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "updateRoutingRule",
+   "method": "put",
+   "path": "/api/v1/routing-rules/{rule_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000079",
+    "name": "block-snapshots",
+    "description": "No snapshots from upstream",
+    "mode": "block",
+    "patterns": [
+     "^/.*-SNAPSHOT/.*$"
+    ],
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "assigned_repositories": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000020",
+      "name": "maven-central",
+      "format": "maven2",
+      "repo_type": "proxy"
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "deleteRoutingRule",
+   "method": "delete",
+   "path": "/api/v1/routing-rules/{rule_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "testRoutingRule",
+   "method": "post",
+   "path": "/api/v1/routing-rules/{rule_id}/test",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "path": "/a/b-SNAPSHOT/c.jar",
+      "outcome": "blocked",
+      "matched_pattern": "^/.*-SNAPSHOT/.*$",
+      "reason": "matches a block pattern"
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "listTasks",
+   "method": "get",
+   "path": "/api/v1/tasks",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000097",
+      "name": "Blob garbage collection",
+      "kind": "blob-gc",
+      "description": "Removes blobs unreferenced for longer than the minimum age.",
+      "system": true,
+      "enabled": true,
+      "schedule": {
+       "type": "hourly",
+       "cron": null,
+       "at": null,
+       "next_runs": [
+        "2026-10-24T09:15:30Z"
+       ]
+      },
+      "parameters": {
+       "min_age_secs": 86400,
+       "batch_size": 1000
+      },
+      "last_run": {
+       "id": "0192f6c4-5a1e-7000-8000-00000000008d",
+       "task_id": "0192f6c4-5a1e-7000-8000-000000000097",
+       "status": "succeeded",
+       "dry_run": false,
+       "trigger": "schedule",
+       "triggered_by": null,
+       "node": "rustryx-0",
+       "queued_at": "2026-10-24T09:15:30Z",
+       "started_at": "2026-10-24T09:15:30Z",
+       "finished_at": "2026-10-24T09:15:30Z",
+       "duration_ms": 5321,
+       "summary": {
+        "deleted_blobs": 12,
+        "reclaimed_bytes": 482113
+       },
+       "error_code": null,
+       "log_available": true,
+       "log_expires_at": "2026-11-23T09:15:30Z"
+      },
+      "next_run_at": "2026-10-24T09:15:30Z",
+      "lock": {
+       "held_by": null
+      }
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createTask",
+   "method": "post",
+   "path": "/api/v1/tasks",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000097",
+    "name": "Blob garbage collection",
+    "kind": "blob-gc",
+    "description": "Removes blobs unreferenced for longer than the minimum age.",
+    "system": true,
+    "enabled": true,
+    "schedule": {
+     "type": "hourly",
+     "cron": null,
+     "at": null,
+     "next_runs": [
+      "2026-10-24T09:15:30Z"
+     ]
+    },
+    "parameters": {
+     "min_age_secs": 86400,
+     "batch_size": 1000
+    },
+    "last_run": {
+     "id": "0192f6c4-5a1e-7000-8000-00000000008d",
+     "task_id": "0192f6c4-5a1e-7000-8000-000000000097",
+     "status": "succeeded",
+     "dry_run": false,
+     "trigger": "schedule",
+     "triggered_by": null,
+     "node": "rustryx-0",
+     "queued_at": "2026-10-24T09:15:30Z",
+     "started_at": "2026-10-24T09:15:30Z",
+     "finished_at": "2026-10-24T09:15:30Z",
+     "duration_ms": 5321,
+     "summary": {
+      "deleted_blobs": 12,
+      "reclaimed_bytes": 482113
+     },
+     "error_code": null,
+     "log_available": true,
+     "log_expires_at": "2026-11-23T09:15:30Z"
+    },
+    "next_run_at": "2026-10-24T09:15:30Z",
+    "lock": {
+     "held_by": null
+    }
+   }
+  },
+  {
+   "operationId": "getTask",
+   "method": "get",
+   "path": "/api/v1/tasks/{task_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000097",
+    "name": "Blob garbage collection",
+    "kind": "blob-gc",
+    "description": "Removes blobs unreferenced for longer than the minimum age.",
+    "system": true,
+    "enabled": true,
+    "schedule": {
+     "type": "hourly",
+     "cron": null,
+     "at": null,
+     "next_runs": [
+      "2026-10-24T09:15:30Z"
+     ]
+    },
+    "parameters": {
+     "min_age_secs": 86400,
+     "batch_size": 1000
+    },
+    "last_run": {
+     "id": "0192f6c4-5a1e-7000-8000-00000000008d",
+     "task_id": "0192f6c4-5a1e-7000-8000-000000000097",
+     "status": "succeeded",
+     "dry_run": false,
+     "trigger": "schedule",
+     "triggered_by": null,
+     "node": "rustryx-0",
+     "queued_at": "2026-10-24T09:15:30Z",
+     "started_at": "2026-10-24T09:15:30Z",
+     "finished_at": "2026-10-24T09:15:30Z",
+     "duration_ms": 5321,
+     "summary": {
+      "deleted_blobs": 12,
+      "reclaimed_bytes": 482113
+     },
+     "error_code": null,
+     "log_available": true,
+     "log_expires_at": "2026-11-23T09:15:30Z"
+    },
+    "next_run_at": "2026-10-24T09:15:30Z",
+    "lock": {
+     "held_by": null
+    }
+   }
+  },
+  {
+   "operationId": "updateTask",
+   "method": "put",
+   "path": "/api/v1/tasks/{task_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000097",
+    "name": "Blob garbage collection",
+    "kind": "blob-gc",
+    "description": "Removes blobs unreferenced for longer than the minimum age.",
+    "system": true,
+    "enabled": true,
+    "schedule": {
+     "type": "hourly",
+     "cron": null,
+     "at": null,
+     "next_runs": [
+      "2026-10-24T09:15:30Z"
+     ]
+    },
+    "parameters": {
+     "min_age_secs": 86400,
+     "batch_size": 1000
+    },
+    "last_run": {
+     "id": "0192f6c4-5a1e-7000-8000-00000000008d",
+     "task_id": "0192f6c4-5a1e-7000-8000-000000000097",
+     "status": "succeeded",
+     "dry_run": false,
+     "trigger": "schedule",
+     "triggered_by": null,
+     "node": "rustryx-0",
+     "queued_at": "2026-10-24T09:15:30Z",
+     "started_at": "2026-10-24T09:15:30Z",
+     "finished_at": "2026-10-24T09:15:30Z",
+     "duration_ms": 5321,
+     "summary": {
+      "deleted_blobs": 12,
+      "reclaimed_bytes": 482113
+     },
+     "error_code": null,
+     "log_available": true,
+     "log_expires_at": "2026-11-23T09:15:30Z"
+    },
+    "next_run_at": "2026-10-24T09:15:30Z",
+    "lock": {
+     "held_by": null
+    }
+   }
+  },
+  {
+   "operationId": "deleteTask",
+   "method": "delete",
+   "path": "/api/v1/tasks/{task_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "listTaskRuns",
+   "method": "get",
+   "path": "/api/v1/tasks/{task_id}/runs",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000008d",
+      "task_id": "0192f6c4-5a1e-7000-8000-000000000097",
+      "status": "succeeded",
+      "dry_run": false,
+      "trigger": "schedule",
+      "triggered_by": null,
+      "node": "rustryx-0",
+      "queued_at": "2026-10-24T09:15:30Z",
+      "started_at": "2026-10-24T09:15:30Z",
+      "finished_at": "2026-10-24T09:15:30Z",
+      "duration_ms": 5321,
+      "summary": {
+       "deleted_blobs": 12,
+       "reclaimed_bytes": 482113
+      },
+      "error_code": null,
+      "log_available": true,
+      "log_expires_at": "2026-11-23T09:15:30Z"
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "getTaskRun",
+   "method": "get",
+   "path": "/api/v1/tasks/{task_id}/runs/{run_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000008d",
+    "task_id": "0192f6c4-5a1e-7000-8000-000000000097",
+    "status": "succeeded",
+    "dry_run": false,
+    "trigger": "schedule",
+    "triggered_by": null,
+    "node": "rustryx-0",
+    "queued_at": "2026-10-24T09:15:30Z",
+    "started_at": "2026-10-24T09:15:30Z",
+    "finished_at": "2026-10-24T09:15:30Z",
+    "duration_ms": 5321,
+    "summary": {
+     "deleted_blobs": 12,
+     "reclaimed_bytes": 482113
+    },
+    "error_code": null,
+    "log_available": true,
+    "log_expires_at": "2026-11-23T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "getTaskRunLog",
+   "method": "get",
+   "path": "/api/v1/tasks/{task_id}/runs/{run_id}/log",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "run_id": "0192f6c4-5a1e-7000-8000-00000000008d",
+    "lines": [
+     {
+      "n": 0,
+      "at": "2026-10-24T09:15:30Z",
+      "level": "info",
+      "message": "mark phase: 12 candidate blobs"
+     }
+    ],
+    "next_line": 1,
+    "finished": true,
+    "purged": false
+   }
+  },
+  {
+   "operationId": "listAuditEvents",
+   "method": "get",
+   "path": "/api/v1/audit-events",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-0000000000a1",
+      "at": "2026-10-24T09:15:30Z",
+      "kind": "rbac_change",
+      "actor_id": "0192f6c4-5a1e-7000-8000-000000000005",
+      "actor_name": "alice",
+      "client_ip": "10.1.2.3",
+      "request_id": "0192f6c4-5a1e-7000-8000-00000000c0de",
+      "action": "role.update",
+      "target": "maven-publishers",
+      "outcome": "success",
+      "detail": {
+       "added_privileges": [
+        "maven-releases-write"
+       ]
+      }
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "exportAuditEvents",
+   "method": "get",
+   "path": "/api/v1/audit-events/export",
+   "status": 200,
+   "anonymous": false
+  },
+  {
+   "operationId": "getAuditEvent",
+   "method": "get",
+   "path": "/api/v1/audit-events/{event_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000000a1",
+    "at": "2026-10-24T09:15:30Z",
+    "kind": "rbac_change",
+    "actor_id": "0192f6c4-5a1e-7000-8000-000000000005",
+    "actor_name": "alice",
+    "client_ip": "10.1.2.3",
+    "request_id": "0192f6c4-5a1e-7000-8000-00000000c0de",
+    "action": "role.update",
+    "target": "maven-publishers",
+    "outcome": "success",
+    "detail": {
+     "added_privileges": [
+      "maven-releases-write"
+     ]
+    }
+   }
+  },
+  {
+   "operationId": "getSystemStatus",
+   "method": "get",
+   "path": "/api/v1/system/status",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "status": "warning",
+    "generated_at": "2026-10-24T09:15:30Z",
+    "node": "rustryx-0",
+    "checks": [
+     {
+      "id": "anonymous_access",
+      "title": "Anonymous access",
+      "status": "warning",
+      "severity": "warning",
+      "message": "Anonymous access is enabled and 2 repositories are public.",
+      "fix_hint": "Disable anonymous access unless public read is intended.",
+      "since": null,
+      "link": "/admin/anonymous"
+     }
+    ],
+    "readiness": {
+     "status": "ready",
+     "checks": [
+      {
+       "name": "database",
+       "status": "ok"
+      }
+     ],
+     "advisories": []
+    }
+   }
+  },
+  {
+   "operationId": "getSystemInfo",
+   "method": "get",
+   "path": "/api/v1/system/info",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "name": "rustryx",
+    "version": "0.1.0",
+    "license": "MIT",
+    "build": {
+     "commit": "3ef1ba26",
+     "built_at": "2026-10-24T09:15:30Z",
+     "profile": "release"
+    },
+    "supply_chain": {
+     "sbom_url": null,
+     "signature_hint": "cosign verify ghcr.io/example/rustryx:0.1.0"
+    },
+    "third_party_licenses_url": "/THIRD-PARTY-LICENSES.txt",
+    "banner": null
+   }
+  },
+  {
+   "operationId": "getMetricsSummary",
+   "method": "get",
+   "path": "/api/v1/system/metrics/summary",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "node": "rustryx-0",
+    "generated_at": "2026-10-24T09:15:30Z",
+    "uptime_secs": 86400,
+    "http": {
+     "requests_total": 120345,
+     "errors_5xx_total": 3,
+     "in_flight": 4,
+     "shed_total": 0,
+     "p95_ms": 41.5
+    },
+    "auth": {
+     "logins_ok_total": 310,
+     "logins_failed_total": 12,
+     "lockouts_total": 1
+    },
+    "database": {
+     "pool_size": 20,
+     "pool_in_use": 3,
+     "pool_wait_p95_ms": 0.4
+    },
+    "background_jobs": [
+     {
+      "task": "blob-gc",
+      "last_success_at": "2026-10-24T09:15:30Z",
+      "stale": false
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "getDashboardSummary",
+   "method": "get",
+   "path": "/api/v1/dashboard/summary",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "public_only": false,
+    "repositories": {
+     "total": 6,
+     "offline": 0,
+     "by_format": {
+      "maven2": 3,
+      "npm": 2,
+      "docker": 1
+     },
+     "by_type": {
+      "hosted": 3,
+      "proxy": 2,
+      "group": 1
+     }
+    },
+    "storage": [
+     {
+      "blob_store": "default",
+      "used_bytes": 8123456789,
+      "quota_bytes": null,
+      "health": "ok"
+     }
+    ],
+    "recent_activity": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-0000000000a1",
+      "at": "2026-10-24T09:15:30Z",
+      "kind": "rbac_change",
+      "actor_id": "0192f6c4-5a1e-7000-8000-000000000005",
+      "actor_name": "alice",
+      "client_ip": "10.1.2.3",
+      "request_id": "0192f6c4-5a1e-7000-8000-00000000c0de",
+      "action": "role.update",
+      "target": "maven-publishers",
+      "outcome": "success",
+      "detail": {
+       "added_privileges": [
+        "maven-releases-write"
+       ]
+      }
+     }
+    ],
+    "failed_tasks": [],
+    "setup_checklist": [
+     {
+      "id": "create_token",
+      "done": false,
+      "link": "/me/tokens"
+     }
+    ],
+    "degraded": true
+   }
+  },
+  {
+   "operationId": "getSettingsSchema",
+   "method": "get",
+   "path": "/api/v1/settings/schema",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "sections": {
+     "security": {
+      "type": "object",
+      "properties": {
+       "token_default_ttl_days": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 365
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "operationId": "getSettingsSection",
+   "method": "get",
+   "path": "/api/v1/settings/{section}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "section": "security",
+    "values": {
+     "session_idle_timeout_secs": 1800,
+     "session_absolute_timeout_secs": 28800,
+     "token_default_ttl_days": 90,
+     "token_max_ttl_days": 365
+    },
+    "sources": {
+     "session_idle_timeout_secs": "config",
+     "session_absolute_timeout_secs": "config",
+     "token_default_ttl_days": "default",
+     "token_max_ttl_days": "default"
+    },
+    "editable_fields": [],
+    "updated_at": null,
+    "updated_by": null
+   }
+  },
+  {
+   "operationId": "updateSettingsSection",
+   "method": "put",
+   "path": "/api/v1/settings/{section}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "section": "security",
+    "values": {
+     "session_idle_timeout_secs": 1800,
+     "session_absolute_timeout_secs": 28800,
+     "token_default_ttl_days": 90,
+     "token_max_ttl_days": 365
+    },
+    "sources": {
+     "session_idle_timeout_secs": "config",
+     "session_absolute_timeout_secs": "config",
+     "token_default_ttl_days": "default",
+     "token_max_ttl_days": "default"
+    },
+    "editable_fields": [],
+    "updated_at": null,
+    "updated_by": null
+   }
+  },
+  {
+   "operationId": "getOpenApiDocument",
+   "method": "get",
+   "path": "/api/v1/openapi.json",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "openapi": "3.1.0"
+   }
+  },
+  {
+   "operationId": "checkProxyUpstream",
+   "method": "post",
+   "path": "/api/v1/upstream-checks",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "ok": true,
+    "http_status": 200,
+    "latency_ms": 143,
+    "error_code": null,
+    "rule": null
+   }
+  },
+  {
+   "operationId": "listProjects",
+   "method": "get",
+   "path": "/api/v1/projects",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+      "name": "payments",
+      "description": "Payments team",
+      "visibility": "private",
+      "created_at": "2026-10-20T07:02:11Z",
+      "updated_at": "2026-10-24T09:15:30Z",
+      "repository_count": 2,
+      "member_count": 5,
+      "size_bytes": 2147483648,
+      "quota": {
+       "limit_bytes": 10737418240,
+       "used_bytes": 2147483648,
+       "state": "ok"
+      },
+      "vulnerability_summary": null,
+      "last_push_at": "2026-10-24T09:15:30Z",
+      "my_role": "project-admin"
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createProject",
+   "method": "post",
+   "path": "/api/v1/projects",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+    "name": "payments",
+    "description": "Payments team",
+    "visibility": "private",
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "repository_count": 2,
+    "member_count": 5,
+    "size_bytes": 2147483648,
+    "quota": {
+     "limit_bytes": 10737418240,
+     "used_bytes": 2147483648,
+     "state": "ok"
+    },
+    "vulnerability_summary": null,
+    "last_push_at": "2026-10-24T09:15:30Z",
+    "my_role": "project-admin"
+   }
+  },
+  {
+   "operationId": "getProject",
+   "method": "get",
+   "path": "/api/v1/projects/{project_id}",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+    "name": "payments",
+    "description": "Payments team",
+    "visibility": "private",
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "repository_count": 2,
+    "member_count": 5,
+    "size_bytes": 2147483648,
+    "quota": {
+     "limit_bytes": 10737418240,
+     "used_bytes": 2147483648,
+     "state": "ok"
+    },
+    "vulnerability_summary": null,
+    "last_push_at": "2026-10-24T09:15:30Z",
+    "my_role": "project-admin"
+   }
+  },
+  {
+   "operationId": "patchProject",
+   "method": "patch",
+   "path": "/api/v1/projects/{project_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+    "name": "payments",
+    "description": "Payments team",
+    "visibility": "private",
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "repository_count": 2,
+    "member_count": 5,
+    "size_bytes": 2147483648,
+    "quota": {
+     "limit_bytes": 10737418240,
+     "used_bytes": 2147483648,
+     "state": "ok"
+    },
+    "vulnerability_summary": null,
+    "last_push_at": "2026-10-24T09:15:30Z",
+    "my_role": "project-admin"
+   }
+  },
+  {
+   "operationId": "deleteProject",
+   "method": "delete",
+   "path": "/api/v1/projects/{project_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "listProjectRepositories",
+   "method": "get",
+   "path": "/api/v1/projects/{project_id}/repositories",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000001f",
+      "name": "maven-releases",
+      "format": "maven2",
+      "repo_type": "hosted",
+      "blob_store_id": "0192f6c4-5a1e-7000-8000-000000000029",
+      "write_policy": "allow_once",
+      "allow_anonymous": false,
+      "online": true,
+      "quota_bytes": null,
+      "cleanup_policy_ids": [
+       "0192f6c4-5a1e-7000-8000-00000000006f"
+      ],
+      "routing_rule_id": null,
+      "proxy": null,
+      "group": null,
+      "format_config": {
+       "version_policy": "release",
+       "layout_policy": "strict"
+      },
+      "created_at": "2026-10-20T07:02:11Z",
+      "updated_at": "2026-10-24T09:15:30Z",
+      "blob_store": {
+       "id": "0192f6c4-5a1e-7000-8000-000000000029",
+       "name": "default",
+       "kind": "local"
+      },
+      "url": "https://repo.example.org/repository/maven-releases/",
+      "cleanup_policies": [
+       {
+        "id": "0192f6c4-5a1e-7000-8000-00000000006f",
+        "name": "maven-old-snapshots"
+       }
+      ],
+      "routing_rule": null,
+      "stats": {
+       "component_count": 1240,
+       "asset_count": 5310,
+       "size_bytes": 8123456789,
+       "as_of": "2026-10-24T09:15:30Z"
+      },
+      "permissions": {
+       "browse": true,
+       "read": true,
+       "write": true,
+       "delete": false,
+       "admin": false
+      },
+      "upstream": null,
+      "anonymous_effective": false
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "attachProjectRepository",
+   "method": "post",
+   "path": "/api/v1/projects/{project_id}/repositories",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000001f",
+    "name": "maven-releases",
+    "format": "maven2",
+    "repo_type": "hosted",
+    "blob_store_id": "0192f6c4-5a1e-7000-8000-000000000029",
+    "write_policy": "allow_once",
+    "allow_anonymous": false,
+    "online": true,
+    "quota_bytes": null,
+    "cleanup_policy_ids": [
+     "0192f6c4-5a1e-7000-8000-00000000006f"
+    ],
+    "routing_rule_id": null,
+    "proxy": null,
+    "group": null,
+    "format_config": {
+     "version_policy": "release",
+     "layout_policy": "strict"
+    },
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "blob_store": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000029",
+     "name": "default",
+     "kind": "local"
+    },
+    "url": "https://repo.example.org/repository/maven-releases/",
+    "cleanup_policies": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000006f",
+      "name": "maven-old-snapshots"
+     }
+    ],
+    "routing_rule": null,
+    "stats": {
+     "component_count": 1240,
+     "asset_count": 5310,
+     "size_bytes": 8123456789,
+     "as_of": "2026-10-24T09:15:30Z"
+    },
+    "permissions": {
+     "browse": true,
+     "read": true,
+     "write": true,
+     "delete": false,
+     "admin": false
+    },
+    "upstream": null,
+    "anonymous_effective": false
+   }
+  },
+  {
+   "operationId": "detachProjectRepository",
+   "method": "delete",
+   "path": "/api/v1/projects/{project_id}/repositories/{name}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "getProjectSummary",
+   "method": "get",
+   "path": "/api/v1/projects/{project_id}/summary",
+   "status": 200,
+   "anonymous": true,
+   "example": {
+    "project": {
+     "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+     "name": "payments",
+     "description": "Payments team",
+     "visibility": "private",
+     "created_at": "2026-10-20T07:02:11Z",
+     "updated_at": "2026-10-24T09:15:30Z",
+     "repository_count": 2,
+     "member_count": 5,
+     "size_bytes": 2147483648,
+     "quota": {
+      "limit_bytes": 10737418240,
+      "used_bytes": 2147483648,
+      "state": "ok"
+     },
+     "vulnerability_summary": null,
+     "last_push_at": "2026-10-24T09:15:30Z",
+     "my_role": "project-admin"
+    },
+    "recent_pushes": [],
+    "members": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000005",
+      "username": "alice",
+      "display_name": "Alice Example",
+      "source": "oidc"
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "listProjectMembers",
+   "method": "get",
+   "path": "/api/v1/projects/{project_id}/members",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-0000000000d3",
+      "type": "group",
+      "user": null,
+      "provider": "oidc",
+      "external_group": "/rustryx/team-payments/publishers",
+      "role": "developer",
+      "source": "manual",
+      "created_at": "2026-10-24T09:15:30Z"
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "addProjectMember",
+   "method": "post",
+   "path": "/api/v1/projects/{project_id}/members",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000000d3",
+    "type": "group",
+    "user": null,
+    "provider": "oidc",
+    "external_group": "/rustryx/team-payments/publishers",
+    "role": "developer",
+    "source": "manual",
+    "created_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "updateProjectMember",
+   "method": "put",
+   "path": "/api/v1/projects/{project_id}/members/{member_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000000d3",
+    "type": "group",
+    "user": null,
+    "provider": "oidc",
+    "external_group": "/rustryx/team-payments/publishers",
+    "role": "developer",
+    "source": "manual",
+    "created_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "removeProjectMember",
+   "method": "delete",
+   "path": "/api/v1/projects/{project_id}/members/{member_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "rotateApiToken",
+   "method": "post",
+   "path": "/api/v1/api-tokens/{token_id}/actions/rotate",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000003d",
+    "user_id": "0192f6c4-5a1e-7000-8000-000000000005",
+    "name": "ci-publisher",
+    "display_prefix": "ryx_Qk3T",
+    "scopes": [
+     "repo:maven-releases:write"
+    ],
+    "expires_at": "2027-01-22T09:15:30Z",
+    "revoked_at": null,
+    "last_used_at": null,
+    "created_at": "2026-10-24T09:15:30Z",
+    "kind": "personal",
+    "state": "active",
+    "owner": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000005",
+     "username": "alice",
+     "display_name": "Alice Example",
+     "source": "oidc"
+    },
+    "never_used": true,
+    "project_id": null,
+    "secret": "ryx_EXAMPLE_ONLY_NOT_A_REAL_TOKEN_0000000000"
+   }
+  },
+  {
+   "operationId": "setApiTokenEnabled",
+   "method": "post",
+   "path": "/api/v1/api-tokens/{token_id}/actions/set-enabled",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000003d",
+    "user_id": "0192f6c4-5a1e-7000-8000-000000000005",
+    "name": "ci-publisher",
+    "display_prefix": "ryx_Qk3T",
+    "scopes": [
+     "repo:maven-releases:write"
+    ],
+    "expires_at": "2027-01-22T09:15:30Z",
+    "revoked_at": null,
+    "last_used_at": "2026-10-24T09:15:30Z",
+    "created_at": "2026-10-20T07:02:11Z",
+    "kind": "personal",
+    "state": "active",
+    "owner": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000005",
+     "username": "alice",
+     "display_name": "Alice Example",
+     "source": "oidc"
+    },
+    "never_used": false,
+    "project_id": null
+   }
+  },
+  {
+   "operationId": "purgeExpiredApiTokens",
+   "method": "post",
+   "path": "/api/v1/api-tokens/actions/purge-expired",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "purged": 14
+   }
+  },
+  {
+   "operationId": "listProjectRobots",
+   "method": "get",
+   "path": "/api/v1/projects/{project_id}/robots",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000003d",
+      "user_id": "0192f6c4-5a1e-7000-8000-000000000005",
+      "name": "ci-publisher",
+      "display_prefix": "ryx_Qk3T",
+      "scopes": [
+       "repo:maven-releases:write"
+      ],
+      "expires_at": "2027-01-22T09:15:30Z",
+      "revoked_at": null,
+      "last_used_at": "2026-10-24T09:15:30Z",
+      "created_at": "2026-10-20T07:02:11Z",
+      "kind": "personal",
+      "state": "active",
+      "owner": {
+       "id": "0192f6c4-5a1e-7000-8000-000000000005",
+       "username": "alice",
+       "display_name": "Alice Example",
+       "source": "oidc"
+      },
+      "never_used": false,
+      "project_id": null
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createProjectRobot",
+   "method": "post",
+   "path": "/api/v1/projects/{project_id}/robots",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000003d",
+    "user_id": "0192f6c4-5a1e-7000-8000-000000000005",
+    "name": "ci-publisher",
+    "display_prefix": "ryx_Qk3T",
+    "scopes": [
+     "repo:maven-releases:write"
+    ],
+    "expires_at": "2027-01-22T09:15:30Z",
+    "revoked_at": null,
+    "last_used_at": null,
+    "created_at": "2026-10-24T09:15:30Z",
+    "kind": "personal",
+    "state": "active",
+    "owner": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000005",
+     "username": "alice",
+     "display_name": "Alice Example",
+     "source": "oidc"
+    },
+    "never_used": true,
+    "project_id": null,
+    "secret": "ryx_EXAMPLE_ONLY_NOT_A_REAL_TOKEN_0000000000"
+   }
+  },
+  {
+   "operationId": "listLabels",
+   "method": "get",
+   "path": "/api/v1/labels",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-0000000000dd",
+      "name": "release-2026-10",
+      "scope": "system",
+      "project_id": null,
+      "color": "#22C55E",
+      "description": "October release",
+      "attributes": {},
+      "created_at": "2026-10-20T07:02:11Z",
+      "usage_count": 12
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createLabel",
+   "method": "post",
+   "path": "/api/v1/labels",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000000dd",
+    "name": "release-2026-10",
+    "scope": "system",
+    "project_id": null,
+    "color": "#22C55E",
+    "description": "October release",
+    "attributes": {},
+    "created_at": "2026-10-20T07:02:11Z",
+    "usage_count": 12
+   }
+  },
+  {
+   "operationId": "getLabel",
+   "method": "get",
+   "path": "/api/v1/labels/{label_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000000dd",
+    "name": "release-2026-10",
+    "scope": "system",
+    "project_id": null,
+    "color": "#22C55E",
+    "description": "October release",
+    "attributes": {},
+    "created_at": "2026-10-20T07:02:11Z",
+    "usage_count": 12
+   }
+  },
+  {
+   "operationId": "updateLabel",
+   "method": "put",
+   "path": "/api/v1/labels/{label_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000000dd",
+    "name": "release-2026-10",
+    "scope": "system",
+    "project_id": null,
+    "color": "#22C55E",
+    "description": "October release",
+    "attributes": {},
+    "created_at": "2026-10-20T07:02:11Z",
+    "usage_count": 12
+   }
+  },
+  {
+   "operationId": "deleteLabel",
+   "method": "delete",
+   "path": "/api/v1/labels/{label_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "listRetentionPolicies",
+   "method": "get",
+   "path": "/api/v1/retention-policies",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-0000000000e7",
+      "scope": {
+       "type": "project",
+       "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+       "name": "payments"
+      },
+      "rules": [
+       {
+        "template": "latest_pushed",
+        "n": 10,
+        "repository_selector": {
+         "mode": "matching",
+         "pattern": "**"
+        },
+        "tag_selector": {
+         "mode": "matching",
+         "pattern": "**"
+        },
+        "include_untagged": false
+       }
+      ],
+      "schedule": {
+       "type": "daily",
+       "cron": null,
+       "at": null,
+       "next_runs": [
+        "2026-10-24T09:15:30Z"
+       ]
+      },
+      "enabled": true,
+      "last_run": null,
+      "created_at": "2026-10-20T07:02:11Z",
+      "updated_at": "2026-10-24T09:15:30Z"
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createRetentionPolicy",
+   "method": "post",
+   "path": "/api/v1/retention-policies",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000000e7",
+    "scope": {
+     "type": "project",
+     "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+     "name": "payments"
+    },
+    "rules": [
+     {
+      "template": "latest_pushed",
+      "n": 10,
+      "repository_selector": {
+       "mode": "matching",
+       "pattern": "**"
+      },
+      "tag_selector": {
+       "mode": "matching",
+       "pattern": "**"
+      },
+      "include_untagged": false
+     }
+    ],
+    "schedule": {
+     "type": "daily",
+     "cron": null,
+     "at": null,
+     "next_runs": [
+      "2026-10-24T09:15:30Z"
+     ]
+    },
+    "enabled": true,
+    "last_run": null,
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "getRetentionPolicy",
+   "method": "get",
+   "path": "/api/v1/retention-policies/{policy_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000000e7",
+    "scope": {
+     "type": "project",
+     "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+     "name": "payments"
+    },
+    "rules": [
+     {
+      "template": "latest_pushed",
+      "n": 10,
+      "repository_selector": {
+       "mode": "matching",
+       "pattern": "**"
+      },
+      "tag_selector": {
+       "mode": "matching",
+       "pattern": "**"
+      },
+      "include_untagged": false
+     }
+    ],
+    "schedule": {
+     "type": "daily",
+     "cron": null,
+     "at": null,
+     "next_runs": [
+      "2026-10-24T09:15:30Z"
+     ]
+    },
+    "enabled": true,
+    "last_run": null,
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "updateRetentionPolicy",
+   "method": "put",
+   "path": "/api/v1/retention-policies/{policy_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000000e7",
+    "scope": {
+     "type": "project",
+     "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+     "name": "payments"
+    },
+    "rules": [
+     {
+      "template": "latest_pushed",
+      "n": 10,
+      "repository_selector": {
+       "mode": "matching",
+       "pattern": "**"
+      },
+      "tag_selector": {
+       "mode": "matching",
+       "pattern": "**"
+      },
+      "include_untagged": false
+     }
+    ],
+    "schedule": {
+     "type": "daily",
+     "cron": null,
+     "at": null,
+     "next_runs": [
+      "2026-10-24T09:15:30Z"
+     ]
+    },
+    "enabled": true,
+    "last_run": null,
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "deleteRetentionPolicy",
+   "method": "delete",
+   "path": "/api/v1/retention-policies/{policy_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "dryRunRetentionPolicy",
+   "method": "post",
+   "path": "/api/v1/retention-policies/{policy_id}/actions/dry-run",
+   "status": 202,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000083",
+    "kind": "cleanup",
+    "policy_id": "0192f6c4-5a1e-7000-8000-00000000006f",
+    "policy_name": "maven-old-snapshots",
+    "dry_run": true,
+    "status": "succeeded",
+    "trigger": "manual",
+    "triggered_by": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000005",
+     "username": "alice",
+     "display_name": "Alice Example",
+     "source": "oidc"
+    },
+    "task_run_id": "0192f6c4-5a1e-7000-8000-00000000008d",
+    "queued_at": "2026-10-24T09:15:30Z",
+    "started_at": "2026-10-24T09:15:30Z",
+    "finished_at": "2026-10-24T09:15:30Z",
+    "summary": {
+     "candidates": 42,
+     "bytes": 123456789,
+     "repositories": 1,
+     "protected": 0
+    },
+    "error_code": null,
+    "report_expires_at": "2026-11-23T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "runRetentionPolicy",
+   "method": "post",
+   "path": "/api/v1/retention-policies/{policy_id}/actions/run",
+   "status": 202,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000083",
+    "kind": "cleanup",
+    "policy_id": "0192f6c4-5a1e-7000-8000-00000000006f",
+    "policy_name": "maven-old-snapshots",
+    "dry_run": true,
+    "status": "succeeded",
+    "trigger": "manual",
+    "triggered_by": {
+     "id": "0192f6c4-5a1e-7000-8000-000000000005",
+     "username": "alice",
+     "display_name": "Alice Example",
+     "source": "oidc"
+    },
+    "task_run_id": "0192f6c4-5a1e-7000-8000-00000000008d",
+    "queued_at": "2026-10-24T09:15:30Z",
+    "started_at": "2026-10-24T09:15:30Z",
+    "finished_at": "2026-10-24T09:15:30Z",
+    "summary": {
+     "candidates": 42,
+     "bytes": 123456789,
+     "repositories": 1,
+     "protected": 0
+    },
+    "error_code": null,
+    "report_expires_at": "2026-11-23T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "listImmutabilityRules",
+   "method": "get",
+   "path": "/api/v1/immutability-rules",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-0000000000f1",
+      "scope": {
+       "type": "project",
+       "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+       "name": "payments"
+      },
+      "repository_selector": {
+       "mode": "matching",
+       "pattern": "**"
+      },
+      "tag_selector": {
+       "mode": "matching",
+       "pattern": "v*"
+      },
+      "path_expression": null,
+      "enabled": true,
+      "created_at": "2026-10-20T07:02:11Z",
+      "updated_at": "2026-10-24T09:15:30Z"
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createImmutabilityRule",
+   "method": "post",
+   "path": "/api/v1/immutability-rules",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000000f1",
+    "scope": {
+     "type": "project",
+     "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+     "name": "payments"
+    },
+    "repository_selector": {
+     "mode": "matching",
+     "pattern": "**"
+    },
+    "tag_selector": {
+     "mode": "matching",
+     "pattern": "v*"
+    },
+    "path_expression": null,
+    "enabled": true,
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "getImmutabilityRule",
+   "method": "get",
+   "path": "/api/v1/immutability-rules/{rule_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000000f1",
+    "scope": {
+     "type": "project",
+     "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+     "name": "payments"
+    },
+    "repository_selector": {
+     "mode": "matching",
+     "pattern": "**"
+    },
+    "tag_selector": {
+     "mode": "matching",
+     "pattern": "v*"
+    },
+    "path_expression": null,
+    "enabled": true,
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "updateImmutabilityRule",
+   "method": "put",
+   "path": "/api/v1/immutability-rules/{rule_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000000f1",
+    "scope": {
+     "type": "project",
+     "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+     "name": "payments"
+    },
+    "repository_selector": {
+     "mode": "matching",
+     "pattern": "**"
+    },
+    "tag_selector": {
+     "mode": "matching",
+     "pattern": "v*"
+    },
+    "path_expression": null,
+    "enabled": true,
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "deleteImmutabilityRule",
+   "method": "delete",
+   "path": "/api/v1/immutability-rules/{rule_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "testImmutabilityRules",
+   "method": "post",
+   "path": "/api/v1/immutability-rules/test",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "protected": true,
+    "rule_id": "0192f6c4-5a1e-7000-8000-0000000000f1"
+   }
+  },
+  {
+   "operationId": "listQuotas",
+   "method": "get",
+   "path": "/api/v1/quotas",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-0000000000fb",
+      "scope": {
+       "type": "project",
+       "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+       "name": "payments"
+      },
+      "limit_bytes": 10737418240,
+      "used_bytes": 2147483648,
+      "state": "ok",
+      "updated_at": "2026-10-24T09:15:30Z",
+      "recounted_at": "2026-10-24T09:15:30Z"
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "getQuota",
+   "method": "get",
+   "path": "/api/v1/quotas/{quota_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000000fb",
+    "scope": {
+     "type": "project",
+     "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+     "name": "payments"
+    },
+    "limit_bytes": 10737418240,
+    "used_bytes": 2147483648,
+    "state": "ok",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "recounted_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "updateQuota",
+   "method": "put",
+   "path": "/api/v1/quotas/{quota_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000000fb",
+    "scope": {
+     "type": "project",
+     "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+     "name": "payments"
+    },
+    "limit_bytes": 10737418240,
+    "used_bytes": 2147483648,
+    "state": "ok",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "recounted_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "recountQuota",
+   "method": "post",
+   "path": "/api/v1/quotas/{quota_id}/actions/recount",
+   "status": 202,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000008d",
+    "task_id": "0192f6c4-5a1e-7000-8000-000000000097",
+    "status": "succeeded",
+    "dry_run": false,
+    "trigger": "schedule",
+    "triggered_by": null,
+    "node": "rustryx-0",
+    "queued_at": "2026-10-24T09:15:30Z",
+    "started_at": "2026-10-24T09:15:30Z",
+    "finished_at": "2026-10-24T09:15:30Z",
+    "duration_ms": 5321,
+    "summary": {
+     "deleted_blobs": 12,
+     "reclaimed_bytes": 482113
+    },
+    "error_code": null,
+    "log_available": true,
+    "log_expires_at": "2026-11-23T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "getProjectQuota",
+   "method": "get",
+   "path": "/api/v1/projects/{project_id}/quota",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "limit_bytes": 10737418240,
+    "used_bytes": 2147483648,
+    "state": "ok"
+   }
+  },
+  {
+   "operationId": "listScanners",
+   "method": "get",
+   "path": "/api/v1/scanners",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000012d",
+      "name": "trivy",
+      "kind": "trivy",
+      "url": null,
+      "auth_type": "none",
+      "credentials_set": false,
+      "default": true,
+      "capabilities": [
+       "vulnerability",
+       "sbom"
+      ],
+      "health": {
+       "state": "ok",
+       "checked_at": "2026-10-24T09:15:30Z",
+       "last_error_code": null
+      },
+      "offline_data": {
+       "updated_at": "2026-10-24T09:15:30Z",
+       "stale": false
+      },
+      "online_mode": false,
+      "created_at": "2026-10-20T07:02:11Z"
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createScanner",
+   "method": "post",
+   "path": "/api/v1/scanners",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000012d",
+    "name": "trivy",
+    "kind": "trivy",
+    "url": null,
+    "auth_type": "none",
+    "credentials_set": false,
+    "default": true,
+    "capabilities": [
+     "vulnerability",
+     "sbom"
+    ],
+    "health": {
+     "state": "ok",
+     "checked_at": "2026-10-24T09:15:30Z",
+     "last_error_code": null
+    },
+    "offline_data": {
+     "updated_at": "2026-10-24T09:15:30Z",
+     "stale": false
+    },
+    "online_mode": false,
+    "created_at": "2026-10-20T07:02:11Z"
+   }
+  },
+  {
+   "operationId": "getScanner",
+   "method": "get",
+   "path": "/api/v1/scanners/{scanner_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000012d",
+    "name": "trivy",
+    "kind": "trivy",
+    "url": null,
+    "auth_type": "none",
+    "credentials_set": false,
+    "default": true,
+    "capabilities": [
+     "vulnerability",
+     "sbom"
+    ],
+    "health": {
+     "state": "ok",
+     "checked_at": "2026-10-24T09:15:30Z",
+     "last_error_code": null
+    },
+    "offline_data": {
+     "updated_at": "2026-10-24T09:15:30Z",
+     "stale": false
+    },
+    "online_mode": false,
+    "created_at": "2026-10-20T07:02:11Z"
+   }
+  },
+  {
+   "operationId": "updateScanner",
+   "method": "put",
+   "path": "/api/v1/scanners/{scanner_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000012d",
+    "name": "trivy",
+    "kind": "trivy",
+    "url": null,
+    "auth_type": "none",
+    "credentials_set": false,
+    "default": true,
+    "capabilities": [
+     "vulnerability",
+     "sbom"
+    ],
+    "health": {
+     "state": "ok",
+     "checked_at": "2026-10-24T09:15:30Z",
+     "last_error_code": null
+    },
+    "offline_data": {
+     "updated_at": "2026-10-24T09:15:30Z",
+     "stale": false
+    },
+    "online_mode": false,
+    "created_at": "2026-10-20T07:02:11Z"
+   }
+  },
+  {
+   "operationId": "deleteScanner",
+   "method": "delete",
+   "path": "/api/v1/scanners/{scanner_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "testScanner",
+   "method": "post",
+   "path": "/api/v1/scanners/{scanner_id}/actions/test",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "ok": true,
+    "latency_ms": 12,
+    "error_code": null
+   }
+  },
+  {
+   "operationId": "listScans",
+   "method": "get",
+   "path": "/api/v1/scans",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000137",
+      "component_id": "0192f6c4-5a1e-7000-8000-00000000005f",
+      "repository": "payments-oci",
+      "coordinate": "payments/api:1.2.3",
+      "scanner_id": "0192f6c4-5a1e-7000-8000-00000000012d",
+      "scanner_name": "trivy",
+      "status": "complete",
+      "queued_at": "2026-10-24T09:15:30Z",
+      "started_at": "2026-10-24T09:15:30Z",
+      "finished_at": "2026-10-24T09:15:30Z",
+      "summary": {
+       "critical": 0,
+       "high": 2,
+       "medium": 5,
+       "low": 9,
+       "negligible": 0,
+       "unknown": 0,
+       "fixable": 6
+      },
+      "error_code": null,
+      "log_available": true
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "startScans",
+   "method": "post",
+   "path": "/api/v1/scans",
+   "status": 202,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000137",
+      "component_id": "0192f6c4-5a1e-7000-8000-00000000005f",
+      "repository": "payments-oci",
+      "coordinate": "payments/api:1.2.3",
+      "scanner_id": "0192f6c4-5a1e-7000-8000-00000000012d",
+      "scanner_name": "trivy",
+      "status": "complete",
+      "queued_at": "2026-10-24T09:15:30Z",
+      "started_at": "2026-10-24T09:15:30Z",
+      "finished_at": "2026-10-24T09:15:30Z",
+      "summary": {
+       "critical": 0,
+       "high": 2,
+       "medium": 5,
+       "low": 9,
+       "negligible": 0,
+       "unknown": 0,
+       "fixable": 6
+      },
+      "error_code": null,
+      "log_available": true
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "scanAll",
+   "method": "post",
+   "path": "/api/v1/scans/actions/scan-all",
+   "status": 202,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000008d",
+    "task_id": "0192f6c4-5a1e-7000-8000-000000000097",
+    "status": "succeeded",
+    "dry_run": false,
+    "trigger": "schedule",
+    "triggered_by": null,
+    "node": "rustryx-0",
+    "queued_at": "2026-10-24T09:15:30Z",
+    "started_at": "2026-10-24T09:15:30Z",
+    "finished_at": "2026-10-24T09:15:30Z",
+    "duration_ms": 5321,
+    "summary": {
+     "deleted_blobs": 12,
+     "reclaimed_bytes": 482113
+    },
+    "error_code": null,
+    "log_available": true,
+    "log_expires_at": "2026-11-23T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "stopAllScans",
+   "method": "post",
+   "path": "/api/v1/scans/actions/stop-all",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "getScan",
+   "method": "get",
+   "path": "/api/v1/scans/{scan_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000137",
+    "component_id": "0192f6c4-5a1e-7000-8000-00000000005f",
+    "repository": "payments-oci",
+    "coordinate": "payments/api:1.2.3",
+    "scanner_id": "0192f6c4-5a1e-7000-8000-00000000012d",
+    "scanner_name": "trivy",
+    "status": "complete",
+    "queued_at": "2026-10-24T09:15:30Z",
+    "started_at": "2026-10-24T09:15:30Z",
+    "finished_at": "2026-10-24T09:15:30Z",
+    "summary": {
+     "critical": 0,
+     "high": 2,
+     "medium": 5,
+     "low": 9,
+     "negligible": 0,
+     "unknown": 0,
+     "fixable": 6
+    },
+    "error_code": null,
+    "log_available": true
+   }
+  },
+  {
+   "operationId": "getScanLog",
+   "method": "get",
+   "path": "/api/v1/scans/{scan_id}/log",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "run_id": "0192f6c4-5a1e-7000-8000-00000000008d",
+    "lines": [
+     {
+      "n": 0,
+      "at": "2026-10-24T09:15:30Z",
+      "level": "info",
+      "message": "mark phase: 12 candidate blobs"
+     }
+    ],
+    "next_line": 1,
+    "finished": true,
+    "purged": false
+   }
+  },
+  {
+   "operationId": "stopScan",
+   "method": "post",
+   "path": "/api/v1/scans/{scan_id}/actions/stop",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000137",
+    "component_id": "0192f6c4-5a1e-7000-8000-00000000005f",
+    "repository": "payments-oci",
+    "coordinate": "payments/api:1.2.3",
+    "scanner_id": "0192f6c4-5a1e-7000-8000-00000000012d",
+    "scanner_name": "trivy",
+    "status": "complete",
+    "queued_at": "2026-10-24T09:15:30Z",
+    "started_at": "2026-10-24T09:15:30Z",
+    "finished_at": "2026-10-24T09:15:30Z",
+    "summary": {
+     "critical": 0,
+     "high": 2,
+     "medium": 5,
+     "low": 9,
+     "negligible": 0,
+     "unknown": 0,
+     "fixable": 6
+    },
+    "error_code": null,
+    "log_available": true
+   }
+  },
+  {
+   "operationId": "listComponentVulnerabilities",
+   "method": "get",
+   "path": "/api/v1/components/{component_id}/vulnerabilities",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000141",
+      "cve_id": "CVE-2026-12345",
+      "package": "openssl",
+      "installed_version": "3.0.1",
+      "fixed_version": "3.0.15",
+      "severity": "high",
+      "score": 7.5,
+      "title": "Buffer over-read",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-12345",
+      "allowlisted": false,
+      "allowlist_expires_at": null
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "getComponentVulnerabilitySummary",
+   "method": "get",
+   "path": "/api/v1/components/{component_id}/vulnerabilities/summary",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "status": "complete",
+    "scanned_at": "2026-10-24T09:15:30Z",
+    "scanner_name": "trivy",
+    "summary": {
+     "critical": 0,
+     "high": 2,
+     "medium": 5,
+     "low": 9,
+     "negligible": 0,
+     "unknown": 0,
+     "fixable": 6
+    },
+    "highest_severity": "high",
+    "scan_id": "0192f6c4-5a1e-7000-8000-000000000137"
+   }
+  },
+  {
+   "operationId": "searchVulnerabilities",
+   "method": "get",
+   "path": "/api/v1/vulnerabilities",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000141",
+      "cve_id": "CVE-2026-12345",
+      "package": "openssl",
+      "installed_version": "3.0.1",
+      "fixed_version": "3.0.15",
+      "severity": "high",
+      "score": 7.5,
+      "title": "Buffer over-read",
+      "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-12345",
+      "allowlisted": false,
+      "allowlist_expires_at": null,
+      "component_id": "0192f6c4-5a1e-7000-8000-00000000005f",
+      "repository": "payments-oci",
+      "coordinate": "payments/api:1.2.3",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "project": "payments",
+      "scanned_at": "2026-10-24T09:15:30Z"
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "getSecurityOverview",
+   "method": "get",
+   "path": "/api/v1/vulnerabilities/overview",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "generated_at": "2026-10-24T09:15:30Z",
+    "scanned": 120,
+    "total": 140,
+    "severity": {
+     "critical": 0,
+     "high": 2,
+     "medium": 5,
+     "low": 9,
+     "negligible": 0,
+     "unknown": 0,
+     "fixable": 6
+    },
+    "top_artifacts": [],
+    "top_cves": [],
+    "scan_queue": {
+     "queued": 0,
+     "running": 1,
+     "oldest_queued_at": null
+    },
+    "stale": false
+   }
+  },
+  {
+   "operationId": "createVulnerabilityExport",
+   "method": "post",
+   "path": "/api/v1/vulnerabilities/exports",
+   "status": 202,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000014b",
+    "status": "ready",
+    "created_at": "2026-10-24T09:15:30Z",
+    "expires_at": "2026-10-25T09:15:30Z",
+    "row_count": 120,
+    "filters": {
+     "project": "payments"
+    }
+   }
+  },
+  {
+   "operationId": "getVulnerabilityExport",
+   "method": "get",
+   "path": "/api/v1/vulnerabilities/exports/{export_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000014b",
+    "status": "ready",
+    "created_at": "2026-10-24T09:15:30Z",
+    "expires_at": "2026-10-25T09:15:30Z",
+    "row_count": 120,
+    "filters": {
+     "project": "payments"
+    }
+   }
+  },
+  {
+   "operationId": "downloadVulnerabilityExport",
+   "method": "get",
+   "path": "/api/v1/vulnerabilities/exports/{export_id}/download",
+   "status": 200,
+   "anonymous": false
+  },
+  {
+   "operationId": "listCveAllowlist",
+   "method": "get",
+   "path": "/api/v1/cve-allowlists",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000155",
+      "scope": "system",
+      "project_id": null,
+      "cve_id": "CVE-2026-12345",
+      "expires_at": "2027-01-01T00:00:00Z",
+      "reason": "Not reachable",
+      "created_by": {
+       "id": "0192f6c4-5a1e-7000-8000-000000000005",
+       "username": "alice",
+       "display_name": "Alice Example",
+       "source": "oidc"
+      },
+      "created_at": "2026-10-24T09:15:30Z"
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "addCveAllowlistEntries",
+   "method": "post",
+   "path": "/api/v1/cve-allowlists",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000155",
+      "scope": "system",
+      "project_id": null,
+      "cve_id": "CVE-2026-12345",
+      "expires_at": "2027-01-01T00:00:00Z",
+      "reason": "Not reachable",
+      "created_by": {
+       "id": "0192f6c4-5a1e-7000-8000-000000000005",
+       "username": "alice",
+       "display_name": "Alice Example",
+       "source": "oidc"
+      },
+      "created_at": "2026-10-24T09:15:30Z"
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "deleteCveAllowlistEntry",
+   "method": "delete",
+   "path": "/api/v1/cve-allowlists/{entry_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "copySystemCveAllowlist",
+   "method": "post",
+   "path": "/api/v1/cve-allowlists/actions/copy-from-system",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "copied": 3
+   }
+  },
+  {
+   "operationId": "getComponentSbom",
+   "method": "get",
+   "path": "/api/v1/components/{component_id}/sbom",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "format": "spdx-json",
+    "generated_at": "2026-10-24T09:15:30Z",
+    "status": "ready",
+    "package_count": 1,
+    "packages": [
+     {
+      "name": "openssl",
+      "version": "3.0.1",
+      "license": "Apache-2.0",
+      "purl": "pkg:deb/debian/openssl@3.0.1"
+     }
+    ],
+    "truncated": false
+   }
+  },
+  {
+   "operationId": "downloadComponentSbom",
+   "method": "get",
+   "path": "/api/v1/components/{component_id}/sbom/download",
+   "status": 200,
+   "anonymous": false
+  },
+  {
+   "operationId": "generateComponentSbom",
+   "method": "post",
+   "path": "/api/v1/components/{component_id}/sbom/actions/generate",
+   "status": 202,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000008d",
+    "task_id": "0192f6c4-5a1e-7000-8000-000000000097",
+    "status": "succeeded",
+    "dry_run": false,
+    "trigger": "schedule",
+    "triggered_by": null,
+    "node": "rustryx-0",
+    "queued_at": "2026-10-24T09:15:30Z",
+    "started_at": "2026-10-24T09:15:30Z",
+    "finished_at": "2026-10-24T09:15:30Z",
+    "duration_ms": 5321,
+    "summary": {
+     "deleted_blobs": 12,
+     "reclaimed_bytes": 482113
+    },
+    "error_code": null,
+    "log_available": true,
+    "log_expires_at": "2026-11-23T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "listComponentAccessories",
+   "method": "get",
+   "path": "/api/v1/components/{component_id}/accessories",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000015f",
+      "kind": "cosign_signature",
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "size_bytes": 1024,
+      "created_at": "2026-10-24T09:15:30Z"
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "deleteAccessory",
+   "method": "delete",
+   "path": "/api/v1/components/{component_id}/accessories/{accessory_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "getRepositoryHealth",
+   "method": "get",
+   "path": "/api/v1/repositories/{name}/health",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "enabled": true,
+    "scanner_configured": true,
+    "last_scan_at": "2026-10-24T09:15:30Z",
+    "summary": {
+     "critical": 0,
+     "high": 2,
+     "medium": 5,
+     "low": 9,
+     "negligible": 0,
+     "unknown": 0,
+     "fixable": 6
+    },
+    "top_findings": []
+   }
+  },
+  {
+   "operationId": "listWebhooks",
+   "method": "get",
+   "path": "/api/v1/webhooks",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000169",
+      "name": "ci-notify",
+      "scope": "project",
+      "project_id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+      "repository": null,
+      "url": "https://ci.example.org/hook",
+      "kind": "http",
+      "events": [
+       "push",
+       "scan_completed"
+      ],
+      "enabled": true,
+      "secret_set": true,
+      "auth_header_set": false,
+      "last_delivery_status": "delivered",
+      "created_at": "2026-10-20T07:02:11Z",
+      "updated_at": "2026-10-24T09:15:30Z"
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createWebhook",
+   "method": "post",
+   "path": "/api/v1/webhooks",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000169",
+    "name": "ci-notify",
+    "scope": "project",
+    "project_id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+    "repository": null,
+    "url": "https://ci.example.org/hook",
+    "kind": "http",
+    "events": [
+     "push",
+     "scan_completed"
+    ],
+    "enabled": true,
+    "secret_set": true,
+    "auth_header_set": false,
+    "last_delivery_status": "delivered",
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "secret": "whsec_EXAMPLE_ONLY"
+   }
+  },
+  {
+   "operationId": "getWebhook",
+   "method": "get",
+   "path": "/api/v1/webhooks/{webhook_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000169",
+    "name": "ci-notify",
+    "scope": "project",
+    "project_id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+    "repository": null,
+    "url": "https://ci.example.org/hook",
+    "kind": "http",
+    "events": [
+     "push",
+     "scan_completed"
+    ],
+    "enabled": true,
+    "secret_set": true,
+    "auth_header_set": false,
+    "last_delivery_status": "delivered",
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "updateWebhook",
+   "method": "put",
+   "path": "/api/v1/webhooks/{webhook_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000169",
+    "name": "ci-notify",
+    "scope": "project",
+    "project_id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+    "repository": null,
+    "url": "https://ci.example.org/hook",
+    "kind": "http",
+    "events": [
+     "push",
+     "scan_completed"
+    ],
+    "enabled": true,
+    "secret_set": true,
+    "auth_header_set": false,
+    "last_delivery_status": "delivered",
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "deleteWebhook",
+   "method": "delete",
+   "path": "/api/v1/webhooks/{webhook_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "rotateWebhookSecret",
+   "method": "post",
+   "path": "/api/v1/webhooks/{webhook_id}/actions/rotate-secret",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000169",
+    "name": "ci-notify",
+    "scope": "project",
+    "project_id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+    "repository": null,
+    "url": "https://ci.example.org/hook",
+    "kind": "http",
+    "events": [
+     "push",
+     "scan_completed"
+    ],
+    "enabled": true,
+    "secret_set": true,
+    "auth_header_set": false,
+    "last_delivery_status": "delivered",
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z",
+    "secret": "whsec_EXAMPLE_ONLY"
+   }
+  },
+  {
+   "operationId": "listWebhookDeliveries",
+   "method": "get",
+   "path": "/api/v1/webhook-deliveries",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000173",
+      "webhook_id": "0192f6c4-5a1e-7000-8000-000000000169",
+      "event": "push",
+      "status": "delivered",
+      "attempt": 1,
+      "status_code": 200,
+      "latency_ms": 85,
+      "error_code": null,
+      "response_excerpt": "ok",
+      "created_at": "2026-10-24T09:15:30Z",
+      "delivered_at": "2026-10-24T09:15:30Z"
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "redeliverWebhook",
+   "method": "post",
+   "path": "/api/v1/webhook-deliveries/{delivery_id}/actions/redeliver",
+   "status": 202,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000173",
+    "webhook_id": "0192f6c4-5a1e-7000-8000-000000000169",
+    "event": "push",
+    "status": "delivered",
+    "attempt": 1,
+    "status_code": 200,
+    "latency_ms": 85,
+    "error_code": null,
+    "response_excerpt": "ok",
+    "created_at": "2026-10-24T09:15:30Z",
+    "delivered_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "testWebhook",
+   "method": "post",
+   "path": "/api/v1/webhooks/{webhook_id}/actions/test",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000173",
+    "webhook_id": "0192f6c4-5a1e-7000-8000-000000000169",
+    "event": "push",
+    "status": "delivered",
+    "attempt": 1,
+    "status_code": 200,
+    "latency_ms": 85,
+    "error_code": null,
+    "response_excerpt": "ok",
+    "created_at": "2026-10-24T09:15:30Z",
+    "delivered_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "listRegistries",
+   "method": "get",
+   "path": "/api/v1/registries",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000017d",
+      "name": "docker-hub",
+      "provider": "oci",
+      "url": "https://registry-1.docker.io",
+      "credentials_set": true,
+      "ca_ref": null,
+      "verify_certificate": true,
+      "health": {
+       "state": "ok",
+       "checked_at": "2026-10-24T09:15:30Z",
+       "last_error_code": null
+      },
+      "created_at": "2026-10-20T07:02:11Z"
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createRegistry",
+   "method": "post",
+   "path": "/api/v1/registries",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000017d",
+    "name": "docker-hub",
+    "provider": "oci",
+    "url": "https://registry-1.docker.io",
+    "credentials_set": true,
+    "ca_ref": null,
+    "verify_certificate": true,
+    "health": {
+     "state": "ok",
+     "checked_at": "2026-10-24T09:15:30Z",
+     "last_error_code": null
+    },
+    "created_at": "2026-10-20T07:02:11Z"
+   }
+  },
+  {
+   "operationId": "getRegistry",
+   "method": "get",
+   "path": "/api/v1/registries/{registry_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000017d",
+    "name": "docker-hub",
+    "provider": "oci",
+    "url": "https://registry-1.docker.io",
+    "credentials_set": true,
+    "ca_ref": null,
+    "verify_certificate": true,
+    "health": {
+     "state": "ok",
+     "checked_at": "2026-10-24T09:15:30Z",
+     "last_error_code": null
+    },
+    "created_at": "2026-10-20T07:02:11Z"
+   }
+  },
+  {
+   "operationId": "updateRegistry",
+   "method": "put",
+   "path": "/api/v1/registries/{registry_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000017d",
+    "name": "docker-hub",
+    "provider": "oci",
+    "url": "https://registry-1.docker.io",
+    "credentials_set": true,
+    "ca_ref": null,
+    "verify_certificate": true,
+    "health": {
+     "state": "ok",
+     "checked_at": "2026-10-24T09:15:30Z",
+     "last_error_code": null
+    },
+    "created_at": "2026-10-20T07:02:11Z"
+   }
+  },
+  {
+   "operationId": "deleteRegistry",
+   "method": "delete",
+   "path": "/api/v1/registries/{registry_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "testRegistry",
+   "method": "post",
+   "path": "/api/v1/registries/{registry_id}/actions/test",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "ok": true,
+    "latency_ms": 12,
+    "error_code": null
+   }
+  },
+  {
+   "operationId": "listReplicationRules",
+   "method": "get",
+   "path": "/api/v1/replication-rules",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000187",
+      "name": "payments-to-dr",
+      "direction": "push",
+      "registry_id": "0192f6c4-5a1e-7000-8000-00000000017d",
+      "registry_name": "dr-site",
+      "filters": {
+       "name": "payments/**",
+       "tag": null,
+       "label": null,
+       "resource_type": "all"
+      },
+      "destination_namespace": null,
+      "flatten_levels": 0,
+      "override": true,
+      "bandwidth_limit_kbps": -1,
+      "trigger": {
+       "type": "scheduled",
+       "schedule": {
+        "type": "daily"
+       },
+       "events": []
+      },
+      "delete_remote": false,
+      "enabled": true,
+      "last_execution": null,
+      "created_at": "2026-10-20T07:02:11Z",
+      "updated_at": "2026-10-24T09:15:30Z"
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createReplicationRule",
+   "method": "post",
+   "path": "/api/v1/replication-rules",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000187",
+    "name": "payments-to-dr",
+    "direction": "push",
+    "registry_id": "0192f6c4-5a1e-7000-8000-00000000017d",
+    "registry_name": "dr-site",
+    "filters": {
+     "name": "payments/**",
+     "tag": null,
+     "label": null,
+     "resource_type": "all"
+    },
+    "destination_namespace": null,
+    "flatten_levels": 0,
+    "override": true,
+    "bandwidth_limit_kbps": -1,
+    "trigger": {
+     "type": "scheduled",
+     "schedule": {
+      "type": "daily"
+     },
+     "events": []
+    },
+    "delete_remote": false,
+    "enabled": true,
+    "last_execution": null,
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "getReplicationRule",
+   "method": "get",
+   "path": "/api/v1/replication-rules/{rule_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000187",
+    "name": "payments-to-dr",
+    "direction": "push",
+    "registry_id": "0192f6c4-5a1e-7000-8000-00000000017d",
+    "registry_name": "dr-site",
+    "filters": {
+     "name": "payments/**",
+     "tag": null,
+     "label": null,
+     "resource_type": "all"
+    },
+    "destination_namespace": null,
+    "flatten_levels": 0,
+    "override": true,
+    "bandwidth_limit_kbps": -1,
+    "trigger": {
+     "type": "scheduled",
+     "schedule": {
+      "type": "daily"
+     },
+     "events": []
+    },
+    "delete_remote": false,
+    "enabled": true,
+    "last_execution": null,
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "updateReplicationRule",
+   "method": "put",
+   "path": "/api/v1/replication-rules/{rule_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000187",
+    "name": "payments-to-dr",
+    "direction": "push",
+    "registry_id": "0192f6c4-5a1e-7000-8000-00000000017d",
+    "registry_name": "dr-site",
+    "filters": {
+     "name": "payments/**",
+     "tag": null,
+     "label": null,
+     "resource_type": "all"
+    },
+    "destination_namespace": null,
+    "flatten_levels": 0,
+    "override": true,
+    "bandwidth_limit_kbps": -1,
+    "trigger": {
+     "type": "scheduled",
+     "schedule": {
+      "type": "daily"
+     },
+     "events": []
+    },
+    "delete_remote": false,
+    "enabled": true,
+    "last_execution": null,
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "deleteReplicationRule",
+   "method": "delete",
+   "path": "/api/v1/replication-rules/{rule_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "runReplicationRule",
+   "method": "post",
+   "path": "/api/v1/replication-rules/{rule_id}/actions/run",
+   "status": 202,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000191",
+    "rule_id": "0192f6c4-5a1e-7000-8000-000000000187",
+    "status": "running",
+    "trigger": "manual",
+    "started_at": "2026-10-24T09:15:30Z",
+    "finished_at": null,
+    "counts": {
+     "total": 10,
+     "succeeded": 4,
+     "failed": 0,
+     "in_progress": 6
+    }
+   }
+  },
+  {
+   "operationId": "listReplicationExecutions",
+   "method": "get",
+   "path": "/api/v1/replication-executions",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000191",
+      "rule_id": "0192f6c4-5a1e-7000-8000-000000000187",
+      "status": "running",
+      "trigger": "manual",
+      "started_at": "2026-10-24T09:15:30Z",
+      "finished_at": null,
+      "counts": {
+       "total": 10,
+       "succeeded": 4,
+       "failed": 0,
+       "in_progress": 6
+      }
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "getReplicationExecution",
+   "method": "get",
+   "path": "/api/v1/replication-executions/{execution_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000191",
+    "rule_id": "0192f6c4-5a1e-7000-8000-000000000187",
+    "status": "running",
+    "trigger": "manual",
+    "started_at": "2026-10-24T09:15:30Z",
+    "finished_at": null,
+    "counts": {
+     "total": 10,
+     "succeeded": 4,
+     "failed": 0,
+     "in_progress": 6
+    }
+   }
+  },
+  {
+   "operationId": "listReplicationTasks",
+   "method": "get",
+   "path": "/api/v1/replication-executions/{execution_id}/tasks",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-00000000019b",
+      "execution_id": "0192f6c4-5a1e-7000-8000-000000000191",
+      "resource": "payments/api:1.2.3",
+      "status": "succeeded",
+      "started_at": "2026-10-24T09:15:30Z",
+      "finished_at": "2026-10-24T09:15:30Z",
+      "bytes": 1048576,
+      "error_code": null
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "stopReplicationExecution",
+   "method": "post",
+   "path": "/api/v1/replication-executions/{execution_id}/actions/stop",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000191",
+    "rule_id": "0192f6c4-5a1e-7000-8000-000000000187",
+    "status": "running",
+    "trigger": "manual",
+    "started_at": "2026-10-24T09:15:30Z",
+    "finished_at": null,
+    "counts": {
+     "total": 10,
+     "succeeded": 4,
+     "failed": 0,
+     "in_progress": 6
+    }
+   }
+  },
+  {
+   "operationId": "createPromotion",
+   "method": "post",
+   "path": "/api/v1/promotions",
+   "status": 202,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000001a5",
+    "mode": "copy",
+    "status": "running",
+    "dry_run": false,
+    "source_repository": "payments-staging",
+    "target_repository": "payments-prod",
+    "counts": {
+     "matched": 1,
+     "done": 0,
+     "skipped": 0,
+     "failed": 0
+    },
+    "task_run_id": "0192f6c4-5a1e-7000-8000-00000000008d",
+    "created_at": "2026-10-24T09:15:30Z",
+    "finished_at": null
+   }
+  },
+  {
+   "operationId": "getPromotion",
+   "method": "get",
+   "path": "/api/v1/promotions/{promotion_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000001a5",
+    "mode": "copy",
+    "status": "running",
+    "dry_run": false,
+    "source_repository": "payments-staging",
+    "target_repository": "payments-prod",
+    "counts": {
+     "matched": 1,
+     "done": 0,
+     "skipped": 0,
+     "failed": 0
+    },
+    "task_run_id": "0192f6c4-5a1e-7000-8000-00000000008d",
+    "created_at": "2026-10-24T09:15:30Z",
+    "finished_at": null
+   }
+  },
+  {
+   "operationId": "listTrustPolicies",
+   "method": "get",
+   "path": "/api/v1/trust-policies",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-0000000001af",
+      "scope": {
+       "type": "project",
+       "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+       "name": "payments"
+      },
+      "required": "cosign",
+      "cosign": {
+       "keys": [
+        {
+         "id": "0192f6c4-5a1e-7000-8000-0000000001b0",
+         "name": "release",
+         "public_key_pem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
+         "expires_at": null
+        }
+       ],
+       "identities": []
+      },
+      "notation": null,
+      "verify_children": true,
+      "enabled": true,
+      "created_at": "2026-10-20T07:02:11Z",
+      "updated_at": "2026-10-24T09:15:30Z"
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createTrustPolicy",
+   "method": "post",
+   "path": "/api/v1/trust-policies",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000001af",
+    "scope": {
+     "type": "project",
+     "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+     "name": "payments"
+    },
+    "required": "cosign",
+    "cosign": {
+     "keys": [
+      {
+       "id": "0192f6c4-5a1e-7000-8000-0000000001b0",
+       "name": "release",
+       "public_key_pem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
+       "expires_at": null
+      }
+     ],
+     "identities": []
+    },
+    "notation": null,
+    "verify_children": true,
+    "enabled": true,
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "getTrustPolicy",
+   "method": "get",
+   "path": "/api/v1/trust-policies/{policy_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000001af",
+    "scope": {
+     "type": "project",
+     "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+     "name": "payments"
+    },
+    "required": "cosign",
+    "cosign": {
+     "keys": [
+      {
+       "id": "0192f6c4-5a1e-7000-8000-0000000001b0",
+       "name": "release",
+       "public_key_pem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
+       "expires_at": null
+      }
+     ],
+     "identities": []
+    },
+    "notation": null,
+    "verify_children": true,
+    "enabled": true,
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "updateTrustPolicy",
+   "method": "put",
+   "path": "/api/v1/trust-policies/{policy_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000001af",
+    "scope": {
+     "type": "project",
+     "id": "0192f6c4-5a1e-7000-8000-0000000000c9",
+     "name": "payments"
+    },
+    "required": "cosign",
+    "cosign": {
+     "keys": [
+      {
+       "id": "0192f6c4-5a1e-7000-8000-0000000001b0",
+       "name": "release",
+       "public_key_pem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
+       "expires_at": null
+      }
+     ],
+     "identities": []
+    },
+    "notation": null,
+    "verify_children": true,
+    "enabled": true,
+    "created_at": "2026-10-20T07:02:11Z",
+    "updated_at": "2026-10-24T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "deleteTrustPolicy",
+   "method": "delete",
+   "path": "/api/v1/trust-policies/{policy_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "listGcRuns",
+   "method": "get",
+   "path": "/api/v1/gc/runs",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-0000000001b9",
+      "trigger": "manual",
+      "dry_run": true,
+      "delete_untagged": false,
+      "workers": 2,
+      "status": "succeeded",
+      "queued_at": "2026-10-24T09:15:30Z",
+      "started_at": "2026-10-24T09:15:30Z",
+      "finished_at": "2026-10-24T09:15:30Z",
+      "candidate_blobs": 120,
+      "reclaimed_bytes": 8123456,
+      "per_blob_store": [
+       {
+        "blob_store": "default",
+        "candidates": 120,
+        "bytes": 8123456
+       }
+      ],
+      "task_run_id": "0192f6c4-5a1e-7000-8000-00000000008d",
+      "log_available": true
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "startGcRun",
+   "method": "post",
+   "path": "/api/v1/gc/runs",
+   "status": 202,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000001b9",
+    "trigger": "manual",
+    "dry_run": true,
+    "delete_untagged": false,
+    "workers": 2,
+    "status": "succeeded",
+    "queued_at": "2026-10-24T09:15:30Z",
+    "started_at": "2026-10-24T09:15:30Z",
+    "finished_at": "2026-10-24T09:15:30Z",
+    "candidate_blobs": 120,
+    "reclaimed_bytes": 8123456,
+    "per_blob_store": [
+     {
+      "blob_store": "default",
+      "candidates": 120,
+      "bytes": 8123456
+     }
+    ],
+    "task_run_id": "0192f6c4-5a1e-7000-8000-00000000008d",
+    "log_available": true
+   }
+  },
+  {
+   "operationId": "getGcRun",
+   "method": "get",
+   "path": "/api/v1/gc/runs/{run_id}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000001b9",
+    "trigger": "manual",
+    "dry_run": true,
+    "delete_untagged": false,
+    "workers": 2,
+    "status": "succeeded",
+    "queued_at": "2026-10-24T09:15:30Z",
+    "started_at": "2026-10-24T09:15:30Z",
+    "finished_at": "2026-10-24T09:15:30Z",
+    "candidate_blobs": 120,
+    "reclaimed_bytes": 8123456,
+    "per_blob_store": [
+     {
+      "blob_store": "default",
+      "candidates": 120,
+      "bytes": 8123456
+     }
+    ],
+    "task_run_id": "0192f6c4-5a1e-7000-8000-00000000008d",
+    "log_available": true
+   }
+  },
+  {
+   "operationId": "stopGcRun",
+   "method": "post",
+   "path": "/api/v1/gc/runs/{run_id}/actions/stop",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000001b9",
+    "trigger": "manual",
+    "dry_run": true,
+    "delete_untagged": false,
+    "workers": 2,
+    "status": "succeeded",
+    "queued_at": "2026-10-24T09:15:30Z",
+    "started_at": "2026-10-24T09:15:30Z",
+    "finished_at": "2026-10-24T09:15:30Z",
+    "candidate_blobs": 120,
+    "reclaimed_bytes": 8123456,
+    "per_blob_store": [
+     {
+      "blob_store": "default",
+      "candidates": 120,
+      "bytes": 8123456
+     }
+    ],
+    "task_run_id": "0192f6c4-5a1e-7000-8000-00000000008d",
+    "log_available": true
+   }
+  },
+  {
+   "operationId": "listGcCandidates",
+   "method": "get",
+   "path": "/api/v1/gc/runs/{run_id}/candidates",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "blob_store": "default",
+      "key": "0192f6c4-5a1e-7000-8000-00000000d00d",
+      "size_bytes": 482113,
+      "orphaned_at": "2026-10-20T07:02:11Z"
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "verifyEmailSettings",
+   "method": "post",
+   "path": "/api/v1/settings/email/verify",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "ok": true,
+    "latency_ms": 12,
+    "error_code": null
+   }
+  },
+  {
+   "operationId": "listTrustedCertificates",
+   "method": "get",
+   "path": "/api/v1/trusted-certificates",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-0000000001c3",
+      "name": "corp-root",
+      "subject": "CN=Corp Root CA",
+      "issuer": "CN=Corp Root CA",
+      "not_before": "2026-10-20T07:02:11Z",
+      "not_after": "2036-10-20T07:02:11Z",
+      "fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "used_by": 2
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "createTrustedCertificate",
+   "method": "post",
+   "path": "/api/v1/trusted-certificates",
+   "status": 201,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-0000000001c3",
+    "name": "corp-root",
+    "subject": "CN=Corp Root CA",
+    "issuer": "CN=Corp Root CA",
+    "not_before": "2026-10-20T07:02:11Z",
+    "not_after": "2036-10-20T07:02:11Z",
+    "fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "used_by": 2
+   }
+  },
+  {
+   "operationId": "deleteTrustedCertificate",
+   "method": "delete",
+   "path": "/api/v1/trusted-certificates/{certificate_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "listNodes",
+   "method": "get",
+   "path": "/api/v1/system/nodes",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "rustryx-0",
+      "version": "0.1.0",
+      "started_at": "2026-10-20T07:02:11Z",
+      "last_heartbeat_at": "2026-10-24T09:15:30Z",
+      "draining": false,
+      "leader_of": [
+       "blob-gc"
+      ]
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "getSystemInfoDetails",
+   "method": "get",
+   "path": "/api/v1/system/info/details",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "schema_version": 6,
+    "node": "rustryx-0",
+    "configuration": {
+     "environment": "production",
+     "database": {
+      "url": "[REDACTED]"
+     }
+    }
+   }
+  },
+  {
+   "operationId": "listMySessions",
+   "method": "get",
+   "path": "/api/v1/me/sessions",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-0000000001cd",
+      "created_at": "2026-10-24T09:15:30Z",
+      "last_seen_at": "2026-10-24T09:15:30Z",
+      "client_ip": "10.1.2.3",
+      "user_agent": "Mozilla/5.0",
+      "current": true
+     }
+    ],
+    "next": null
+   }
+  },
+  {
+   "operationId": "revokeMySession",
+   "method": "delete",
+   "path": "/api/v1/me/sessions/{session_id}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "getOciConfig",
+   "method": "get",
+   "path": "/api/v1/components/{component_id}/config",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "architecture": "amd64",
+    "os": "linux",
+    "created_at": "2026-10-24T09:15:30Z",
+    "author": null,
+    "layers": [
+     {
+      "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "size_bytes": 1048576,
+      "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+     }
+    ],
+    "history": [
+     {
+      "created_at": "2026-10-24T09:15:30Z",
+      "created_by": "RUN make",
+      "empty_layer": false
+     }
+    ],
+    "labels": {},
+    "annotations": {}
+   }
+  },
+  {
+   "operationId": "listOciChildren",
+   "method": "get",
+   "path": "/api/v1/components/{component_id}/children",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "platform": {
+       "os": "linux",
+       "architecture": "arm64",
+       "variant": null
+      },
+      "size_bytes": 2097152,
+      "component_id": "0192f6c4-5a1e-7000-8000-000000000060"
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "listOciTags",
+   "method": "get",
+   "path": "/api/v1/components/{component_id}/tags",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "items": [
+     {
+      "name": "1.2.3",
+      "pushed_at": "2026-10-24T09:15:30Z",
+      "pulled_at": null,
+      "signed": true,
+      "immutable": false,
+      "immutable_rule_id": null
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "putOciTag",
+   "method": "put",
+   "path": "/api/v1/components/{component_id}/tags/{tag}",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "name": "1.2.3",
+    "pushed_at": "2026-10-24T09:15:30Z",
+    "pulled_at": null,
+    "signed": true,
+    "immutable": false,
+    "immutable_rule_id": null
+   }
+  },
+  {
+   "operationId": "deleteOciTag",
+   "method": "delete",
+   "path": "/api/v1/components/{component_id}/tags/{tag}",
+   "status": 204,
+   "anonymous": false
+  },
+  {
+   "operationId": "listBlobStoreMembers",
+   "method": "get",
+   "path": "/api/v1/blob-stores/{blob_store_name}/members",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "fill_policy": "round_robin",
+    "members": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000029",
+      "name": "default",
+      "kind": "local"
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "setBlobStoreMembers",
+   "method": "put",
+   "path": "/api/v1/blob-stores/{blob_store_name}/members",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "fill_policy": "round_robin",
+    "members": [
+     {
+      "id": "0192f6c4-5a1e-7000-8000-000000000029",
+      "name": "default",
+      "kind": "local"
+     }
+    ]
+   }
+  },
+  {
+   "operationId": "removeBlobStoreMember",
+   "method": "delete",
+   "path": "/api/v1/blob-stores/{blob_store_name}/members/{member_name}",
+   "status": 202,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000008d",
+    "task_id": "0192f6c4-5a1e-7000-8000-000000000097",
+    "status": "succeeded",
+    "dry_run": false,
+    "trigger": "schedule",
+    "triggered_by": null,
+    "node": "rustryx-0",
+    "queued_at": "2026-10-24T09:15:30Z",
+    "started_at": "2026-10-24T09:15:30Z",
+    "finished_at": "2026-10-24T09:15:30Z",
+    "duration_ms": 5321,
+    "summary": {
+     "deleted_blobs": 12,
+     "reclaimed_bytes": 482113
+    },
+    "error_code": null,
+    "log_available": true,
+    "log_expires_at": "2026-11-23T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "convertBlobStoreToGroup",
+   "method": "post",
+   "path": "/api/v1/blob-stores/{blob_store_name}/actions/convert-to-group",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-000000000029",
+    "name": "default",
+    "kind": "local",
+    "config": {
+     "path": "/var/lib/rustryx/blobs"
+    },
+    "quota_bytes": null,
+    "created_at": "2026-10-20T07:02:11Z",
+    "usage": {
+     "used_bytes": 8123456789,
+     "blob_count": 15022,
+     "available_bytes": 91237654321,
+     "total_bytes": 107374182400,
+     "as_of": "2026-10-24T09:15:30Z"
+    },
+    "health": {
+     "state": "ok",
+     "checked_at": "2026-10-24T09:15:30Z",
+     "last_error_code": null
+    },
+    "repository_count": 4,
+    "credentials": null
+   }
+  },
+  {
+   "operationId": "updateOidcProvider",
+   "method": "put",
+   "path": "/api/v1/auth/providers/oidc",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "source": "file",
+    "editable": false,
+    "local": {
+     "min_password_length": 12,
+     "max_password_length": 1024,
+     "lockout_threshold": 5,
+     "max_lockout_secs": 1800
+    },
+    "ldap": {
+     "enabled": false,
+     "url": null,
+     "starttls": false,
+     "admin_groups": [],
+     "ca_configured": false,
+     "bind_password_set": false
+    },
+    "oidc": {
+     "enabled": true,
+     "issuer": "https://sso.example.org/realms/rustryx",
+     "public_issuer_url": null,
+     "client_id": "rustryx-ui",
+     "client_secret_set": true,
+     "scopes": [
+      "openid",
+      "profile",
+      "email"
+     ],
+     "groups_claim": "groups",
+     "admin_groups": [
+      "/rustryx/admins"
+     ],
+     "default_role": null,
+     "clock_skew_secs": 60,
+     "redirect_uri": "https://repo.example.org/api/v1/auth/oidc/callback",
+     "discovery": {
+      "loaded": true,
+      "reachable": true,
+      "last_success_at": "2026-10-24T09:15:30Z",
+      "jwks_keys": 2
+     }
+    }
+   }
+  },
+  {
+   "operationId": "updateLdapProvider",
+   "method": "put",
+   "path": "/api/v1/auth/providers/ldap",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "source": "file",
+    "editable": false,
+    "local": {
+     "min_password_length": 12,
+     "max_password_length": 1024,
+     "lockout_threshold": 5,
+     "max_lockout_secs": 1800
+    },
+    "ldap": {
+     "enabled": false,
+     "url": null,
+     "starttls": false,
+     "admin_groups": [],
+     "ca_configured": false,
+     "bind_password_set": false
+    },
+    "oidc": {
+     "enabled": true,
+     "issuer": "https://sso.example.org/realms/rustryx",
+     "public_issuer_url": null,
+     "client_id": "rustryx-ui",
+     "client_secret_set": true,
+     "scopes": [
+      "openid",
+      "profile",
+      "email"
+     ],
+     "groups_claim": "groups",
+     "admin_groups": [
+      "/rustryx/admins"
+     ],
+     "default_role": null,
+     "clock_skew_secs": 60,
+     "redirect_uri": "https://repo.example.org/api/v1/auth/oidc/callback",
+     "discovery": {
+      "loaded": true,
+      "reachable": true,
+      "last_success_at": "2026-10-24T09:15:30Z",
+      "jwks_keys": 2
+     }
+    }
+   }
+  },
+  {
+   "operationId": "verifyLdapProvider",
+   "method": "post",
+   "path": "/api/v1/auth/providers/ldap/verify",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "ok": true,
+    "users": [
+     {
+      "username": "alice",
+      "dn": "uid=alice,ou=people,dc=example,dc=org",
+      "groups": [
+       "cn=devs,ou=groups,dc=example,dc=org"
+      ]
+     }
+    ],
+    "trace": [
+     "connect ok",
+     "bind ok"
+    ],
+    "error_code": null
+   }
+  },
+  {
+   "operationId": "runTask",
+   "method": "post",
+   "path": "/api/v1/tasks/{task_id}/actions/run",
+   "status": 202,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000008d",
+    "task_id": "0192f6c4-5a1e-7000-8000-000000000097",
+    "status": "succeeded",
+    "dry_run": false,
+    "trigger": "schedule",
+    "triggered_by": null,
+    "node": "rustryx-0",
+    "queued_at": "2026-10-24T09:15:30Z",
+    "started_at": "2026-10-24T09:15:30Z",
+    "finished_at": "2026-10-24T09:15:30Z",
+    "duration_ms": 5321,
+    "summary": {
+     "deleted_blobs": 12,
+     "reclaimed_bytes": 482113
+    },
+    "error_code": null,
+    "log_available": true,
+    "log_expires_at": "2026-11-23T09:15:30Z"
+   }
+  },
+  {
+   "operationId": "stopTaskRun",
+   "method": "post",
+   "path": "/api/v1/tasks/{task_id}/runs/{run_id}/actions/stop",
+   "status": 200,
+   "anonymous": false,
+   "example": {
+    "id": "0192f6c4-5a1e-7000-8000-00000000008d",
+    "task_id": "0192f6c4-5a1e-7000-8000-000000000097",
+    "status": "succeeded",
+    "dry_run": false,
+    "trigger": "schedule",
+    "triggered_by": null,
+    "node": "rustryx-0",
+    "queued_at": "2026-10-24T09:15:30Z",
+    "started_at": "2026-10-24T09:15:30Z",
+    "finished_at": "2026-10-24T09:15:30Z",
+    "duration_ms": 5321,
+    "summary": {
+     "deleted_blobs": 12,
+     "reclaimed_bytes": 482113
+    },
+    "error_code": null,
+    "log_available": true,
+    "log_expires_at": "2026-11-23T09:15:30Z"
+   }
+  }
+ ]
+}

@@ -1,0 +1,248 @@
+/*
+ * Design tokens: light and dark themes as CSS variables.
+ *
+ * Sources: design-system/rustryx/MASTER.md (dark palette, spacing density 8, shadows) and
+ * docs/ui-design-brief.md (which wins on conflicts). The light palette is derived here.
+ *
+ * Invariants (held by scripts/check-contrast.mjs, which runs in `npm run lint`):
+ * - The light set is the `@theme` block, the dark set is `:root[data-theme='dark']`. Both
+ *   define exactly the same `--color-*` names.
+ * - Every foreground/background pair meets WCAG 2.2 AA: 4.5:1 for text, 3:1 for control
+ *   boundaries, focus ring and graphics. Every token appears in a checked pair or is
+ *   exempt with a written reason in the script.
+ * - Components use token classes (bg-card, text-muted-foreground, ...), never raw hex.
+ *
+ * The data-theme attribute on <html> is ALWAYS "light" or "dark" (the resolved theme). The
+ * "system" preference is resolved in JS (public/theme-init.js before first paint, then
+ * ThemeProvider), so the dark palette exists once and cannot drift from a media query copy.
+ *
+ * Trap: `--color-border` is a decorative separator and is below 3:1 on purpose (as MASTER
+ * defines it). Anything that marks the edge of a control uses `--color-input`.
+ */
+
+@theme {
+  /* Drop Tailwind's default palette: a stray bg-blue-500 must fail to compile. */
+  --color-*: initial;
+
+  /* ---- Light theme (default) ---- */
+  --color-background: #f8fafc;
+  --color-foreground: #0f172a;
+  --color-card: #ffffff;
+  --color-card-foreground: #0f172a;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #0f172a;
+  --color-primary: #1e293b;
+  --color-on-primary: #ffffff;
+  --color-secondary: #e2e8f0;
+  --color-on-secondary: #0f172a;
+  /* The light accent is green-700, not #22C55E: that green is only 2.3:1 on white. */
+  --color-accent: #15803d;
+  --color-on-accent: #ffffff;
+  --color-muted: #f1f5f9;
+  --color-muted-foreground: #475569;
+  --color-border: #e2e8f0;
+  --color-input: #64748b;
+  --color-ring: #0f172a;
+  --color-link: #1d4ed8;
+  --color-destructive: #dc2626;
+  --color-on-destructive: #ffffff;
+  --color-destructive-subtle: #fee2e2;
+  --color-destructive-text: #b91c1c;
+  --color-success: #15803d;
+  --color-success-subtle: #dcfce7;
+  --color-success-text: #166534;
+  --color-warning: #b45309;
+  --color-warning-subtle: #fef3c7;
+  --color-warning-text: #92400e;
+  --color-info: #2563eb;
+  --color-info-subtle: #dbeafe;
+  --color-info-text: #1e40af;
+  --color-overlay: rgb(15 23 42 / 0.5);
+  --color-chart-grid: #e2e8f0;
+  --color-chart-1: #0369a1;
+  --color-chart-2: #b45309;
+  --color-chart-3: #047857;
+  --color-chart-4: #be185d;
+  --color-chart-5: #6d28d9;
+  --color-chart-6: #c2410c;
+
+  /* ---- Typography ---- */
+  --font-sans:
+    'Fira Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+    Arial, sans-serif;
+  /* Code font only for technical values (coordinates, digests, paths, commands, logs). */
+  --font-mono:
+    'Fira Code Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono',
+    monospace;
+
+  /* ---- Radius ---- */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* ---- Shadows (MASTER.md) ---- */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px rgb(0 0 0 / 0.1);
+  --shadow-xl: 0 20px 25px rgb(0 0 0 / 0.15);
+
+  /* ---- Motion ---- */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --animate-fade-in: fade-in var(--duration-base) var(--ease-standard);
+  --animate-fade-out: fade-out var(--duration-fast) var(--ease-standard);
+  --animate-slide-in-left: slide-in-left var(--duration-slow) var(--ease-standard);
+  --animate-slide-out-left: slide-out-left var(--duration-base) var(--ease-standard);
+  --animate-toast-in: toast-in var(--duration-base) var(--ease-standard);
+  --animate-toast-out: fade-out var(--duration-fast) var(--ease-standard);
+  --animate-spin-slow: spin 1.2s linear infinite;
+  --animate-pulse-soft: pulse-soft 1.6s ease-in-out infinite;
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes fade-out {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
+    }
+  }
+  @keyframes slide-in-left {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
+  @keyframes slide-out-left {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(-100%);
+    }
+  }
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes pulse-soft {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.5;
+    }
+  }
+}
+
+/* ---- Dark theme: MASTER.md set plus the tokens it does not name ---- */
+:root[data-theme='dark'] {
+  --color-background: #0f172a;
+  --color-foreground: #f8fafc;
+  --color-card: #1b2336;
+  --color-card-foreground: #f8fafc;
+  --color-popover: #1b2336;
+  --color-popover-foreground: #f8fafc;
+  --color-primary: #1e293b;
+  --color-on-primary: #ffffff;
+  --color-secondary: #334155;
+  --color-on-secondary: #ffffff;
+  --color-accent: #22c55e;
+  --color-on-accent: #0f172a;
+  --color-muted: #272f42;
+  --color-muted-foreground: #94a3b8;
+  --color-border: #475569;
+  --color-input: #64748b;
+  --color-ring: #ffffff;
+  --color-link: #60a5fa;
+  --color-destructive: #ef4444;
+  --color-on-destructive: #000000;
+  --color-destructive-subtle: #3b1214;
+  --color-destructive-text: #f87171;
+  --color-success: #22c55e;
+  --color-success-subtle: #0b2e1c;
+  --color-success-text: #4ade80;
+  --color-warning: #f59e0b;
+  --color-warning-subtle: #33260a;
+  --color-warning-text: #fbbf24;
+  --color-info: #3b82f6;
+  --color-info-subtle: #0f2547;
+  --color-info-text: #60a5fa;
+  --color-overlay: rgb(0 0 0 / 0.6);
+  --color-chart-grid: #334155;
+  --color-chart-1: #38bdf8;
+  --color-chart-2: #fbbf24;
+  --color-chart-3: #34d399;
+  --color-chart-4: #f472b6;
+  --color-chart-5: #a78bfa;
+  --color-chart-6: #fb923c;
+
+  color-scheme: dark;
+}
+
+/* ---- Non color tokens: plain variables (not part of Tailwind's theme namespaces) ---- */
+:root {
+  color-scheme: light;
+
+  /* Spacing scale of MASTER.md. They equal Tailwind's 4px steps, so use the utilities
+     (p-1 = sm, p-2 = md, p-3 = lg, p-4 = xl, p-6 = 2xl, p-8 = 3xl) and these names in
+     hand written CSS. xs (2px) is p-0.5. */
+  --space-xs: 2px;
+  --space-sm: 4px;
+  --space-md: 8px;
+  --space-lg: 12px;
+  --space-xl: 16px;
+  --space-2xl: 24px;
+  --space-3xl: 32px;
+
+  --duration-fast: 150ms;
+  --duration-base: 200ms;
+  --duration-slow: 300ms;
+
+  /* Layout */
+  --sidebar-w: 15rem;
+  --sidebar-w-collapsed: 3.5rem;
+  --topbar-h: 3rem;
+
+  /* Density: compact is the default (dashboard density 8). The base values are replaced
+     below for comfortable and raised to the 44px touch minimum on coarse pointers. */
+  --control-h-base: 2rem;
+  --row-h-base: 2rem;
+  --control-h: var(--control-h-base);
+  --row-h: var(--row-h-base);
+  --cell-px: 0.75rem;
+  --text-table: 0.8125rem;
+  --text-table-line: 1.25rem;
+}
+
+:root[data-density='comfortable'] {
+  --control-h-base: 2.5rem;
+  --row-h-base: 2.75rem;
+  --cell-px: 1rem;
+  --text-table: 0.875rem;
+  --text-table-line: 1.375rem;
+}
+
+/* Touch targets: at least 44px (2.75rem) on touch layouts, whatever the density says. */
+@media (pointer: coarse) {
+  :root {
+    --control-h: max(var(--control-h-base), 2.75rem);
+    --row-h: max(var(--row-h-base), 2.75rem);
+  }
+}

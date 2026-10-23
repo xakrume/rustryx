@@ -1,0 +1,113 @@
+@import './fonts.css';
+@import 'tailwindcss';
+@import './tokens.css';
+
+/* The dark: variant follows the resolved theme attribute (always "light" or "dark"),
+   never the media query, so a user override and the system setting cannot disagree. */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+@custom-variant comfortable (&:where([data-density='comfortable'], [data-density='comfortable'] *));
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    -webkit-text-size-adjust: 100%;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-input) transparent;
+  }
+
+  body {
+    min-height: 100dvh;
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-size: 0.875rem;
+    line-height: 1.375rem;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* One visible focus indicator for everything that can take focus, so a control that
+     forgets its own styling is still operable. Components may refine it, not remove it. */
+  :focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: var(--color-info-subtle);
+    color: var(--color-info-text);
+  }
+
+  /* Tailwind's preflight resets buttons to the default cursor; MASTER.md requires the
+     pointer on everything clickable. */
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']),
+  [role='tab'],
+  [role='menuitem'],
+  [role='option'],
+  summary,
+  select,
+  label[for],
+  input[type='checkbox'],
+  input[type='radio'] {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  [aria-disabled='true'] {
+    cursor: not-allowed;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    text-wrap: balance;
+  }
+
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+  }
+}
+
+/* Motion is decoration here: with the OS setting on, nothing animates or scrolls smoothly.
+   Animations get 0.01ms, not 0s: the exit animation of dialogs and menus ends on the
+   animationend event (Radix Presence), and some engines skip that event for a zero duration.
+   Transitions get 0s: nothing waits for them, and a 0.01ms duration would START a transition
+   on every property (the default transition-property is all), so a theme switch would still
+   report the old colors for a frame. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0s !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Windows high contrast and forced colors: keep borders and focus visible. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline-color: Highlight;
+  }
+}
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@utility focus-inset {
+  &:focus-visible {
+    outline-offset: -2px;
+  }
+}
+
+/* Scroll lock while a dialog is open (see components/ui/dialog.tsx for why this is CSS). */
+body:has([data-dialog-open]) {
+  overflow: hidden;
+}

@@ -1,0 +1,11 @@
+node_modules
+dist
+dist-mock
+playwright-report
+test-results
+coverage
+package-lock.json
+src/api/schema.d.ts
+src/routeTree.gen.ts
+src/mocks/generated
+e2e/screenshots
