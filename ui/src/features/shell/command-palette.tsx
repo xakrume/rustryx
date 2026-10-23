@@ -31,7 +31,7 @@ import {
   CommandList,
 } from '@/components/ui/command'
 import { satisfies } from '@/features/auth/permissions'
-import { useLogout } from '@/features/auth/api'
+import { useSignOut } from '@/features/auth/api'
 import { usePermissions } from '@/features/auth/use-permissions'
 import { useTheme } from '@/features/theme/theme-provider'
 import { useDebouncedValue } from '@/hooks/use-debounced-value'
@@ -118,7 +118,7 @@ function Palette({
   const navigate = useNavigate()
   const permissions = usePermissions()
   const { setPreference, setDensity } = useTheme()
-  const logout = useLogout()
+  const { signOut } = useSignOut()
   const query = useDebouncedValue(text.trim(), 200)
 
   // Start empty each time the palette opens.
@@ -192,10 +192,7 @@ function Palette({
             label: t('shell.userMenu.signOut'),
             icon: LogOut,
             keywords: ['logout', 'sign out'],
-            run: () =>
-              logout.mutate(undefined, {
-                onSettled: () => void navigate({ to: '/login', replace: true }),
-              }),
+            run: signOut,
           },
         ]
       : []),

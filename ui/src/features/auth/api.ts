@@ -1,4 +1,5 @@
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import { api } from '@/api/client'
 import { setCsrfToken } from '@/api/csrf'
 import { STALE_TIME } from '@/api/query-client'
@@ -89,4 +90,34 @@ export function useLogout() {
       queryClient.clear()
     },
   })
+}
+
+/**
+ * The one sign-out path for every entry point (user menu, command palette, anything later).
+ *
+ * Two entry points used to end the session differently: one followed the end-session URL
+ * of the identity provider, the other only went to the login page, which left the Keycloak
+ * session alive and let the next "Sign in with Keycloak" click log the user straight back
+ * in. Keeping the navigation next to `useLogout` makes it impossible to forget half of it.
+ * `onError` is the place to report a failed call; the local session state is already dropped
+ * by `useLogout`, so the user is signed out of this app either way.
+ */
+export function useSignOut(onError?: (error: unknown) => void): {
+  signOut: () => void
+  isPending: boolean
+} {
+  const logout = useLogout()
+  const navigate = useNavigate()
+  const signOut = () =>
+    logout.mutate(undefined, {
+      onSuccess: ({ redirectUrl }) => {
+        if (redirectUrl) window.location.assign(redirectUrl)
+        else void navigate({ to: '/login', replace: true })
+      },
+      onError: (error) => {
+        onError?.(error)
+        void navigate({ to: '/login', replace: true })
+      },
+    })
+  return { signOut, isPending: logout.isPending }
 }

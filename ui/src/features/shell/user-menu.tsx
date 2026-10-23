@@ -1,4 +1,4 @@
-import { useNavigate, Link, useLocation } from '@tanstack/react-router'
+import { Link, useLocation } from '@tanstack/react-router'
 import { LogOut } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -9,7 +9,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { useLogout } from '@/features/auth/api'
+import { useSignOut } from '@/features/auth/api'
 import { useMe } from '@/features/auth/use-permissions'
 import { t } from '@/i18n'
 import { toast } from '@/lib/toast-store'
@@ -23,9 +23,10 @@ const MAX_ROLES_SHOWN = 3
  */
 export function UserMenu() {
   const me = useMe()
-  const navigate = useNavigate()
   const location = useLocation()
-  const logout = useLogout()
+  const { signOut, isPending } = useSignOut((error) =>
+    toast.apiError(error, t('shell.userMenu.signOut')),
+  )
 
   if (me === undefined) return null
 
@@ -44,21 +45,6 @@ export function UserMenu() {
   const roleNames = me.roles.map((r) => r.role.name)
   const shown = roleNames.slice(0, MAX_ROLES_SHOWN)
   const extra = roleNames.length - shown.length
-
-  function signOut(): void {
-    logout.mutate(undefined, {
-      onSuccess: ({ redirectUrl }) => {
-        if (redirectUrl) window.location.assign(redirectUrl)
-        else void navigate({ to: '/login', replace: true })
-      },
-      onError: (error) => {
-        // The local session state is already dropped (useLogout onSettled): the user is out
-        // here, and the error is reported so a still valid server session is not hidden.
-        toast.apiError(error, t('shell.userMenu.signOut'))
-        void navigate({ to: '/login', replace: true })
-      },
-    })
-  }
 
   return (
     <DropdownMenu>
@@ -104,9 +90,9 @@ export function UserMenu() {
           </DropdownMenuItem>
         ))}
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={signOut} disabled={logout.isPending}>
+        <DropdownMenuItem onSelect={signOut} disabled={isPending}>
           <LogOut aria-hidden="true" />
-          {logout.isPending ? t('shell.userMenu.signingOut') : t('shell.userMenu.signOut')}
+          {isPending ? t('shell.userMenu.signingOut') : t('shell.userMenu.signOut')}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
