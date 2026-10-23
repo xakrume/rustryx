@@ -115,20 +115,8 @@ async fn infrastructure_doubles_work_as_trait_objects() {
 
     let sink = MemAuditSink::new();
     let audit: Arc<dyn AuditSink> = Arc::new(sink.clone());
-    audit
-        .record(AuditEvent {
-            at: clock.now(),
-            kind: AuditKind::LoginSuccess,
-            actor_id: None,
-            actor_name: "alice".to_owned(),
-            client_ip: None,
-            request_id: None,
-            action: "login".to_owned(),
-            target: None,
-            outcome: "success".to_owned(),
-            detail: serde_json::json!({}),
-        })
-        .await
-        .unwrap();
+    let mut event = AuditEvent::new(AuditKind::LoginSuccess, "alice", "login", "success");
+    event.at = clock.now();
+    audit.record(event).await.unwrap();
     assert_eq!(sink.events().len(), 1);
 }

@@ -30,23 +30,20 @@ fn hosted(name: &str) -> Repository {
 }
 
 fn new_asset(repo: RepositoryId, path: &str, content: &[u8]) -> NewAsset {
-    NewAsset {
-        repository_id: repo,
-        component_id: None,
-        path: path.to_owned(),
-        content_type: "application/octet-stream".to_owned(),
-        blob: blob_record(&format!("key-{path}"), content),
-    }
+    NewAsset::new(
+        repo,
+        path,
+        "application/octet-stream",
+        // A fresh key per call: `(store, key)` is unique, as in the real schema.
+        blob_record(&format!("key-{path}-{}", BlobId::generate()), content),
+    )
 }
 
 fn coordinate(repo: RepositoryId, name: &str, version: &str) -> NewComponent {
-    NewComponent {
-        repository_id: repo,
-        format: RepoFormat::Maven2,
-        group_id: Some("org.example".to_owned()),
-        name: name.to_owned(),
-        version: Some(version.to_owned()),
-    }
+    let mut component = NewComponent::new(repo, RepoFormat::Maven2, name);
+    component.group_id = Some("org.example".to_owned());
+    component.version = Some(version.to_owned());
+    component
 }
 
 fn page(limit: u32, after: Option<String>) -> PageRequest {
@@ -390,10 +387,9 @@ async fn blob_delete_removes_unreferenced_rows_only() {
     ));
     BlobRepo::delete(&store, orphan.id).await.unwrap();
     assert!(BlobRepo::get(&store, orphan.id).await.unwrap().is_none());
-    assert!(matches!(
-        BlobRepo::delete(&store, BlobId::generate()).await,
-        Err(StoreError::NotFound(_))
-    ));
+    // Idempotent: the GC path deletes after another node did.
+    BlobRepo::delete(&store, BlobId::generate()).await.unwrap();
+    BlobRepo::delete(&store, orphan.id).await.unwrap();
 }
 
 // components
@@ -629,7 +625,7 @@ async fn component_list_paginates_without_gaps_or_repeats() {
     unique.dedup();
     assert_eq!(unique.len(), 25);
     let bad = list_components(&store, &filter, &page(10, Some("not-a-token".into()))).await;
-    assert!(matches!(bad, Err(StoreError::NotFound(_))));
+    assert!(matches!(bad, Err(StoreError::Invalid(_))));
 }
 
 #[tokio::test]

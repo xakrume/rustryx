@@ -1,13 +1,17 @@
 //! In-memory implementations of the Rustryx core ports and shared test fixtures.
 //!
-//! Other crates (`rbac`, `auth`, `formats`, `api`) depend on this crate in
+//! Other crates (`rbac`, `auth`, `tasks`, `formats`, `api`) depend on this crate in
 //! `[dev-dependencies]` so their tests run without PostgreSQL or S3:
 //!
-//! - [`MemStore`] implements every metadata port of `rustryx_core::ports::repos`.
-//! - [`MemBlobStore`] implements `BlobStore` with real streaming semantics.
+//! - [`MemStore`] implements every metadata port of `rustryx_core::ports` (core revision 2:
+//!   content, identity, projects, lifecycle, supply chain, distribution, storage and the
+//!   system ports), with the guards that PostgreSQL runs as triggers: immutability, holds,
+//!   quota and read only mode.
+//! - [`MemBlobStore`] implements `BlobStore` and `ResumableBlobStore` with real streaming
+//!   semantics.
 //! - [`FixedClock`], [`MemLockBackend`], [`MemAuditSink`] and [`MemInvalidationBus`]
 //!   cover the cross-cutting ports.
-//! - [`fixtures`] builds repositories, users, principals and blob rows.
+//! - [`fixtures`] builds repositories, projects, users, principals and blob rows.
 //!
 //! The crate is a test utility, but it follows the port documentation to the letter, so
 //! a test that passes here is evidence about the contract and not about the double.

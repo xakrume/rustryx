@@ -4,13 +4,14 @@
 //! once, not thread a `Result` through setup code.
 
 use rustryx_core::identity::{AuthMethod, NewUser, Principal, RoleRef, UserSource};
-use rustryx_core::ids::{BlobId, BlobStoreId, RepositoryId, RoleId, UserId};
+use rustryx_core::ids::{BlobId, BlobStoreId, ProjectId, RepositoryId, RoleId, UserId};
 use rustryx_core::model::{
-    BlobRecord, BlobStoreDef, BlobStoreKind, Checksums, GroupConfig, ProxyConfig, RepoFormat,
-    RepoType, Repository, WritePolicy,
+    BlobRecord, BlobStoreDef, BlobStoreKind, Checksums, GroupConfig, NewAsset, ProxyConfig,
+    RepoFormat, RepoType, Repository, WritePolicy,
 };
 use rustryx_core::names::RepoName;
-use rustryx_core::ports::BlobRead;
+use rustryx_core::ports::{BlobRead, ResourceRef};
+use rustryx_core::project::{Project, ProjectName};
 use rustryx_core::{BlobError, Secret};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -45,50 +46,72 @@ pub const PROXY_REMOTE_URL: &str = "https://upstream.example.test/";
 )]
 pub fn repository(name: &str, format: RepoFormat, repo_type: RepoType) -> Repository {
     let now = OffsetDateTime::now_utc();
-    let proxy = (repo_type == RepoType::Proxy).then(|| ProxyConfig {
-        remote_url: PROXY_REMOTE_URL.to_owned(),
-        auth: None,
-        content_max_age_secs: 3600,
-        metadata_max_age_secs: 600,
-        negative_cache_ttl_secs: 60,
-        max_concurrent_upstream: 8,
-    });
-    let group = (repo_type == RepoType::Group).then(GroupConfig::default);
-    Repository {
-        id: RepositoryId::generate(),
-        name: RepoName::parse(name).expect("fixture repository name must be valid"),
+    let mut repository = Repository::new(
+        RepositoryId::generate(),
+        RepoName::parse(name).expect("fixture repository name must be valid"),
         format,
         repo_type,
-        blob_store_id: BLOB_STORE_ID,
-        write_policy: if repo_type == RepoType::Hosted {
-            WritePolicy::Allow
-        } else {
-            WritePolicy::Deny
-        },
-        allow_anonymous: false,
-        online: true,
-        quota_bytes: None,
-        cleanup_policy_ids: Vec::new(),
-        routing_rule_id: None,
-        proxy,
-        group,
-        format_config: serde_json::json!({}),
-        created_at: now,
-        updated_at: now,
+        BLOB_STORE_ID,
+        now,
+    );
+    if repo_type != RepoType::Hosted {
+        repository.write_policy = WritePolicy::Deny;
     }
+    if repo_type == RepoType::Proxy {
+        let mut proxy = ProxyConfig::new(PROXY_REMOTE_URL);
+        // Metadata freshness differs from the production default on purpose: a test that
+        // confuses the two numbers then fails instead of passing by accident.
+        proxy.metadata_max_age_secs = 600;
+        repository.proxy = Some(proxy);
+    }
+    if repo_type == RepoType::Group {
+        repository.group = Some(GroupConfig::default());
+    }
+    repository
+}
+
+/// A [`ResourceRef`] for `path` in a fixture repository named `name`.
+///
+/// There is deliberately no constructor that takes the anonymous flag as a loose argument:
+/// the flag comes from the repository, which is the bug-proofing the type exists for. A
+/// test that needs an anonymous readable resource sets `allow_anonymous` on a fixture
+/// repository and calls `ResourceRef::for_repository` itself.
+///
+/// # Panics
+/// When `name` is not a valid repository name.
+#[must_use]
+pub fn resource(repository_name: &str, format: RepoFormat, path: &str) -> ResourceRef {
+    let repository = repository(repository_name, format, RepoType::Hosted);
+    ResourceRef::for_repository(&repository, path)
+}
+
+/// A private project named `name`, created now, without a creator.
+///
+/// # Panics
+/// When `name` is not a valid project name.
+#[must_use]
+#[allow(
+    clippy::expect_used,
+    reason = "test fixture: an invalid literal is a bug in the calling test and must fail it at once"
+)]
+pub fn project(name: &str) -> Project {
+    Project::new(
+        ProjectId::generate(),
+        ProjectName::parse(name).expect("fixture project name must be valid"),
+        OffsetDateTime::now_utc(),
+    )
 }
 
 /// The blob store definition [`BLOB_STORE_ID`] stands for.
 #[must_use]
 pub fn blob_store_def() -> BlobStoreDef {
-    BlobStoreDef {
-        id: BLOB_STORE_ID,
-        name: "default".to_owned(),
-        kind: BlobStoreKind::Local,
-        config: serde_json::json!({ "path": "/var/lib/rustryx/blobs" }),
-        quota_bytes: None,
-        created_at: OffsetDateTime::now_utc(),
-    }
+    BlobStoreDef::new(
+        BLOB_STORE_ID,
+        "default",
+        BlobStoreKind::Local,
+        serde_json::json!({ "path": "/var/lib/rustryx/blobs" }),
+        OffsetDateTime::now_utc(),
+    )
 }
 
 /// Input for a user account.
@@ -123,25 +146,16 @@ pub fn user(username: &str, source: UserSource) -> NewUser {
 /// principal's roles resolve against a seeded store.
 #[must_use]
 pub fn principal_with_roles(roles: &[&str]) -> Principal {
-    Principal {
-        user_id: Some(UserId::generate()),
-        username: "fixture-user".to_owned(),
-        source: UserSource::Local,
-        issuer: None,
-        subject: None,
-        roles: roles
-            .iter()
-            .map(|name| RoleRef {
-                id: builtin_role_id(name).unwrap_or_else(RoleId::generate),
-                name: (*name).to_owned(),
-            })
-            .collect(),
-        external_groups: Vec::new(),
-        groups_confirmed_at: None,
-        token_scopes: None,
-        token_id: None,
-        auth_method: AuthMethod::BasicLocal,
-    }
+    let mut principal = Principal::new("fixture-user", UserSource::Local, AuthMethod::BasicLocal);
+    principal.user_id = Some(UserId::generate());
+    principal.roles = roles
+        .iter()
+        .map(|name| RoleRef {
+            id: builtin_role_id(name).unwrap_or_else(RoleId::generate),
+            name: (*name).to_owned(),
+        })
+        .collect();
+    principal
 }
 
 /// Digests of `data`, computed with the same incremental hasher the blob store uses.
@@ -170,6 +184,20 @@ pub fn blob_record_at(key: &str, content: &[u8], created_at: OffsetDateTime) -> 
         checksums: checksums_of(content),
         created_at,
     }
+}
+
+/// A publish of `content` at `path` in `repository`, in the fixture blob store.
+///
+/// The blob key is unique per call: a store refuses a second blob row with the same
+/// `(store, key)`, as the real schema does, so two publishes of one path need two keys.
+#[must_use]
+pub fn new_asset(repository: RepositoryId, path: &str, content: &[u8]) -> NewAsset {
+    NewAsset::new(
+        repository,
+        path,
+        "application/octet-stream",
+        blob_record(&format!("key-{}", BlobId::generate()), content),
+    )
 }
 
 /// Reads a stream to the end, keeping the first error.
@@ -250,7 +278,7 @@ mod tests {
         let principal = principal_with_roles(&[ROLE_NX_ADMIN, "custom", "custom-2"]);
         let names: Vec<&str> = principal.roles.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(names, [ROLE_NX_ADMIN, "custom", "custom-2"]);
-        assert!(principal.is_admin());
+        assert!(principal.has_role(ROLE_NX_ADMIN));
         assert_eq!(
             principal.roles[0].id,
             builtin_role_id(ROLE_NX_ADMIN).unwrap()
@@ -278,6 +306,38 @@ mod tests {
         let old = blob_record_at("k", b"", OffsetDateTime::UNIX_EPOCH);
         assert_eq!(old.created_at, OffsetDateTime::UNIX_EPOCH);
         assert_eq!(old.size_bytes, 0);
+    }
+
+    #[test]
+    fn project_and_new_asset_fixtures_are_valid_and_unique() {
+        let created = project("payments");
+        assert_eq!(created.name.as_str(), "payments");
+        assert_eq!(created.version, 1);
+        assert_ne!(created.id, project("payments").id);
+        let repo = RepositoryId::generate();
+        let first = new_asset(repo, "a/b.bin", b"abc");
+        let second = new_asset(repo, "a/b.bin", b"abc");
+        assert_eq!(first.path, "a/b.bin");
+        assert_eq!(first.blob.size_bytes, 3);
+        assert_eq!(first.blob.blob_store_id, BLOB_STORE_ID);
+        assert_ne!(first.blob.key, second.blob.key, "a key per call");
+        assert_eq!(first.blob.checksums, second.blob.checksums);
+    }
+
+    #[test]
+    #[should_panic(expected = "fixture project name must be valid")]
+    fn invalid_project_name_fails_the_calling_test() {
+        let _ = project("Not Valid");
+    }
+
+    #[test]
+    fn resource_fixture_copies_the_flags_of_a_fixture_repository() {
+        let resource = resource("maven-hosted", RepoFormat::Maven2, "org/acme/a.jar");
+        assert_eq!(resource.repository, "maven-hosted");
+        assert_eq!(resource.format, RepoFormat::Maven2);
+        assert_eq!(resource.path, "org/acme/a.jar");
+        assert!(!resource.allow_anonymous);
+        assert!(resource.project.is_none() && resource.coordinate.is_none());
     }
 
     #[test]

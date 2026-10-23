@@ -5,6 +5,14 @@
     clippy::expect_used,
     reason = "integration tests: a panic is the failure signal"
 )]
+#![allow(
+    clippy::too_many_lines,
+    clippy::field_reassign_with_default,
+    clippy::assert_is_empty,
+    reason = "each test is one scenario read top to bottom; filters and non exhaustive types are \
+              filled field by field after `default()`, and `.is_empty()` reads better than a \
+              comparison with an empty literal of an inferred type"
+)]
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,7 +21,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use rustryx_core::BlobError;
 use rustryx_core::model::BlobStoreKind;
-use rustryx_core::ports::{BlobKey, BlobStore, ByteRange};
+use rustryx_core::ports::{BlobKey, BlobStore, ByteRange, PresignOptions, UploadHandle};
 use rustryx_testkit::fixtures::{checksums_of, collect_stream};
 use rustryx_testkit::{FixedClock, MemBlobStore};
 use sha2::Digest;
@@ -431,4 +439,212 @@ async fn open_read_keeps_its_data_after_the_object_is_deleted() {
     store.delete(&k).await.unwrap();
     let first = read.stream.next().await.unwrap().unwrap();
     assert_eq!(first.len(), 8192);
+}
+
+// capabilities, listing, presigning and resumable uploads
+
+#[tokio::test]
+async fn capabilities_name_what_the_double_can_do_and_shutdown_is_idempotent() {
+    let store = MemBlobStore::new();
+    let caps = store.capabilities();
+    assert!(caps.lists_staging && caps.lists_keys && caps.resumable);
+    assert!(
+        !caps.can_presign,
+        "presigning is off until a test turns it on"
+    );
+    store.set_presign_enabled(true);
+    assert!(store.capabilities().can_presign);
+    store.shutdown().await;
+    store.shutdown().await;
+    assert!(store.resumable().is_some());
+}
+
+#[tokio::test]
+async fn list_keys_pages_in_a_stable_order_with_an_opaque_cursor() {
+    let store = MemBlobStore::new();
+    for name in ["c", "a", "b", "d"] {
+        store.put(&key(name), name.as_bytes().to_vec());
+    }
+    let first = store.list_keys(None, 3).await.unwrap();
+    assert_eq!(first.keys.len(), 3);
+    let cursor = first.next.clone().unwrap();
+    let rest = store.list_keys(Some(&cursor), 3).await.unwrap();
+    assert_eq!(rest.keys.len(), 1);
+    assert!(rest.next.is_none());
+    let mut seen: Vec<&str> = first
+        .keys
+        .iter()
+        .chain(&rest.keys)
+        .map(|(k, _)| k.as_str())
+        .collect();
+    seen.sort_unstable();
+    assert_eq!(seen, ["a", "b", "c", "d"], "no key is skipped or repeated");
+    assert!(
+        first
+            .keys
+            .iter()
+            .all(|(_, meta)| meta.size_bytes == 1 && meta.modified.is_some())
+    );
+    // A limit of zero still makes progress, and an empty store answers an empty page.
+    assert_eq!(store.list_keys(None, 0).await.unwrap().keys.len(), 1);
+    assert!(
+        MemBlobStore::new()
+            .list_keys(None, 10)
+            .await
+            .unwrap()
+            .keys
+            .is_empty()
+    );
+    for bad in ["garbage", "k1.zz", "k1.ff"] {
+        let error = store.list_keys(Some(bad), 10).await.unwrap_err();
+        assert!(matches!(error, BlobError::InvalidKey(_)), "{bad}");
+    }
+    store.set_unavailable(true);
+    assert!(matches!(
+        store.list_keys(None, 1).await,
+        Err(BlobError::Unavailable(_))
+    ));
+}
+
+#[tokio::test]
+async fn presigning_answers_a_secret_url_only_when_enabled() {
+    let store = MemBlobStore::new();
+    let options = PresignOptions::default();
+    let ttl = Duration::from_secs(300);
+    assert!(
+        store
+            .presign_get(&key("k"), ttl, &options)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    store.set_presign_enabled(true);
+    let signed = store
+        .presign_get(&key("k"), ttl, &options)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(signed.url.expose().contains("X-Amz-Signature"));
+    assert!(
+        !format!("{signed:?}").contains("X-Amz-Signature"),
+        "a presigned URL is a secret in Debug"
+    );
+    assert!(signed.expires_at > time::OffsetDateTime::now_utc());
+    store.set_unavailable(true);
+    assert!(matches!(
+        store.presign_get(&key("k"), ttl, &options).await,
+        Err(BlobError::Unavailable(_))
+    ));
+}
+
+#[tokio::test]
+async fn a_resumable_upload_stages_chunks_at_the_expected_offset_and_commits_on_finalize() {
+    let store = MemBlobStore::new();
+    let resumable = store.resumable().unwrap();
+    let handle = resumable.begin_resumable(&key("blob")).await.unwrap();
+    assert_eq!(store.open_uploads(), 1);
+    assert_eq!(resumable.length(&handle).await.unwrap(), 0);
+    resumable
+        .append(&handle, 0, Bytes::from_static(b"hel"))
+        .await
+        .unwrap();
+    resumable
+        .append(&handle, 3, Bytes::from_static(b"lo"))
+        .await
+        .unwrap();
+    assert_eq!(resumable.length(&handle).await.unwrap(), 5);
+    // A wrong offset is refused and stages nothing: the client resumes from the length.
+    let wrong = resumable
+        .append(&handle, 9, Bytes::from_static(b"!"))
+        .await
+        .unwrap_err();
+    assert!(matches!(wrong, BlobError::RangeNotSatisfiable));
+    assert_eq!(resumable.length(&handle).await.unwrap(), 5);
+    assert!(!store.contains(&key("blob")), "invisible until finalize");
+
+    let commit = resumable.finalize(handle.clone()).await.unwrap();
+    assert_eq!(commit.size_bytes, 5);
+    assert_eq!(commit.checksums, checksums_of(b"hello"));
+    assert_eq!(
+        store.snapshot(&key("blob")).unwrap(),
+        Bytes::from_static(b"hello")
+    );
+    assert_eq!(store.open_uploads(), 0);
+    assert_eq!(store.staging_count(), 0);
+    assert!(matches!(
+        resumable.length(&handle).await,
+        Err(BlobError::NotFound)
+    ));
+    assert!(matches!(
+        resumable.finalize(handle.clone()).await,
+        Err(BlobError::NotFound)
+    ));
+    assert!(matches!(
+        resumable.append(&handle, 0, Bytes::new()).await,
+        Err(BlobError::NotFound)
+    ));
+    assert!(matches!(
+        UploadHandle::new("bad handle!"),
+        Err(BlobError::NotFound)
+    ));
+}
+
+#[tokio::test]
+async fn an_abandoned_upload_is_listed_by_the_staging_sweep_and_aborts_cleanly() {
+    let clock = Arc::new(FixedClock::default());
+    let store = MemBlobStore::with_clock(clock.clone());
+    let resumable = store.resumable().unwrap();
+    let abandoned = resumable
+        .begin_resumable(&key("left-behind"))
+        .await
+        .unwrap();
+    resumable
+        .append(&abandoned, 0, Bytes::from_static(b"x"))
+        .await
+        .unwrap();
+    let aborted = resumable.begin_resumable(&key("aborted")).await.unwrap();
+    resumable.abort(aborted.clone()).await.unwrap();
+    resumable.abort(aborted).await.unwrap();
+    assert!(
+        store
+            .list_stale_staging(Duration::from_secs(60))
+            .await
+            .unwrap()
+            .is_empty(),
+        "too young"
+    );
+    clock.advance(Duration::from_secs(120));
+    let stale = store
+        .list_stale_staging(Duration::from_secs(60))
+        .await
+        .unwrap();
+    assert_eq!(stale, [key("left-behind")]);
+    // The sweep deletes by key, which also removes the upload behind it.
+    store.delete(&key("left-behind")).await.unwrap();
+    assert_eq!(store.open_uploads(), 0);
+    assert!(matches!(
+        resumable.length(&abandoned).await,
+        Err(BlobError::NotFound)
+    ));
+    store.set_unavailable(true);
+    assert!(matches!(
+        resumable.begin_resumable(&key("k")).await,
+        Err(BlobError::Unavailable(_))
+    ));
+    assert!(matches!(
+        resumable.abort(abandoned.clone()).await,
+        Err(BlobError::Unavailable(_))
+    ));
+    assert!(matches!(
+        resumable.finalize(abandoned.clone()).await,
+        Err(BlobError::Unavailable(_))
+    ));
+    assert!(matches!(
+        resumable.length(&abandoned).await,
+        Err(BlobError::Unavailable(_))
+    ));
+    assert!(matches!(
+        resumable.append(&abandoned, 0, Bytes::new()).await,
+        Err(BlobError::Unavailable(_))
+    ));
 }

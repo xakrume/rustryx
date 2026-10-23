@@ -5,13 +5,34 @@
 //! the single PostgreSQL transaction it stands for. No method awaits while holding the
 //! lock: they are `async` only to satisfy the port signatures.
 
+mod cascade;
 mod catalog;
+mod config;
 mod content;
+mod guards;
+mod infra;
+mod labels;
+mod lifecycle;
+mod outbox;
 mod paging;
+mod policies;
+mod projects;
+mod promotion;
+mod publish;
+mod quota;
 mod rbac;
+mod registries;
+mod robots;
+mod scans;
+mod security;
 mod seed;
 mod state;
+mod storage;
+mod support;
+mod system;
+mod tasks;
 mod users;
+mod webhooks;
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,8 +44,10 @@ use rustryx_core::ports::{Clock, InvalidationEvent, SystemClock};
 use time::OffsetDateTime;
 
 pub use self::paging::MAX_PAGE_LIMIT;
+pub(crate) use self::paging::paginate;
 pub use self::seed::builtin_role_id;
 use self::state::State;
+use crate::audit::MemAuditSink;
 use crate::bus::MemInvalidationBus;
 use crate::fixtures;
 use crate::support::lock;
@@ -49,6 +72,7 @@ pub struct MemStore {
     unavailable: Arc<AtomicBool>,
     clock: Arc<dyn Clock>,
     bus: Option<MemInvalidationBus>,
+    audit: MemAuditSink,
 }
 
 impl MemStore {
@@ -60,6 +84,7 @@ impl MemStore {
             unavailable: Arc::new(AtomicBool::new(false)),
             clock: Arc::new(SystemClock),
             bus: None,
+            audit: MemAuditSink::new(),
         }
     }
 
@@ -90,6 +115,20 @@ impl MemStore {
         }
     }
 
+    /// Replaces the audit log the store reads (`AuditReadRepo`) and writes (`AuditSink`), so a
+    /// store and a service that records through its own sink look at the same events.
+    #[must_use]
+    pub fn with_audit_sink(self, audit: MemAuditSink) -> Self {
+        Self { audit, ..self }
+    }
+
+    /// The audit log of this store. The sink and the read side are one object: what a service
+    /// records through it comes back through `AuditReadRepo` on the store.
+    #[must_use]
+    pub fn audit_sink(&self) -> MemAuditSink {
+        self.audit.clone()
+    }
+
     /// Seeds the blob store definition that [`fixtures::repository`] points at.
     #[must_use]
     pub fn with_default_blob_store(self) -> Self {
@@ -113,7 +152,10 @@ impl MemStore {
     /// `Conflict` when a blob with that id exists, `Unavailable` when switched off.
     pub fn insert_blob(&self, record: BlobRecord) -> Result<(), StoreError> {
         let mut state = self.tables()?;
-        if state.blobs.contains_key(&record.id) {
+        let taken = state.blobs.values().any(|b| {
+            b.id == record.id || (b.blob_store_id == record.blob_store_id && b.key == record.key)
+        });
+        if taken {
             return Err(conflict(format!("blob {} already exists", record.id)));
         }
         state.blobs.insert(record.id, record);
@@ -123,12 +165,22 @@ impl MemStore {
     /// Locks the tables, or fails when the store is switched off. Every port method
     /// goes through here, which is what makes `set_unavailable` total.
     fn tables(&self) -> Result<MutexGuard<'_, State>, StoreError> {
+        self.check_available()?;
+        let now = self.now();
+        let mut state = lock(&self.state);
+        state.now = state::Stamp(now);
+        Ok(state)
+    }
+
+    /// The availability switch alone, for calls that touch no table of `State` (the audit
+    /// log lives in its own object) but must still fail while the store is switched off.
+    fn check_available(&self) -> Result<(), StoreError> {
         if self.unavailable.load(Ordering::SeqCst) {
             return Err(StoreError::Unavailable(
                 "memory store marked unavailable".to_owned(),
             ));
         }
-        Ok(lock(&self.state))
+        Ok(())
     }
 
     fn now(&self) -> OffsetDateTime {

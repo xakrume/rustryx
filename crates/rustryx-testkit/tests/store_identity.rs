@@ -873,10 +873,9 @@ async fn token_revoke_keeps_the_first_time_and_touch_only_moves_forward() {
         tokens.revoke(ghost, T0).await,
         Err(StoreError::NotFound(_))
     ));
-    assert!(matches!(
-        tokens.touch_last_used(ghost, T0).await,
-        Err(StoreError::NotFound(_))
-    ));
+    // The `touch_*` calls are idempotent counters: a token deleted between the request and
+    // the flush is not an error.
+    tokens.touch_last_used(ghost, T0).await.unwrap();
 }
 
 // idp mappings

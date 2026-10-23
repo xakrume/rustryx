@@ -14,7 +14,7 @@ fn encode(key: &str) -> String {
 }
 
 fn decode(token: &str) -> Result<String, StoreError> {
-    let bad = || StoreError::NotFound("page token".to_owned());
+    let bad = || StoreError::Invalid("page token".to_owned());
     let hex_part = token.strip_prefix(TOKEN_PREFIX).ok_or_else(bad)?;
     let raw = hex::decode(hex_part).map_err(|_| bad())?;
     String::from_utf8(raw).map_err(|_| bad())
@@ -23,8 +23,8 @@ fn decode(token: &str) -> Result<String, StoreError> {
 /// Returns the page of `rows` that follows the key encoded in `page.after`.
 ///
 /// The token is the hex of the last key of the previous page, so it stays valid when
-/// rows are inserted or deleted between requests (keyset, not offset). The port has no
-/// "invalid input" error, so a token that cannot be decoded is reported as `NotFound`.
+/// rows are inserted or deleted between requests (keyset, not offset). A token that cannot be
+/// decoded is `StoreError::Invalid`, never `NotFound` or `Conflict` (gap 1 of core revision 2).
 pub(crate) fn paginate<T>(
     mut rows: Vec<(String, T)>,
     page: &PageRequest,
@@ -106,7 +106,7 @@ mod tests {
     fn rejects_tokens_it_did_not_issue() {
         for bad in ["", "garbage", "m1.zz", "m1.ff"] {
             let result = paginate(rows(3), &request(10, Some(bad.to_owned())));
-            assert!(matches!(result, Err(StoreError::NotFound(_))), "{bad}");
+            assert!(matches!(result, Err(StoreError::Invalid(_))), "{bad}");
         }
     }
 }

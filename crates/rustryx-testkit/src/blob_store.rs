@@ -11,12 +11,16 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
 use futures::stream::BoxStream;
+use rustryx_core::Secret;
 use rustryx_core::error::BlobError;
 use rustryx_core::model::{BlobStoreKind, Checksums};
 use rustryx_core::ports::{
-    BlobCommit, BlobKey, BlobMeta, BlobRead, BlobStore, BlobWriter, ByteRange, Clock, SystemClock,
+    BlobCommit, BlobKey, BlobMeta, BlobRead, BlobStore, BlobStoreCapabilities, BlobWriter,
+    ByteRange, Clock, KeyPage, PresignOptions, PresignedUrl, ResumableBlobStore, SystemClock,
+    UploadHandle,
 };
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 use crate::support::{StreamHasher, add_std, lock};
 
@@ -24,9 +28,21 @@ use crate::support::{StreamHasher, add_std, lock};
 /// already see several chunks and exercise the consumer's streaming path.
 const READ_CHUNK: usize = 8 * 1024;
 
+/// Marks cursors of this implementation, so a cursor from elsewhere is rejected early.
+const CURSOR_PREFIX: &str = "k1.";
+
 struct Staged {
     key: String,
     started_at: OffsetDateTime,
+}
+
+/// A chunked upload begun through [`ResumableBlobStore`]. Chunks stay separate until
+/// `finalize`, like the real stores keep one staged object per chunk.
+struct Upload {
+    key: String,
+    chunks: Vec<Bytes>,
+    length: u64,
+    staging_id: u64,
 }
 
 #[derive(Default)]
@@ -34,6 +50,7 @@ struct State {
     objects: HashMap<String, Bytes>,
     staging: BTreeMap<u64, Staged>,
     next_staging_id: u64,
+    uploads: HashMap<String, Upload>,
 }
 
 struct Shared {
@@ -41,6 +58,7 @@ struct Shared {
     clock: Arc<dyn Clock>,
     unavailable: AtomicBool,
     keep_abandoned: AtomicBool,
+    presign: AtomicBool,
 }
 
 impl Shared {
@@ -81,6 +99,7 @@ impl MemBlobStore {
                 clock,
                 unavailable: AtomicBool::new(false),
                 keep_abandoned: AtomicBool::new(false),
+                presign: AtomicBool::new(false),
             }),
         }
     }
@@ -130,10 +149,7 @@ impl MemBlobStore {
         lock(&self.shared.state)
             .objects
             .insert(key.as_str().to_owned(), data);
-        BlobCommit {
-            size_bytes,
-            checksums,
-        }
+        BlobCommit::new(size_bytes, checksums)
     }
 
     /// Whole content of a committed object, for assertions. Production code must stream.
@@ -154,6 +170,19 @@ impl MemBlobStore {
     /// is cleaned up at once, so tests do not leak staging by accident.
     pub fn set_keep_abandoned_staging(&self, keep: bool) {
         self.shared.keep_abandoned.store(keep, Ordering::SeqCst);
+    }
+
+    /// Turns `presign_get` on: it then answers a fake, clearly non resolvable URL whose
+    /// query carries a signature, so consumers can test redirect handling and the rule
+    /// that such a URL is never logged. Off by default, like a local store.
+    pub fn set_presign_enabled(&self, enabled: bool) {
+        self.shared.presign.store(enabled, Ordering::SeqCst);
+    }
+
+    /// Number of resumable uploads that were begun and neither finalized nor aborted.
+    #[must_use]
+    pub fn open_uploads(&self) -> usize {
+        lock(&self.shared.state).uploads.len()
     }
 }
 
@@ -262,9 +291,7 @@ impl BlobStore for MemBlobStore {
             .objects
             .get(key.as_str())
             .map(Bytes::len);
-        Ok(size.map(|len| BlobMeta {
-            size_bytes: u64::try_from(len).unwrap_or(u64::MAX),
-        }))
+        Ok(size.map(|len| BlobMeta::new(u64::try_from(len).unwrap_or(u64::MAX))))
     }
 
     async fn delete(&self, key: &BlobKey) -> Result<(), BlobError> {
@@ -274,6 +301,7 @@ impl BlobStore for MemBlobStore {
         // GC deletes by the keys `list_stale_staging` returned, so the same call has to
         // clear abandoned staging for the key, not only the committed object.
         state.staging.retain(|_, staged| staged.key != key.as_str());
+        state.uploads.retain(|_, upload| upload.key != key.as_str());
         Ok(())
     }
 
@@ -292,6 +320,180 @@ impl BlobStore for MemBlobStore {
 
     async fn health(&self) -> Result<(), BlobError> {
         self.shared.check_available()
+    }
+
+    fn capabilities(&self) -> BlobStoreCapabilities {
+        let mut caps = BlobStoreCapabilities::default();
+        caps.lists_staging = true;
+        caps.lists_keys = true;
+        caps.resumable = true;
+        caps.can_presign = self.shared.presign.load(Ordering::SeqCst);
+        caps
+    }
+
+    async fn shutdown(&self) {
+        // There is no background work to stop. The method exists so that callers can run
+        // the same shutdown path against this double as against the real stores.
+    }
+
+    async fn list_keys(&self, after: Option<&str>, limit: u32) -> Result<KeyPage, BlobError> {
+        self.shared.check_available()?;
+        let after = after.map(decode_cursor).transpose()?;
+        let limit = usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
+        let state = lock(&self.shared.state);
+        let mut remaining: Vec<(&String, &Bytes)> = state
+            .objects
+            .iter()
+            .filter(|(key, _)| after.as_ref().is_none_or(|after| *key > after))
+            .collect();
+        // Sorted only because a stable order is needed to page. The port promises no key
+        // order, and a consumer that relies on this one breaks against the local store.
+        remaining.sort_by(|a, b| a.0.cmp(b.0));
+        let more = remaining.len() > limit;
+        remaining.truncate(limit);
+        let next = if more {
+            remaining.last().map(|(key, _)| encode_cursor(key))
+        } else {
+            None
+        };
+        let keys = remaining
+            .into_iter()
+            .map(|(key, data)| {
+                let mut meta = BlobMeta::new(u64::try_from(data.len()).unwrap_or(u64::MAX));
+                meta.modified = Some(self.shared.clock.now());
+                (BlobKey::new(key.as_str()), meta)
+            })
+            .collect();
+        Ok(KeyPage { keys, next })
+    }
+
+    async fn presign_get(
+        &self,
+        key: &BlobKey,
+        ttl: Duration,
+        _options: &PresignOptions,
+    ) -> Result<Option<PresignedUrl>, BlobError> {
+        self.shared.check_available()?;
+        if !self.shared.presign.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
+        let expires_at = add_std(self.shared.clock.now(), ttl);
+        let url = format!(
+            "https://blob.example.test/{}?X-Amz-Expires={}&X-Amz-Signature=memstore-signature",
+            key.as_str(),
+            ttl.as_secs()
+        );
+        Ok(Some(PresignedUrl {
+            url: Secret::new(url),
+            expires_at,
+        }))
+    }
+
+    fn resumable(&self) -> Option<&dyn ResumableBlobStore> {
+        Some(self)
+    }
+}
+
+fn encode_cursor(key: &str) -> String {
+    format!("{CURSOR_PREFIX}{}", hex::encode(key))
+}
+
+fn decode_cursor(cursor: &str) -> Result<String, BlobError> {
+    let bad = || BlobError::InvalidKey("malformed list cursor");
+    let hex_part = cursor.strip_prefix(CURSOR_PREFIX).ok_or_else(bad)?;
+    let raw = hex::decode(hex_part).map_err(|_| bad())?;
+    String::from_utf8(raw).map_err(|_| bad())
+}
+
+#[async_trait]
+impl ResumableBlobStore for MemBlobStore {
+    async fn begin_resumable(&self, key: &BlobKey) -> Result<UploadHandle, BlobError> {
+        self.shared.check_available()?;
+        let started_at = self.shared.clock.now();
+        let handle = UploadHandle::new(Uuid::now_v7().simple().to_string())?;
+        let mut state = lock(&self.shared.state);
+        state.next_staging_id += 1;
+        let staging_id = state.next_staging_id;
+        // An abandoned upload shows up in the staging sweep under its target key, which is
+        // how the real stores report staged chunks.
+        state.staging.insert(
+            staging_id,
+            Staged {
+                key: key.as_str().to_owned(),
+                started_at,
+            },
+        );
+        state.uploads.insert(
+            handle.as_str().to_owned(),
+            Upload {
+                key: key.as_str().to_owned(),
+                chunks: Vec::new(),
+                length: 0,
+                staging_id,
+            },
+        );
+        Ok(handle)
+    }
+
+    async fn append(
+        &self,
+        handle: &UploadHandle,
+        offset: u64,
+        chunk: Bytes,
+    ) -> Result<(), BlobError> {
+        self.shared.check_available()?;
+        let mut state = lock(&self.shared.state);
+        let upload = state
+            .uploads
+            .get_mut(handle.as_str())
+            .ok_or(BlobError::NotFound)?;
+        // The client resumes from the reported length, so any other offset is refused
+        // and nothing is staged.
+        if offset != upload.length {
+            return Err(BlobError::RangeNotSatisfiable);
+        }
+        upload.length = upload
+            .length
+            .saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+        upload.chunks.push(chunk);
+        Ok(())
+    }
+
+    async fn length(&self, handle: &UploadHandle) -> Result<u64, BlobError> {
+        self.shared.check_available()?;
+        lock(&self.shared.state)
+            .uploads
+            .get(handle.as_str())
+            .map(|upload| upload.length)
+            .ok_or(BlobError::NotFound)
+    }
+
+    async fn finalize(&self, handle: UploadHandle) -> Result<BlobCommit, BlobError> {
+        self.shared.check_available()?;
+        let mut state = lock(&self.shared.state);
+        let upload = state
+            .uploads
+            .remove(handle.as_str())
+            .ok_or(BlobError::NotFound)?;
+        state.staging.remove(&upload.staging_id);
+        let mut hasher = StreamHasher::new();
+        let mut joined = Vec::new();
+        for chunk in &upload.chunks {
+            hasher.update(chunk);
+            joined.extend_from_slice(chunk);
+        }
+        let (size_bytes, checksums) = hasher.finish();
+        state.objects.insert(upload.key, Bytes::from(joined));
+        Ok(BlobCommit::new(size_bytes, checksums))
+    }
+
+    async fn abort(&self, handle: UploadHandle) -> Result<(), BlobError> {
+        self.shared.check_available()?;
+        let mut state = lock(&self.shared.state);
+        if let Some(upload) = state.uploads.remove(handle.as_str()) {
+            state.staging.remove(&upload.staging_id);
+        }
+        Ok(())
     }
 }
 
@@ -346,10 +548,7 @@ impl BlobWriter for MemBlobWriter {
             state.objects.insert(self.key.as_str().to_owned(), data);
         }
         self.leave_staging();
-        Ok(BlobCommit {
-            size_bytes,
-            checksums,
-        })
+        Ok(BlobCommit::new(size_bytes, checksums))
     }
 
     async fn abort(mut self: Box<Self>) -> Result<(), BlobError> {

@@ -1,6 +1,7 @@
 //! Users, role assignments, API tokens and failed-login counters.
 
 use std::collections::HashSet;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use rustryx_core::Secret;
@@ -11,10 +12,12 @@ use rustryx_core::ports::{
     InvalidationEvent, LoginAttemptRepo, LoginKey, LoginState, Page, PageRequest, TokenRepo,
     UserRepo,
 };
+use rustryx_core::project::ProjectSubject;
 use time::OffsetDateTime;
 
 use super::paging::paginate;
 use super::{MemStore, conflict, not_found};
+use crate::support::add_std;
 
 /// Stable sort rank so `roles_of` returns the same order on every call.
 const fn origin_rank(origin: RoleOrigin) -> u8 {
@@ -117,6 +120,26 @@ impl UserRepo for MemStore {
         Ok(())
     }
 
+    async fn set_password_hash_if(
+        &self,
+        id: UserId,
+        old_hash: &str,
+        new_hash: &str,
+    ) -> Result<bool, StoreError> {
+        let mut state = self.tables()?;
+        let user = state
+            .users
+            .get_mut(&id)
+            .ok_or_else(|| not_found("user", id))?;
+        // Compare and set under the one lock, the stand in for
+        // `UPDATE ... WHERE password_hash = $old`. A user without a hash never matches.
+        if user.password_hash.as_ref().map(Secret::expose) != Some(old_hash) {
+            return Ok(false);
+        }
+        user.password_hash = Some(Secret::new(new_hash));
+        Ok(true)
+    }
+
     async fn set_enabled(&self, id: UserId, enabled: bool) -> Result<(), StoreError> {
         let mut state = self.tables()?;
         let user = state
@@ -203,7 +226,20 @@ impl UserRepo for MemStore {
             return Err(not_found("user", id));
         }
         state.user_roles.remove(&id);
-        state.tokens.retain(|_, token| token.user_id != id);
+        let owned: Vec<ApiTokenId> = state
+            .tokens
+            .values()
+            .filter(|token| token.user_id == id)
+            .map(|token| token.id)
+            .collect();
+        for token in owned {
+            state.tokens.remove(&token);
+            state.token_notified.remove(&token);
+        }
+        // A user's own project roles go with the account; group rows are not theirs.
+        state
+            .members
+            .retain(|_, member| member.subject != ProjectSubject::User { user_id: id });
         drop(state);
         self.notify(InvalidationEvent::User(id.as_uuid()));
         Ok(())
@@ -262,11 +298,47 @@ impl TokenRepo for MemStore {
 
     async fn touch_last_used(&self, id: ApiTokenId, at: OffsetDateTime) -> Result<(), StoreError> {
         let mut state = self.tables()?;
-        let token = state
+        // A token deleted between the request and the flush is not an error: the `touch_*`
+        // calls are idempotent counters and the authenticator coalesces them anyway.
+        if let Some(token) = state.tokens.get_mut(&id) {
+            token.last_used_at = Some(token.last_used_at.map_or(at, |old| old.max(at)));
+        }
+        Ok(())
+    }
+
+    async fn list_expiring(
+        &self,
+        within: Duration,
+        now: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<ApiToken>, StoreError> {
+        let horizon = add_std(now, within);
+        let state = self.tables()?;
+        // Not yet expired and expiring inside the window, still usable (a revoked token needs
+        // no warning), and without a notice. Soonest expiry first.
+        let mut tokens: Vec<ApiToken> = state
             .tokens
-            .get_mut(&id)
-            .ok_or_else(|| not_found("api token", id))?;
-        token.last_used_at = Some(token.last_used_at.map_or(at, |old| old.max(at)));
+            .values()
+            .filter(|t| t.revoked_at.is_none())
+            .filter(|t| t.expires_at.is_some_and(|at| at > now && at <= horizon))
+            .filter(|t| !state.token_notified.contains_key(&t.id))
+            .cloned()
+            .collect();
+        tokens.sort_by_key(|t| (t.expires_at, t.id));
+        tokens.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(tokens)
+    }
+
+    async fn mark_expiry_notified(
+        &self,
+        id: ApiTokenId,
+        at: OffsetDateTime,
+    ) -> Result<(), StoreError> {
+        let mut state = self.tables()?;
+        // Idempotent for a token that is gone: the notice job can race a delete.
+        if state.tokens.contains_key(&id) {
+            state.token_notified.entry(id).or_insert(at);
+        }
         Ok(())
     }
 }

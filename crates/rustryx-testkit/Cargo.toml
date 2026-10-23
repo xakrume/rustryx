@@ -18,6 +18,9 @@ bytes.workspace = true
 futures.workspace = true
 hex.workspace = true
 md-5.workspace = true
+# Immutability rules are evaluated with the regular expressions of `rustryx_core::glob`, the
+# same text PostgreSQL stores next to a glob, so both engines share one definition.
+regex.workspace = true
 serde_json.workspace = true
 sha1.workspace = true
 sha2.workspace = true
