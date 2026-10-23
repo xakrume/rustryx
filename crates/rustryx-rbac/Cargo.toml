@@ -13,3 +13,22 @@ workspace = true
 
 [dependencies]
 rustryx-core.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+moka.workspace = true
+regex.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+rustryx-testkit.workspace = true
+proptest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+uuid.workspace = true
+# `test-util` gives `start_paused` and `tokio::time::advance`, which the cache TTL tests use
+# (the caches stamp entries with `tokio::time::Instant`, so paused time is honoured).
+tokio = { workspace = true, features = ["test-util"] }

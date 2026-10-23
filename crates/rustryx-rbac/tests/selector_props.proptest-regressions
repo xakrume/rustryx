@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 2765ca1b566ec424052d0be646b4c5358f3b7628f7a882211e8f5993fe700bad # shrinks to tree = Or([Or([Eq(Lit(""), Format), Eq(Group, Lit(""))]), And([Lit(false), Lit(false)])]), format = Maven2, path = "", repository = "", group = None, name = None, version = None, with_coordinate = false
+cc 9092d3fd324d1397bd533cb10feeab2a23d02bc6b2a89dba95c1133765539bd2 # shrinks to tree = Or([Not(Ne(Lit(""), Name)), Or([Full(Lit("ab"), "a|b"), And([Lit(false), Lit(false)])])]), format = Maven2, path = "", repository = "", group = None, name = None, version = None, with_coordinate = false

@@ -1,0 +1,262 @@
+{
+  "version": 1,
+  "note": "Realistic content selector expressions with the expected verdict of the Rustryx selector engine. 'coordinate' is null when the format could not derive one. 'expect' is true, false or 'error' (evaluation error, which authorization treats as no match). 'cel_0_15' records what the cel 0.15.0 crate did with the expression in the engine decision spike (see docs/rbac.md, ADR-RBAC-1): 'ok' = parsed and gave the expected result on every input, otherwise the failure class.",
+  "valid": [
+    {
+      "id": "maven-prefix",
+      "expression": "format == \"maven2\" && path.startsWith(\"/org/example/\")",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "maven2", "path": "/org/example/lib/1.0/lib-1.0.jar", "repository": "maven-releases", "coordinate": null, "expect": true },
+        { "format": "maven2", "path": "/org/other/lib/1.0/lib-1.0.jar", "repository": "maven-releases", "coordinate": null, "expect": false },
+        { "format": "npm", "path": "/org/example/x", "repository": "npm-hosted", "coordinate": null, "expect": false }
+      ]
+    },
+    {
+      "id": "regex-operator-anchored",
+      "expression": "path =~ \"^/com/acme/.*\"",
+      "cel_0_15": "compile error: token recognition error at =~ (the operator does not exist in CEL)",
+      "evaluations": [
+        { "format": "maven2", "path": "/com/acme/app/1.0/app-1.0.pom", "repository": "r", "coordinate": null, "expect": true },
+        { "format": "maven2", "path": "/org/com/acme/app", "repository": "r", "coordinate": null, "expect": false }
+      ]
+    },
+    {
+      "id": "regex-operator-is-full-match",
+      "expression": "path =~ \"/com/acme/\"",
+      "cel_0_15": "compile error: token recognition error at =~ (the operator does not exist in CEL)",
+      "evaluations": [
+        { "format": "maven2", "path": "/com/acme/", "repository": "r", "coordinate": null, "expect": true },
+        { "format": "maven2", "path": "/com/acme/app/1.0/app-1.0.pom", "repository": "r", "coordinate": null, "expect": false }
+      ]
+    },
+    {
+      "id": "matches-method-is-partial",
+      "expression": "path.matches(\"/acme/\")",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "maven2", "path": "/com/acme/app/1.0/app-1.0.pom", "repository": "r", "coordinate": null, "expect": true },
+        { "format": "maven2", "path": "/com/other/app", "repository": "r", "coordinate": null, "expect": false }
+      ]
+    },
+    {
+      "id": "coordinate-group-or-name",
+      "expression": "coordinate.groupId == \"org.example\" || coordinate.name.startsWith(\"lib-\")",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "maven2", "path": "/p", "repository": "r", "coordinate": { "group": "org.example", "name": "app", "version": "1.0" }, "expect": true },
+        { "format": "maven2", "path": "/p", "repository": "r", "coordinate": { "group": "org.other", "name": "lib-core", "version": "1.0" }, "expect": true },
+        { "format": "maven2", "path": "/p", "repository": "r", "coordinate": { "group": "org.other", "name": "app", "version": "1.0" }, "expect": false },
+        { "format": "maven2", "path": "/p", "repository": "r", "coordinate": null, "expect": "error" }
+      ]
+    },
+    {
+      "id": "coordinate-artifact-id-alias",
+      "expression": "coordinate.artifactId == \"app\" && coordinate.group == \"org.example\"",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "maven2", "path": "/p", "repository": "r", "coordinate": { "group": "org.example", "name": "app", "version": null }, "expect": true },
+        { "format": "maven2", "path": "/p", "repository": "r", "coordinate": { "group": "org.example", "name": "other", "version": null }, "expect": false }
+      ]
+    },
+    {
+      "id": "format-in-list",
+      "expression": "format in [\"npm\",\"pypi\"]",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "npm", "path": "/x", "repository": "r", "coordinate": null, "expect": true },
+        { "format": "pypi", "path": "/x", "repository": "r", "coordinate": null, "expect": true },
+        { "format": "maven2", "path": "/x", "repository": "r", "coordinate": null, "expect": false }
+      ]
+    },
+    {
+      "id": "suffix-and-not-contains",
+      "expression": "path.endsWith(\".jar\") && !path.contains(\"-SNAPSHOT\")",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "maven2", "path": "/a/b/1.0/b-1.0.jar", "repository": "r", "coordinate": null, "expect": true },
+        { "format": "maven2", "path": "/a/b/1.0-SNAPSHOT/b-1.0-SNAPSHOT.jar", "repository": "r", "coordinate": null, "expect": false },
+        { "format": "maven2", "path": "/a/b/1.0/b-1.0.pom", "repository": "r", "coordinate": null, "expect": false }
+      ]
+    },
+    {
+      "id": "matches-alternation",
+      "expression": "path.matches(\"^/org/(example|acme)/.*\\\\.(jar|pom)$\")",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "maven2", "path": "/org/example/lib/1.0/lib-1.0.jar", "repository": "r", "coordinate": null, "expect": true },
+        { "format": "maven2", "path": "/org/acme/lib/1.0/lib-1.0.pom", "repository": "r", "coordinate": null, "expect": true },
+        { "format": "maven2", "path": "/org/acme/lib/1.0/lib-1.0.jar.sha1", "repository": "r", "coordinate": null, "expect": false },
+        { "format": "maven2", "path": "/org/evil/lib/1.0/lib-1.0.jar", "repository": "r", "coordinate": null, "expect": false }
+      ]
+    },
+    {
+      "id": "repository-and-prefix",
+      "expression": "repository == \"maven-releases\" && path.startsWith(\"/com/\")",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "maven2", "path": "/com/x", "repository": "maven-releases", "coordinate": null, "expect": true },
+        { "format": "maven2", "path": "/com/x", "repository": "maven-snapshots", "coordinate": null, "expect": false }
+      ]
+    },
+    {
+      "id": "negated-prefix",
+      "expression": "!(path.startsWith(\"/internal/\"))",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "raw", "path": "/public/a.txt", "repository": "r", "coordinate": null, "expect": true },
+        { "format": "raw", "path": "/internal/a.txt", "repository": "r", "coordinate": null, "expect": false }
+      ]
+    },
+    {
+      "id": "npm-scope",
+      "expression": "format == \"npm\" && coordinate.group == \"@acme\"",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "npm", "path": "/@acme/pkg", "repository": "r", "coordinate": { "group": "@acme", "name": "pkg", "version": null }, "expect": true },
+        { "format": "npm", "path": "/@other/pkg", "repository": "r", "coordinate": { "group": "@other", "name": "pkg", "version": null }, "expect": false },
+        { "format": "maven2", "path": "/x", "repository": "r", "coordinate": { "group": "@acme", "name": "pkg", "version": null }, "expect": false }
+      ]
+    },
+    {
+      "id": "nested-parentheses",
+      "expression": "(format == \"maven2\" || format == \"npm\") && (path.startsWith(\"/a/\") || path.startsWith(\"/b/\"))",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "maven2", "path": "/a/x", "repository": "r", "coordinate": null, "expect": true },
+        { "format": "npm", "path": "/b/x", "repository": "r", "coordinate": null, "expect": true },
+        { "format": "raw", "path": "/a/x", "repository": "r", "coordinate": null, "expect": false },
+        { "format": "npm", "path": "/c/x", "repository": "r", "coordinate": null, "expect": false }
+      ]
+    },
+    {
+      "id": "not-equal",
+      "expression": "format != \"docker\" && path != \"/index.html\"",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "raw", "path": "/a.html", "repository": "r", "coordinate": null, "expect": true },
+        { "format": "raw", "path": "/index.html", "repository": "r", "coordinate": null, "expect": false },
+        { "format": "docker", "path": "/a.html", "repository": "r", "coordinate": null, "expect": false }
+      ]
+    },
+    {
+      "id": "raw-string-regex",
+      "expression": "path =~ r\"^/docs/[a-z]+\\.html$\"",
+      "cel_0_15": "compile error: token recognition error at =~ (the operator does not exist in CEL)",
+      "evaluations": [
+        { "format": "raw", "path": "/docs/index.html", "repository": "r", "coordinate": null, "expect": true },
+        { "format": "raw", "path": "/docs/indexXhtml", "repository": "r", "coordinate": null, "expect": false }
+      ]
+    },
+    {
+      "id": "single-quoted-strings",
+      "expression": "path.startsWith('/org/example/') && format == 'maven2'",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "maven2", "path": "/org/example/a", "repository": "r", "coordinate": null, "expect": true },
+        { "format": "maven2", "path": "/org/x/a", "repository": "r", "coordinate": null, "expect": false }
+      ]
+    },
+    {
+      "id": "version-regex-needs-coordinate",
+      "expression": "coordinate.version =~ \"^[0-9]+\\\\.[0-9]+\\\\.[0-9]+$\"",
+      "cel_0_15": "compile error: token recognition error at =~ (the operator does not exist in CEL)",
+      "evaluations": [
+        { "format": "npm", "path": "/p", "repository": "r", "coordinate": { "group": null, "name": "p", "version": "1.2.3" }, "expect": true },
+        { "format": "npm", "path": "/p", "repository": "r", "coordinate": { "group": null, "name": "p", "version": "1.2.3-beta" }, "expect": false },
+        { "format": "npm", "path": "/p", "repository": "r", "coordinate": { "group": null, "name": "p", "version": null }, "expect": "error" },
+        { "format": "npm", "path": "/p", "repository": "r", "coordinate": null, "expect": "error" }
+      ]
+    },
+    {
+      "id": "coordinate-name-in-list",
+      "expression": "coordinate.name in [\"alpha\", \"beta\", \"gamma\"]",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "pypi", "path": "/p", "repository": "r", "coordinate": { "group": null, "name": "beta", "version": null }, "expect": true },
+        { "format": "pypi", "path": "/p", "repository": "r", "coordinate": { "group": null, "name": "delta", "version": null }, "expect": false }
+      ]
+    },
+    {
+      "id": "or-absorbs-missing-coordinate",
+      "expression": "path.startsWith(\"/open/\") || coordinate.groupId == \"x\"",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "maven2", "path": "/open/a", "repository": "r", "coordinate": null, "expect": true },
+        { "format": "maven2", "path": "/closed/a", "repository": "r", "coordinate": null, "expect": "error" },
+        { "format": "maven2", "path": "/closed/a", "repository": "r", "coordinate": { "group": "x", "name": "n", "version": null }, "expect": true }
+      ]
+    },
+    {
+      "id": "and-absorbs-missing-coordinate",
+      "expression": "path.startsWith(\"/open/\") && coordinate.groupId == \"x\"",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "maven2", "path": "/closed/a", "repository": "r", "coordinate": null, "expect": false },
+        { "format": "maven2", "path": "/open/a", "repository": "r", "coordinate": null, "expect": "error" }
+      ]
+    },
+    {
+      "id": "negation-of-missing-is-not-allow",
+      "expression": "!(coordinate.groupId == \"evil\")",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "maven2", "path": "/p", "repository": "r", "coordinate": { "group": "good", "name": "n", "version": null }, "expect": true },
+        { "format": "maven2", "path": "/p", "repository": "r", "coordinate": { "group": "evil", "name": "n", "version": null }, "expect": false },
+        { "format": "maven2", "path": "/p", "repository": "r", "coordinate": null, "expect": "error" }
+      ]
+    },
+    {
+      "id": "boolean-literals",
+      "expression": "true",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "raw", "path": "/x", "repository": "r", "coordinate": null, "expect": true }
+      ]
+    },
+    {
+      "id": "escaped-quote-in-literal",
+      "expression": "path == \"/say \\\"hi\\\".txt\"",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "raw", "path": "/say \"hi\".txt", "repository": "r", "coordinate": null, "expect": true },
+        { "format": "raw", "path": "/say hi.txt", "repository": "r", "coordinate": null, "expect": false }
+      ]
+    },
+    {
+      "id": "path-from-repository-variable",
+      "expression": "path.startsWith(\"/\") && path.contains(repository)",
+      "cel_0_15": "ok",
+      "evaluations": [
+        { "format": "raw", "path": "/team/data/file", "repository": "data", "coordinate": null, "expect": true },
+        { "format": "raw", "path": "/team/other/file", "repository": "data", "coordinate": null, "expect": false }
+      ]
+    }
+  ],
+  "invalid": [
+    { "id": "dangling-operator", "expression": "format ==", "cel_0_15": "rejected at compile" },
+    { "id": "unclosed-call", "expression": "path.startsWith(", "cel_0_15": "rejected at compile" },
+    { "id": "invalid-regex-operator", "expression": "path =~ \"(\"", "cel_0_15": "rejected at compile (=~ does not exist in CEL)" },
+    { "id": "invalid-regex-method", "expression": "path.matches(\"(\")", "cel_0_15": "accepted at compile, every evaluation fails with a regex error" },
+    { "id": "non-boolean", "expression": "path", "cel_0_15": "accepted at compile, evaluates to a string instead of a bool" },
+    { "id": "unknown-identifier", "expression": "unknown == \"x\"", "cel_0_15": "accepted at compile, evaluation fails" },
+    { "id": "unknown-coordinate-field", "expression": "coordinate.extension == \"jar\"", "cel_0_15": "accepted at compile, evaluation fails" },
+    { "id": "bare-coordinate", "expression": "coordinate == \"x\"", "cel_0_15": "accepted at compile, evaluates to false" },
+    { "id": "unsupported-method", "expression": "path.substring(1) == \"x\"", "cel_0_15": "accepted at compile, evaluation fails (undeclared function)" },
+    { "id": "integer-literal", "expression": "format == 1", "cel_0_15": "accepted at compile, evaluation fails" },
+    { "id": "dynamic-regex", "expression": "path =~ format", "cel_0_15": "rejected at compile (=~ does not exist in CEL)" },
+    { "id": "dynamic-matches-argument", "expression": "path.matches(format)", "cel_0_15": "accepted at compile, the regex is compiled on every evaluation" },
+    { "id": "chained-equality", "expression": "path == \"a\" == \"b\"", "cel_0_15": "accepted at compile, evaluates to false" },
+    { "id": "arithmetic", "expression": "1 + 1 == 2", "cel_0_15": "accepted (outside the supported subset)" },
+    { "id": "ternary", "expression": "true ? true : false", "cel_0_15": "accepted (outside the supported subset)" },
+    { "id": "comprehension-macro", "expression": "[\"a\"].exists(x, path.startsWith(x))", "cel_0_15": "accepted (outside the supported subset)" },
+    { "id": "empty", "expression": "", "cel_0_15": "rejected at compile" },
+    { "id": "whitespace-only", "expression": "   ", "cel_0_15": "rejected at compile" },
+    { "id": "trailing-garbage", "expression": "true true", "cel_0_15": "rejected at compile" },
+    { "id": "unterminated-string", "expression": "path == \"abc", "cel_0_15": "rejected at compile" },
+    { "id": "unknown-escape", "expression": "path == \"\\q\"", "cel_0_15": "rejected at compile" },
+    { "id": "empty-list", "expression": "format in []", "cel_0_15": "accepted (outside the supported subset)" },
+    { "id": "non-literal-list-element", "expression": "format in [path]", "cel_0_15": "accepted (outside the supported subset)" },
+    { "id": "string-concatenation", "expression": "path == \"/a\" + \"/b\"", "cel_0_15": "accepted (outside the supported subset)" }
+  ]
+}

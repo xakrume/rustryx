@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 5766e82247768f1aa121c04ba379cf72a696bc52f51de6074a439599358f9b59 # shrinks to specs = [Spec { grant: View("*", None), actions: [Delete] }]
