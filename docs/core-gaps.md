@@ -72,7 +72,7 @@ product.
 - Metric names are unprefixed as exported by `rustryx-observability` (`names.rs`), every alert selector carries `job="rustryx"`. If a `rustryx_` prefix is added later, sed `deploy/monitoring/*`, the chart `files/` copies and `docs/slo.md`.
 - `http_request_duration_seconds` needs the extra labels `class` and `cache` (metadata vs artifact, hit vs miss), otherwise the metadata and TTFB latency alerts cannot fire.
 - Series the alerts query but code does not export yet (enforced by `deploy/monitoring/check_assets.py`): `db_up`, `redis_up`, `redis_requests_total`, `blob_store_{ops_total,bytes_total,free_bytes,total_bytes}`, `background_job_running`, `distlock_acquire_total`, `ldap_requests_total`, `oidc_requests_total`, `oidc_jwks_age_seconds`, `tokio_{busy_ratio,global_queue_depth,blocking_queue_depth}`, `upstream_circuit_state`, `auth_breakglass_logins_total`.
-- Label `job` on `background_job_*` collides with the scrape label (Prometheus renames it to `exported_job`); rename the label in code to `task`, then update the rules.
+- Label `job` on `background_job_*` collided with the scrape label (Prometheus renames it to `exported_job`): DONE, the code labels the job `task` and the rules, dashboard and runbook select `task`.
 - Background job names in the staleness table (`blob_gc`, `cleanup`, `audit_rotation`) are guesses: align with `rustryx-tasks`. The last-success gauge must start at process start time.
 - CI must publish `<version>-musl` and `<version>-glibc` tags (or change `image.variants`); prod values require `image.digest`.
 - Config has no JWT key ring (only `auth.internal_jwt_key`): runbook documents single-key rotation with forced re-login. Decide whether to add a ring.
@@ -139,3 +139,12 @@ product.
 ## Security review finding (automated, 24.10), open
 
 - FIXED (address-keyed `auth_failure_guard` outside `authenticate`, 10 failed credentialed requests per address, 10 per minute refill, anonymous requests never charged, tests `must_not_allow_unlimited_credential_guessing_from_one_address`). Original finding: `crates/rustryx-api/src/router.rs`: the rate limiter sits inside `authenticate` (`with_rate_limit(...)` then `.layer(from_fn_with_state(state, authenticate))`), so failed logins can be sent without being counted per client IP. Fix: put a per-IP limiter (keyed on `ClientIp`) OUTSIDE `authenticate`, or charge the IP bucket on every failed attempt before returning 401; keep the per-user limiter for authenticated requests. Needs a `must_not_` test. The PostgreSQL-backed login guard in `rustryx-auth` already throttles password logins per (account, ip) and per account, so this covers token and bearer guessing and unauthenticated floods.
+
+## RBAC adapted to core revision 2 (from the rbac agent)
+
+- `Rbac::check` now owns both anonymous gates (repository flag and global switch) and refuses anonymous callers before any store read. Wire `RbacConfig.anonymous_enabled` from `auth.anonymous_enabled`; `Rbac::anonymous_switch()` gives a shared runtime handle.
+- `is_admin`, `check_app`, `check_project`, `holds_whole_repository`, `visible_projects` are `RbacChecker` methods that fail closed (the trait must be in scope at call sites). Project roles and the robot scope rule are NOT implemented (stream W2-B); `check_project` passes only for `nx-admin` until the project access port is wired.
+- A selector `coordinate.*` field that is `None` means unknown, not empty: a maven format must pass `Some("")` for "no classifier".
+- New metrics, not yet in `names.rs`, `slo.md` or the dashboards: `rbac_decisions_total{kind,result}`, `rbac_cache_events_total{cache,event}`, `rbac_invalidations_total{event}`.
+- Open core problems: `can_see_repository` has no repository flag in its signature (anonymous flag not applied there), `Coordinate` cannot tell "none" from "not derived", no project port reaches `Rbac`.
+- `Cargo.lock` was edited by hand for the `metrics` edge of rbac: run `cargo update -w --offline` or a build and re-check `--locked` at integration.
