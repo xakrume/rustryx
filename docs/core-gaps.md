@@ -148,3 +148,12 @@ product.
 - New metrics, not yet in `names.rs`, `slo.md` or the dashboards: `rbac_decisions_total{kind,result}`, `rbac_cache_events_total{cache,event}`, `rbac_invalidations_total{event}`.
 - Open core problems: `can_see_repository` has no repository flag in its signature (anonymous flag not applied there), `Coordinate` cannot tell "none" from "not derived", no project port reaches `Rbac`.
 - `Cargo.lock` was edited by hand for the `metrics` edge of rbac: run `cargo update -w --offline` or a build and re-check `--locked` at integration.
+
+## Blob adapted to core revision 2 (from the blob agent)
+
+- Typed errors adopted (`InvalidKey`, `InsufficientStorage`, `Overloaded{retry_after}`, `Unsupported`); `capabilities()`, `shutdown()` (replaces `CleanupDrain`), `list_keys` for local and S3, S3 `presign_get` (900 s cap, `Ok(None)` for local as core documents), `BlobMeta.modified`, disk free-space floor via `rustix::fs::statvfs` behind a `DiskProbe` trait (safe, no `unsafe`), registry `store_by_id`, `store_for_repository`, `invalidate_all`.
+- `S3BlobStore::new` takes a store name for the metrics label. Registry `store_for(id)` was renamed `store_by_id`.
+- Wiring: copy `blob.local_min_free_percent` (default 10) into the default store JSON; the registry applies the floor.
+- Metrics `blob_store_{ops_total,bytes_total,free_bytes,total_bytes}` exist in the crate: add the constants to `rustryx-observability/names.rs` and update `deploy/monitoring/check_assets.py`.
+- Core problems: `BlobMeta` has no digest field (None is the only answer), no `BlobStore` method returns free or total bytes (so `blob_store_stats` cannot read them from the port), `ObjectStore::list` does not promise order so the crate verifies it.
+- statvfs was exercised on macOS only (compiles for musl). `Cargo.lock` was edited by hand for the new edges: re-check `--locked` at integration.
