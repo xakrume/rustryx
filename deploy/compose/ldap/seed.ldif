@@ -1,0 +1,167 @@
+# Rustryx LDAP test fixture. SHARED: docker compose loads it, and integration
+# tests in other crates load the same file (README 8.6). TEST DATA ONLY: every
+# password below is public and equals "<login>-test-only".
+#
+# Contract for consumers
+#   - Base DN dc=rustryx,dc=test. The base entry itself is NOT in this file: the
+#     server image creates it (deploy/compose/ldap/entrypoint.sh, or LDAP_DOMAIN
+#     of osixia-style images), so the file loads into any of them.
+#   - Load with `ldapmodify -a` (ldapadd also works): the last record is a
+#     `changetype: modify`.
+#   - memberOf: the compose image runs the memberOf overlay, which maintains
+#     `memberOf` for DIRECT membership. Without the overlay use the reverse
+#     search instead (auth.ldap.group_strategy = member_search), filter
+#     (member=<escaped user DN>), repeated per level for nested groups.
+#   - Service account for searches: uid=svc-rustryx,ou=services (read only).
+#
+# Users (userPassword = <login>-test-only, the special one is special-test-only)
+#   alice    in rustryx-admins                    (the only admin group)
+#   bob      in readers
+#   carol    in chain-l1 -> chain-l2 -> chain-l3 -> chain-l4 (nested chain)
+#   dave     in cycle-a <-> cycle-b               (deliberate group cycle)
+#   erin     in decoys/rustryx-admins and team-x-admins (look-alikes, not admin)
+#   special  login contains * ( ) \ , + : exercises RFC 4515 and RFC 4514 escaping
+#            and is also a member of readers, so the group filter carries them too
+
+dn: ou=people,dc=rustryx,dc=test
+objectClass: organizationalUnit
+ou: people
+
+dn: ou=groups,dc=rustryx,dc=test
+objectClass: organizationalUnit
+ou: groups
+
+dn: ou=decoys,dc=rustryx,dc=test
+objectClass: organizationalUnit
+ou: decoys
+
+dn: ou=services,dc=rustryx,dc=test
+objectClass: organizationalUnit
+ou: services
+
+dn: uid=svc-rustryx,ou=services,dc=rustryx,dc=test
+objectClass: inetOrgPerson
+uid: svc-rustryx
+cn: Rustryx search service account (test fixture)
+sn: svc-rustryx
+userPassword: svc-rustryx-test-only
+
+dn: uid=alice,ou=people,dc=rustryx,dc=test
+objectClass: inetOrgPerson
+uid: alice
+cn: Alice Admin (test fixture)
+sn: Admin
+givenName: Alice
+mail: alice@rustryx.test
+userPassword: alice-test-only
+
+dn: uid=bob,ou=people,dc=rustryx,dc=test
+objectClass: inetOrgPerson
+uid: bob
+cn: Bob Reader (test fixture)
+sn: Reader
+givenName: Bob
+mail: bob@rustryx.test
+userPassword: bob-test-only
+
+dn: uid=carol,ou=people,dc=rustryx,dc=test
+objectClass: inetOrgPerson
+uid: carol
+cn: Carol Publisher (test fixture)
+sn: Publisher
+givenName: Carol
+mail: carol@rustryx.test
+userPassword: carol-test-only
+
+dn: uid=dave,ou=people,dc=rustryx,dc=test
+objectClass: inetOrgPerson
+uid: dave
+cn: Dave Cycle (test fixture)
+sn: Cycle
+givenName: Dave
+mail: dave@rustryx.test
+userPassword: dave-test-only
+
+dn: uid=erin,ou=people,dc=rustryx,dc=test
+objectClass: inetOrgPerson
+uid: erin
+cn: Erin Lookalike (test fixture)
+sn: Lookalike
+givenName: Erin
+mail: erin@rustryx.test
+userPassword: erin-test-only
+
+# Login: star*(paren)\back,comma+plus
+# DN value escaping (RFC 4514): \5C for backslash, \, and \+ for comma and plus.
+dn: uid=star*(paren)\5Cback\,comma\+plus,ou=people,dc=rustryx,dc=test
+objectClass: inetOrgPerson
+uid: star*(paren)\back,comma+plus
+cn: Special Characters (test fixture)
+sn: Special
+userPassword: special-test-only
+
+# Groups are created in dependency order: every member exists before the group
+# that lists it, so the memberOf overlay can write memberOf on it.
+
+dn: cn=rustryx-admins,ou=groups,dc=rustryx,dc=test
+objectClass: groupOfNames
+cn: rustryx-admins
+member: uid=alice,ou=people,dc=rustryx,dc=test
+
+dn: cn=readers,ou=groups,dc=rustryx,dc=test
+objectClass: groupOfNames
+cn: readers
+member: uid=bob,ou=people,dc=rustryx,dc=test
+member: uid=star*(paren)\5Cback\,comma\+plus,ou=people,dc=rustryx,dc=test
+
+# Nested chain, four levels: carol -> l1 -> l2 -> l3 -> l4.
+dn: cn=chain-l1,ou=groups,dc=rustryx,dc=test
+objectClass: groupOfNames
+cn: chain-l1
+member: uid=carol,ou=people,dc=rustryx,dc=test
+
+dn: cn=chain-l2,ou=groups,dc=rustryx,dc=test
+objectClass: groupOfNames
+cn: chain-l2
+member: cn=chain-l1,ou=groups,dc=rustryx,dc=test
+
+dn: cn=chain-l3,ou=groups,dc=rustryx,dc=test
+objectClass: groupOfNames
+cn: chain-l3
+member: cn=chain-l2,ou=groups,dc=rustryx,dc=test
+
+dn: cn=chain-l4,ou=groups,dc=rustryx,dc=test
+objectClass: groupOfNames
+cn: chain-l4
+member: cn=chain-l3,ou=groups,dc=rustryx,dc=test
+
+# Cycle: cycle-a and cycle-b contain each other, dave is in cycle-a. Traversal
+# must stop after visiting each group once. The back edge is added below.
+dn: cn=cycle-a,ou=groups,dc=rustryx,dc=test
+objectClass: groupOfNames
+cn: cycle-a
+member: uid=dave,ou=people,dc=rustryx,dc=test
+
+dn: cn=cycle-b,ou=groups,dc=rustryx,dc=test
+objectClass: groupOfNames
+cn: cycle-b
+member: cn=cycle-a,ou=groups,dc=rustryx,dc=test
+
+# Look-alikes of the admin group. Different DN, same or similar name; none of
+# them may grant nx-admin when auth.ldap.admin_groups lists only
+# cn=rustryx-admins,ou=groups,dc=rustryx,dc=test (exact DN match, README 8.5).
+dn: cn=rustryx-admins,ou=decoys,dc=rustryx,dc=test
+objectClass: groupOfNames
+cn: rustryx-admins
+member: uid=erin,ou=people,dc=rustryx,dc=test
+
+dn: cn=team-x-admins,ou=groups,dc=rustryx,dc=test
+objectClass: groupOfNames
+cn: team-x-admins
+member: uid=erin,ou=people,dc=rustryx,dc=test
+
+# Close the cycle: cycle-b now exists, so the overlay can set memberOf on it.
+dn: cn=cycle-a,ou=groups,dc=rustryx,dc=test
+changetype: modify
+add: member
+member: cn=cycle-b,ou=groups,dc=rustryx,dc=test

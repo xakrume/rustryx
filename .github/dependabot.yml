@@ -1,0 +1,26 @@
+# Keeps the SHA pins of docs/ci-and-release.md from rotting. A pin that is never
+# updated is a pin nobody trusts. The cooldown skips releases younger than two
+# weeks, the window in which a compromised release is usually found and yanked.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+  - package-ecosystem: docker
+    directory: /deploy/compose/ldap
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14

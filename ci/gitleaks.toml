@@ -1,0 +1,19 @@
+# gitleaks configuration: the default rule set plus the rules that enforce the
+# project policy that signing key material never lives in CI variables.
+title = "Rustryx secret detection"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "sigstore-private-key"
+description = "cosign private key material (keys live in KMS, Vault or OpenBao, never in git)"
+regex = '''-----BEGIN (ENCRYPTED )?(SIGSTORE|COSIGN) PRIVATE KEY-----'''
+tags = ["key", "signing"]
+
+[[rules]]
+id = "cosign-key-in-ci-variable"
+description = "a workflow reads cosign private key material from a CI secret; use a KMS reference instead"
+regex = '''secrets\.COSIGN_(PRIVATE_KEY|PASSWORD)|COSIGN_PRIVATE_KEY\s*:'''
+path = '''(^|/)(\.github/workflows/[^/]+\.ya?ml|\.gitlab-ci\.yml)$'''
+tags = ["key", "signing"]

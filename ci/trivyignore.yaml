@@ -1,0 +1,10 @@
+# Exceptions for Trivy findings (image and filesystem scans). The policy is in
+# docs/supply-chain.md. An entry needs the id, a statement that names the issue
+# and the reason, and `expired_at`: Trivy itself stops honouring an entry after
+# that date, so an expired exception turns the job red again by itself.
+#
+# vulnerabilities:
+#   - id: CVE-2026-00000
+#     statement: "issue RUSTRYX-SEC-0002: affected function is not reachable, see the issue"
+#     expired_at: 2026-12-31
+vulnerabilities: []

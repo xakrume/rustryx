@@ -1,0 +1,30 @@
+# cargo-audit configuration. cargo-deny (deny.toml) is the blocking advisory
+# gate; cargo-audit stays because README 8.6 names both, and because it is the
+# only one of the two that prints transitive unmaintained and unsound notices
+# as warnings (cargo-deny 0.20 hides them for transitive crates).
+#
+# The severity gate ("fail on high and above") is NOT configured here through
+# `severity_threshold`: that key drops lower findings from the report entirely.
+# ci/audit-gate.py reads the full JSON report, prints everything, and fails
+# only for CVSS >= 7.0 or an unscored vulnerability.
+
+[advisories]
+# Keep identical to advisories.ignore in deny.toml; ci/check-exceptions.py fails
+# when the two lists differ, so an exception cannot be granted in one tool only.
+# Reason, issue and expiry live next to the entry in deny.toml.
+ignore = ["RUSTSEC-2023-0071"]
+informational_warnings = ["unmaintained", "unsound", "notice"]
+
+[database]
+# Always fetch: a stale database cannot hide a new advisory.
+fetch = true
+stale = false
+
+[yanked]
+enabled = true
+update_index = true
+
+[output]
+# Warnings are reported and do not change the exit code on their own.
+deny = []
+quiet = false

@@ -1,0 +1,345 @@
+{
+  "realm": "rustryx",
+  "displayName": "Rustryx TEST FIXTURE (public credentials, never import into a real Keycloak)",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "verifyEmail": false,
+  "loginWithEmailAllowed": false,
+  "duplicateEmailsAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": false,
+  "accessTokenLifespan": 300,
+  "accessTokenLifespanForImplicitFlow": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "ssoSessionIdleTimeoutRememberMe": 0,
+  "ssoSessionMaxLifespanRememberMe": 0,
+  "accessCodeLifespan": 60,
+  "accessCodeLifespanUserAction": 300,
+  "offlineSessionMaxLifespanEnabled": false,
+  "eventsEnabled": true,
+  "eventsListeners": [
+    "jboss-logging"
+  ],
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": true,
+  "defaultSignatureAlgorithm": "RS256",
+  "groups": [
+    {
+      "name": "rustryx",
+      "path": "/rustryx",
+      "subGroups": [
+        {
+          "name": "admins",
+          "path": "/rustryx/admins",
+          "subGroups": []
+        },
+        {
+          "name": "readers",
+          "path": "/rustryx/readers",
+          "subGroups": []
+        },
+        {
+          "name": "team-payments",
+          "path": "/rustryx/team-payments",
+          "subGroups": [
+            {
+              "name": "publishers",
+              "path": "/rustryx/team-payments/publishers",
+              "subGroups": []
+            }
+          ]
+        },
+        {
+          "name": "ci",
+          "path": "/rustryx/ci",
+          "subGroups": [
+            {
+              "name": "demo",
+              "path": "/rustryx/ci/demo",
+              "subGroups": []
+            }
+          ]
+        },
+        {
+          "name": "team-x",
+          "path": "/rustryx/team-x",
+          "subGroups": [
+            {
+              "name": "admins",
+              "path": "/rustryx/team-x/admins",
+              "subGroups": []
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "enabled": true,
+      "email": "alice@rustryx.test",
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Admin",
+      "groups": [
+        "/rustryx/admins"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "alice-test-only",
+          "temporary": false
+        }
+      ],
+      "requiredActions": []
+    },
+    {
+      "username": "bob",
+      "enabled": true,
+      "email": "bob@rustryx.test",
+      "emailVerified": true,
+      "firstName": "Bob",
+      "lastName": "Reader",
+      "groups": [
+        "/rustryx/readers"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "bob-test-only",
+          "temporary": false
+        }
+      ],
+      "requiredActions": []
+    },
+    {
+      "username": "carol",
+      "enabled": true,
+      "email": "carol@rustryx.test",
+      "emailVerified": true,
+      "firstName": "Carol",
+      "lastName": "Publisher",
+      "groups": [
+        "/rustryx/team-payments/publishers"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "carol-test-only",
+          "temporary": false
+        }
+      ],
+      "requiredActions": []
+    },
+    {
+      "username": "dave",
+      "enabled": true,
+      "email": "dave@rustryx.test",
+      "emailVerified": true,
+      "firstName": "Dave",
+      "lastName": "Nogroups",
+      "groups": [],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dave-test-only",
+          "temporary": false
+        }
+      ],
+      "requiredActions": []
+    },
+    {
+      "username": "erin",
+      "enabled": true,
+      "email": "erin@rustryx.test",
+      "emailVerified": true,
+      "firstName": "Erin",
+      "lastName": "Lookalike",
+      "groups": [
+        "/rustryx/team-x/admins"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "erin-test-only",
+          "temporary": false
+        }
+      ],
+      "requiredActions": []
+    },
+    {
+      "username": "service-account-rustryx-cli",
+      "enabled": true,
+      "serviceAccountClientId": "rustryx-cli",
+      "groups": [
+        "/rustryx/ci/demo"
+      ],
+      "realmRoles": []
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "rustryx-ui",
+      "name": "Rustryx UI",
+      "description": "Confidential client: authorization code with PKCE S256 only.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "rustryx-ui-secret-TEST-ONLY",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": false,
+      "fullScopeAllowed": false,
+      "rootUrl": "http://localhost:8081",
+      "baseUrl": "http://localhost:8081/",
+      "redirectUris": [
+        "http://localhost:8081/api/v1/auth/oidc/callback",
+        "https://rustryx.localhost/api/v1/auth/oidc/callback"
+      ],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "oauth2.device.authorization.grant.enabled": "false",
+        "oidc.ciba.grant.enabled": "false",
+        "standard.token.exchange.enabled": "false",
+        "access.token.signed.response.alg": "RS256",
+        "post.logout.redirect.uris": "http://localhost:8081/##https://rustryx.localhost/",
+        "client_credentials.use_refresh_token": "false",
+        "use.refresh.tokens": "true"
+      },
+      "defaultClientScopes": [
+        "basic",
+        "acr",
+        "profile",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "microprofile-jwt"
+      ],
+      "protocolMappers": [
+        {
+          "name": "audience-rustryx-ui",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "rustryx-ui",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "lightweight.claim": "false"
+          }
+        },
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "true",
+            "claim.name": "groups",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "introspection.token.claim": "true",
+            "userinfo.token.claim": "false",
+            "lightweight.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "rustryx-cli",
+      "name": "Rustryx CLI and CI",
+      "description": "Confidential client: client credentials for CI service accounts, device authorization for interactive CLI. Not a public client.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "rustryx-cli-secret-TEST-ONLY",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "frontchannelLogout": false,
+      "fullScopeAllowed": false,
+      "redirectUris": [],
+      "webOrigins": [],
+      "attributes": {
+        "oauth2.device.authorization.grant.enabled": "true",
+        "oauth2.device.code.lifespan": "600",
+        "oauth2.device.polling.interval": "5",
+        "oidc.ciba.grant.enabled": "false",
+        "standard.token.exchange.enabled": "false",
+        "access.token.signed.response.alg": "RS256",
+        "client_credentials.use_refresh_token": "false",
+        "use.refresh.tokens": "false"
+      },
+      "defaultClientScopes": [
+        "basic",
+        "acr",
+        "profile",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "microprofile-jwt"
+      ],
+      "protocolMappers": [
+        {
+          "name": "audience-rustryx-cli",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "rustryx-cli",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "lightweight.claim": "false"
+          }
+        },
+        {
+          "name": "audience-rustryx-ui-for-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "rustryx-ui",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "lightweight.claim": "false"
+          }
+        },
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "true",
+            "claim.name": "groups",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "introspection.token.claim": "true",
+            "userinfo.token.claim": "false",
+            "lightweight.claim": "false"
+          }
+        }
+      ]
+    }
+  ]
+}

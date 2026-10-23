@@ -1,0 +1,29 @@
+# The build context is the whole repository; only what cargo and the Dockerfile
+# need may enter it. Smaller context, faster builds, and nothing secret or
+# machine specific (an .env, a key, a local target directory) can be copied into
+# a layer by `COPY . .`.
+.git
+.github
+.gitlab-ci.yml
+target
+**/target
+corpus
+fuzz/artifacts
+fuzz/corpus
+
+# Local and secret material.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+deploy/compose/certs
+
+# Not needed to compile the binary. Markdown and docs/ stay in the context on
+# purpose: a crate may include_str! its README or a document, and excluding it
+# would turn that into a build failure that only shows up in the image build.
+ci
+deploy
+.dockerignore
+Dockerfile*
+.DS_Store

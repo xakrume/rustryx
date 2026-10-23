@@ -1,0 +1,757 @@
+name: ci
+
+# Pipeline of Rustryx: lint, test, code-security, build, image-security, publish,
+# sign, provenance, verify. Reading guide and the way to turn observation gates
+# into blocking ones: docs/ci-and-release.md.
+#
+# Rules this file follows, each for a reason:
+#  - Every third-party action is pinned by commit SHA (the tag is in a comment).
+#    slsa-github-generator is the single exception, it MUST be called by tag.
+#  - Permissions start empty and each job asks for what it uses.
+#  - `continue-on-error: true` appears only on steps marked OBSERVATION MODE. Such
+#    a gate reports but does not fail the run yet (DSO-17); flip one per PR.
+#  - Nothing reaches a registry tag before image-security passed: build pushes
+#    untagged digests, publish is the only job that creates tags.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      signing:
+        description: "Signing method when this run publishes: keyless, kms (key in Vault/OpenBao/KMS) or both"
+        type: choice
+        options: [keyless, kms, both]
+        default: keyless
+
+permissions: {}
+
+# A new push to a pull request cancels the older run. Runs of main and of tags are
+# never cancelled: cancelling a release because someone pushed to main would leave
+# a tag without an image.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  # Findings below CRITICAL in scans: "false" reports them as warnings, "true"
+  # blocks HIGH and above (check-trivy.py --enforce). CRITICAL blocks in both modes.
+  # Change it in a PR of its own once the first scan is clean.
+  SECURITY_GATES_ENFORCE: "false"
+
+jobs:
+  # Values every later job needs, computed once so that build, publish and sign
+  # cannot disagree about the version or the image name.
+  meta:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      image: ${{ steps.values.outputs.image }}
+      short: ${{ steps.values.outputs.short }}
+      version: ${{ steps.values.outputs.version }}
+      created: ${{ steps.values.outputs.created }}
+      epoch: ${{ steps.values.outputs.epoch }}
+      release: ${{ steps.values.outputs.release }}
+      publish: ${{ steps.values.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: values
+        env:
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          short=${GITHUB_SHA::7}
+          release=false
+          publish=false
+          if [[ "$REF" == refs/tags/v* ]]; then
+            release=true
+            version=${REF_NAME#v}
+          else
+            version="$(ci/workspace-version.sh)-dev.${short}"
+          fi
+          if [ "$EVENT" != pull_request ] && { [ "$release" = true ] || [ "$REF" = refs/heads/main ]; }; then
+            publish=true
+          fi
+          {
+            echo "image=ghcr.io/${GITHUB_REPOSITORY,,}"
+            echo "short=$short"
+            echo "version=$version"
+            # Commit time, not build time: every architecture and every re-run of
+            # the same commit gets the same label and the same layer timestamps.
+            echo "created=$(git show -s --format=%cI HEAD)"
+            echo "epoch=$(git show -s --format=%ct HEAD)"
+            echo "release=$release"
+            echo "publish=$publish"
+          } >>"$GITHUB_OUTPUT"
+
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Release versions agree with the tag (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: ci/release-check.sh "$TAG"
+      - name: Rust toolchain from rust-toolchain.toml
+        run: rustup toolchain install --profile minimal
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Install hadolint and actionlint (SHA-256 pinned in ci/tools.lock)
+        run: |
+          ci/install-tool.sh hadolint
+          ci/install-tool.sh actionlint
+      - name: hadolint
+        run: hadolint Dockerfile Dockerfile.musl deploy/compose/ldap/Dockerfile
+      - name: yamllint (hash-pinned install)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/lint-venv"
+          "$RUNNER_TEMP/lint-venv/bin/pip" install --quiet --require-hashes --no-deps -r ci/requirements-lint.txt
+          "$RUNNER_TEMP/lint-venv/bin/yamllint" -c ci/yamllint.yml --strict .github deploy/compose ci .gitlab-ci.yml
+      - name: actionlint
+        run: actionlint
+      - name: shellcheck
+        run: shellcheck ci/*.sh ci/tests/*.sh deploy/compose/ldap/*.sh
+      - name: Unit tests of the CI scripts
+        run: python3 -I -m unittest discover -s ci/tests -v
+      - name: Compiler and base image pins agree
+        run: ci/check-toolchain-pin.sh
+
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain from rust-toolchain.toml
+        run: rustup toolchain install --profile minimal
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-nextest@0.9.148,cargo-llvm-cov@0.9.1
+          fallback: none
+      # RUSTRYX_IT=1 makes the integration tests REQUIRED: a missing Docker or image
+      # is a failure and not a skip (crates/rustryx-blob/tests/s3_minio.rs). They start
+      # PostgreSQL, MinIO, Keycloak and OpenLDAP through testcontainers; the Keycloak
+      # realm and the LDIF are the shared fixtures in deploy/compose, proven by the
+      # `fixtures` job. A service container cannot mount the realm file or pass
+      # `--import-realm`, which is why they are not declared as `services:` here.
+      - name: Unit and integration tests with coverage
+        env:
+          RUSTRYX_IT: "1"
+          RUSTRYX_MINIO_IMAGE: ${{ vars.RUSTRYX_MINIO_IMAGE }}
+        run: |
+          docker version --format 'docker server {{.Server.Version}}'
+          cargo llvm-cov nextest --workspace --all-features --locked \
+            --config-file ci/nextest.toml --profile ci --no-report
+      - name: Doc tests
+        run: cargo test --doc --workspace --all-features --locked
+      - name: Reports (JUnit, Cobertura, lcov, summary)
+        if: always()
+        run: |
+          ignore='(/tests/|/benches/|/rustryx-testkit/)'
+          cargo llvm-cov report --ignore-filename-regex "$ignore" --lcov --output-path lcov.info
+          cargo llvm-cov report --ignore-filename-regex "$ignore" --cobertura --output-path cobertura.xml
+          cargo llvm-cov report --ignore-filename-regex "$ignore" --json --summary-only --output-path coverage-summary.json
+          find target -path '*nextest*' -name junit.xml -exec cp {} junit.xml \; -quit
+      - name: Restore the coverage baseline of main
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: coverage-baseline.json
+          # No exact hit by design: the prefix finds the newest baseline saved on main.
+          key: coverage-baseline-${{ github.sha }}
+          restore-keys: |
+            coverage-baseline-
+      - name: Coverage thresholds and regression against main
+        id: coverage
+        continue-on-error: true # OBSERVATION MODE (DSO-17): remove this line to make the coverage gate blocking
+        run: |
+          python3 ci/coverage-gate.py --baseline coverage-baseline.json \
+            --save-summary coverage-current.json --summary "$GITHUB_STEP_SUMMARY" coverage-summary.json
+      - name: Keep this run as the baseline (main only, and only when the gate passed)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.coverage.outcome == 'success'
+        run: cp coverage-current.json coverage-baseline.json
+      - name: Save the baseline
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.coverage.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: coverage-baseline.json
+          key: coverage-baseline-${{ github.sha }}
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-reports
+          path: |
+            junit.xml
+            cobertura.xml
+            lcov.info
+            coverage-summary.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  # Boots Keycloak and OpenLDAP from deploy/compose and checks the shared fixtures
+  # (README 8.6): groups and audience in the token, membership change, LDAP bind
+  # with the right and with an empty password. Blocking: it checks files of this
+  # repository only, so a failure is always a real change.
+  fixtures:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the Keycloak realm and the LDIF
+        run: ci/verify-fixtures.sh
+
+  code-security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # gitleaks scans the history
+          persist-credentials: false
+      - name: Rust toolchain from rust-toolchain.toml
+        run: rustup toolchain install --profile minimal
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-deny@0.20.2,cargo-audit@0.22.2,cargo-cyclonedx@0.5.9,trivy@0.75.0
+          fallback: none
+      - name: Install gitleaks (SHA-256 pinned in ci/tools.lock)
+        run: ci/install-tool.sh gitleaks
+
+      - name: Exceptions are recorded, justified and not expired
+        continue-on-error: true # OBSERVATION MODE (DSO-17): remove this line to make the gate blocking
+        run: python3 ci/check-exceptions.py
+
+      - name: cargo deny (advisories, bans, licenses, sources)
+        continue-on-error: true # OBSERVATION MODE (DSO-17): remove this line to make the gate blocking
+        run: |
+          set +e
+          cargo deny check 2>&1 | tee deny.txt
+          rc=${PIPESTATUS[0]}
+          { echo "### cargo deny"; echo "exit code: $rc"; echo '```'; tail -n 40 deny.txt; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+      - name: deny.toml turns red for GPL, git and openssl-sys
+        continue-on-error: true # OBSERVATION MODE (DSO-17): remove this line to make the gate blocking
+        run: ci/tests/deny-negative.sh
+
+      - name: cargo audit, fail on high and above
+        continue-on-error: true # OBSERVATION MODE (DSO-17): remove this line to make the gate blocking
+        run: |
+          set +e
+          cargo audit --json >audit.json 2>audit.err
+          scan_rc=$?
+          # cargo audit exits 1 for any vulnerability; the severity decision and the
+          # "scanned nothing" check are in audit-gate.py, which reads the JSON.
+          python3 ci/audit-gate.py --fail-on high --summary "$GITHUB_STEP_SUMMARY" audit.json
+          rc=$?
+          echo "cargo audit exit code $scan_rc, audit-gate exit code $rc"
+          exit "$rc"
+
+      - name: Secret detection (gitleaks, history and working tree)
+        continue-on-error: true # OBSERVATION MODE (DSO-17): remove this line to make the gate blocking
+        run: |
+          set +e
+          rc=0
+          for mode in git dir; do
+            gitleaks "$mode" --config ci/gitleaks.toml --redact --no-banner \
+              --report-format json --report-path "gitleaks-$mode.json" . 2>&1 | tee "gitleaks-$mode.log"
+            [ "${PIPESTATUS[0]}" -eq 0 ] || rc=1
+            # A green scan that read nothing proves nothing: require the byte count.
+            bytes=$(sed -n 's/.*scanned ~\([0-9][0-9]*\) bytes.*/\1/p' "gitleaks-$mode.log" | tail -n 1)
+            if [ -z "$bytes" ] || [ "$bytes" -eq 0 ]; then echo "gitleaks $mode scanned nothing"; rc=1; fi
+            echo "- gitleaks $mode: ${bytes:-0} bytes scanned" >>"$GITHUB_STEP_SUMMARY"
+          done
+          exit "$rc"
+
+      - name: Trivy filesystem scan of Cargo.lock
+        continue-on-error: true # OBSERVATION MODE (DSO-17): remove this line to make the gate blocking
+        run: |
+          set +e
+          trivy fs --scanners vuln --list-all-pkgs --skip-dirs target --ignorefile ci/trivyignore.yaml \
+            --exit-code 0 --format json --output trivy-fs.json .
+          scan_rc=$?
+          python3 ci/check-trivy.py --label trivy-fs --scanner-exit-code "$scan_rc" --min-components 50 \
+            --enforce "$SECURITY_GATES_ENFORCE" --summary "$GITHUB_STEP_SUMMARY" trivy-fs.json
+          rc=$?
+          # 2 means findings below the blocking line: already a ::warning annotation.
+          if [ "$rc" -eq 2 ]; then rc=0; fi
+          exit "$rc"
+
+      - name: SBOM (CycloneDX) of the server binary, must not be empty
+        continue-on-error: true # OBSERVATION MODE (DSO-17): remove this line to make the gate blocking
+        run: |
+          cargo cyclonedx --format json --spec-version 1.5 --describe binaries --target all
+          sbom=$(find crates -name '*_bin.cdx.json' | head -n 1)
+          test -n "$sbom" || { echo "cargo cyclonedx wrote no binary SBOM"; exit 3; }
+          cp "$sbom" sbom-cargo.cdx.json
+          python3 ci/check-sbom.py --min 20 --expect-purl-prefix pkg:cargo/ --summary "$GITHUB_STEP_SUMMARY" sbom-cargo.cdx.json
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: code-security-reports
+          path: |
+            audit.json
+            deny.txt
+            gitleaks-*.json
+            trivy-fs.json
+            sbom-cargo.cdx.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  # SAST is optional: it runs when the repository variable ENABLE_SEMGREP is
+  # "true". It does the check or it is skipped, there is no empty job.
+  semgrep:
+    if: ${{ vars.ENABLE_SEMGREP == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    container:
+      image: semgrep/semgrep@sha256:529ee8a277ec8adc5b534d7c74eea0a47e9de21d62852b6ba7ac6ba9566845c3 # 1.180.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Semgrep p/rust
+        continue-on-error: true # OBSERVATION MODE (DSO-17): remove this line to make the gate blocking
+        run: |
+          semgrep scan --config p/rust --metrics=off --error --json --output semgrep.json .
+          scanned=$(python3 -c "import json; print(len(json.load(open('semgrep.json'))['paths']['scanned']))")
+          echo "semgrep scanned $scanned files"
+          test "$scanned" -gt 0
+
+  build:
+    needs: [meta, lint]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Two images, each with its own multi-arch manifest, built natively on
+          # both architectures (no QEMU). A tag never mixes variants (README 7).
+          - { variant: glibc, dockerfile: Dockerfile, arch: amd64, runner: ubuntu-24.04 }
+          - { variant: glibc, dockerfile: Dockerfile, arch: arm64, runner: ubuntu-24.04-arm }
+          - { variant: musl, dockerfile: Dockerfile.musl, arch: amd64, runner: ubuntu-24.04 }
+          - { variant: musl, dockerfile: Dockerfile.musl, arch: arm64, runner: ubuntu-24.04-arm }
+    env:
+      PUSH: ${{ needs.meta.outputs.publish }}
+      IMAGE: ${{ needs.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to GHCR
+        if: needs.meta.outputs.publish == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Pull requests build and load the image to test it. Pushes to main and tags
+      # push an UNTAGGED digest: it cannot be pulled by tag, and image-security
+      # scans it before publish creates any tag.
+      - name: Build
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/${{ matrix.arch }}
+          load: ${{ needs.meta.outputs.publish != 'true' }}
+          tags: ${{ needs.meta.outputs.publish != 'true' && format('rustryx:ci-{0}', matrix.variant) || '' }}
+          outputs: ${{ needs.meta.outputs.publish == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true,rewrite-timestamp=true', needs.meta.outputs.image) || '' }}
+          # Attestations are made by the sign and provenance jobs, on the final index.
+          provenance: false
+          sbom: false
+          build-args: |
+            VERSION=${{ needs.meta.outputs.version }}
+            REVISION=${{ github.sha }}
+            CREATED=${{ needs.meta.outputs.created }}
+            SOURCE_DATE_EPOCH=${{ needs.meta.outputs.epoch }}
+          cache-from: type=gha,scope=${{ matrix.variant }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}-${{ matrix.arch }}
+      - name: Reference of the image under test
+        id: ref
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          if [ "$PUSH" = true ]; then
+            echo "ref=$IMAGE@$DIGEST" >>"$GITHUB_OUTPUT"
+            docker pull "$IMAGE@$DIGEST"
+          else
+            echo "ref=rustryx:ci-$VARIANT" >>"$GITHUB_OUTPUT"
+          fi
+      - name: Image acceptance (user, labels, no shell, read-only root, linkage)
+        env:
+          REF: ${{ steps.ref.outputs.ref }}
+          EXPECT_VERSION: ${{ needs.meta.outputs.version }}
+          EXPECT_REVISION: ${{ github.sha }}
+          IMAGE_SIZE_BUDGET_MB: ${{ vars.IMAGE_SIZE_BUDGET_MB }}
+        run: |
+          # Add --with-serve (needs a PostgreSQL URL) once `rustryx serve` exists.
+          ci/test-image.sh "$REF" "${{ matrix.variant }}"
+      - name: Debug symbols as a separate artifact (OPS-02)
+        if: needs.meta.outputs.publish == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/${{ matrix.arch }}
+          target: debug-symbols
+          outputs: type=local,dest=symbols
+          provenance: false
+          sbom: false
+          build-args: |
+            VERSION=${{ needs.meta.outputs.version }}
+            REVISION=${{ github.sha }}
+            CREATED=${{ needs.meta.outputs.created }}
+            SOURCE_DATE_EPOCH=${{ needs.meta.outputs.epoch }}
+          cache-from: type=gha,scope=${{ matrix.variant }}-${{ matrix.arch }}
+      - name: Record the digest
+        if: needs.meta.outputs.publish == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p digests
+          echo "$DIGEST" >"digests/${{ matrix.variant }}-${{ matrix.arch }}"
+      - name: Upload the digest
+        if: needs.meta.outputs.publish == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digest-${{ matrix.variant }}-${{ matrix.arch }}
+          path: digests/${{ matrix.variant }}-${{ matrix.arch }}
+          retention-days: 7
+      - name: Upload debug symbols
+        if: needs.meta.outputs.publish == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: debug-symbols-${{ matrix.variant }}-${{ matrix.arch }}
+          path: symbols/rustryx.debug
+          retention-days: 90
+
+  # Trivy on the exact digests that publish will tag. The scanner runs with
+  # --exit-code 0 and its real exit status goes to check-trivy.py, so a crashed
+  # scanner (exit 3) is never read as a clean image. CRITICAL blocks in both
+  # modes; below that, SECURITY_GATES_ENFORCE decides. No continue-on-error here:
+  # publish depends on this job, and an observation flag would let a CRITICAL
+  # image through (a job with continue-on-error reports success to `needs`).
+  image-security:
+    needs: [meta, build]
+    if: needs.meta.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { variant: glibc, arch: amd64 }
+          - { variant: glibc, arch: arm64 }
+          - { variant: musl, arch: amd64 }
+          - { variant: musl, arch: arm64 }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: trivy@0.75.0
+          fallback: none
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: digest-${{ matrix.variant }}-${{ matrix.arch }}
+          path: digests
+      - name: Trivy image scan (vulnerabilities and SBOM)
+        env:
+          IMAGE: ${{ needs.meta.outputs.image }}
+          ID: ${{ matrix.variant }}-${{ matrix.arch }}
+        run: |
+          set +e
+          ref="$IMAGE@$(cat "digests/$ID")"
+          trivy image --scanners vuln --list-all-pkgs --ignorefile ci/trivyignore.yaml \
+            --exit-code 0 --format json --output "trivy-$ID.json" "$ref"
+          scan_rc=$?
+          python3 ci/check-trivy.py --label "trivy-$ID" --scanner-exit-code "$scan_rc" --min-components 10 \
+            --enforce "$SECURITY_GATES_ENFORCE" --summary "$GITHUB_STEP_SUMMARY" "trivy-$ID.json"
+          rc=$?
+          if [ "$rc" -eq 2 ]; then rc=0; fi
+          [ "$rc" -eq 0 ] || { echo "image scan of $ref failed with $rc"; exit "$rc"; }
+          trivy image --format cyclonedx --output "sbom-$ID.cdx.json" "$ref" || exit 3
+          # The Rust crates are in the SBOM only because the binary is built with
+          # cargo-auditable; without them this check is red, not green.
+          python3 ci/check-sbom.py --min 10 --expect-purl-prefix pkg:cargo/ --summary "$GITHUB_STEP_SUMMARY" "sbom-$ID.cdx.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: image-security-${{ matrix.variant }}-${{ matrix.arch }}
+          path: |
+            trivy-*.json
+            sbom-*.cdx.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  # The only job that creates tags. Tags are X.Y.Z-<variant> (releases only) and
+  # sha-<short>-<variant>, both immutable here: an existing tag that points at a
+  # different digest fails the job. `latest` is never written, a guard enforces it.
+  publish:
+    needs: [meta, lint, test, fixtures, code-security, build, image-security]
+    if: needs.meta.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ needs.meta.outputs.image }}
+      musl_digest: ${{ steps.index.outputs.musl }}
+      glibc_digest: ${{ steps.index.outputs.glibc }}
+    steps:
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: digests
+      - name: Create the multi-arch manifests
+        id: index
+        env:
+          IMAGE: ${{ needs.meta.outputs.image }}
+          SHORT: ${{ needs.meta.outputs.short }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          RELEASE: ${{ needs.meta.outputs.release }}
+        run: |
+          set -euo pipefail
+          for variant in musl glibc; do
+            tags=("sha-${SHORT}-${variant}")
+            if [ "$RELEASE" = true ]; then tags+=("${VERSION}-${variant}"); fi
+            args=()
+            for tag in "${tags[@]}"; do
+              # Guard: the only legal shapes are sha-<7 hex>-<variant> and X.Y.Z-<variant>.
+              [[ "$tag" =~ ^(sha-[0-9a-f]{7}|[0-9]+\.[0-9]+\.[0-9]+)-(musl|glibc)$ ]] || { echo "refusing tag $tag"; exit 1; }
+              args+=(-t "$IMAGE:$tag")
+            done
+            amd64="$IMAGE@$(cat "digests/$variant-amd64")"
+            arm64="$IMAGE@$(cat "digests/$variant-arm64")"
+            # Immutability: a tag that already exists must point at exactly the two
+            # images of this run (a re-run of publish), anything else is refused.
+            # The registry cannot enforce this for GHCR, so the job does.
+            want=$(printf '%s\n%s\n' "$(cat "digests/$variant-amd64")" "$(cat "digests/$variant-arm64")" | sort)
+            for tag in "${tags[@]}"; do
+              if raw=$(docker buildx imagetools inspect "$IMAGE:$tag" --raw 2>/dev/null); then
+                have=$(jq -r '.manifests[].digest' <<<"$raw" | sort)
+                if [ "$have" != "$want" ]; then
+                  echo "::error title=immutable tag::$IMAGE:$tag already exists with different content"
+                  exit 1
+                fi
+              fi
+            done
+            docker buildx imagetools create "${args[@]}" "$amd64" "$arm64"
+            digest=$(docker buildx imagetools inspect "$IMAGE:${tags[0]}" --format '{{.Manifest.Digest}}')
+            echo "$variant=$digest" >>"$GITHUB_OUTPUT"
+            echo "- \`$IMAGE:${tags[*]}\` -> \`$digest\`" >>"$GITHUB_STEP_SUMMARY"
+          done
+
+  sign:
+    needs: [meta, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # keyless: the OIDC token Fulcio turns into a certificate; kms: the Vault JWT login
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [musl, glibc]
+    env:
+      IMAGE: ${{ needs.meta.outputs.image }}
+      # keyless | kms | both. Chosen by whoever publishes the release: the dispatch
+      # input, else the repository variable RUSTRYX_SIGNING, else keyless.
+      SIGNING: ${{ inputs.signing || vars.RUSTRYX_SIGNING || 'keyless' }}
+      # A reference, never key material: hashivault://<transit key> works with Vault
+      # and OpenBao; awskms://, gcpkms:// and azurekms:// work with the matching
+      # cloud OIDC login. Private key material in a CI variable is forbidden.
+      KMS_KEY_REF: ${{ vars.COSIGN_KMS_KEY_REF }}
+      DIGEST: ${{ matrix.variant == 'musl' && needs.publish.outputs.musl_digest || needs.publish.outputs.glibc_digest }}
+    steps:
+      - name: Signing method is valid and complete
+        run: |
+          case "$SIGNING" in keyless | kms | both) ;; *) echo "RUSTRYX_SIGNING must be keyless, kms or both, got '$SIGNING'"; exit 1 ;; esac
+          if [ "$SIGNING" != keyless ] && [ -z "$KMS_KEY_REF" ]; then
+            echo "signing '$SIGNING' needs the repository variable COSIGN_KMS_KEY_REF (hashivault://..., awskms://...)"
+            exit 1
+          fi
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cosign@3.1.3
+          fallback: none
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: image-security-${{ matrix.variant }}-amd64
+          path: sbom
+      # Short-lived Vault/OpenBao token from the GitHub OIDC identity (JWT auth
+      # method). No static token and no key material is stored anywhere in CI.
+      - name: Vault login with the workflow identity
+        if: env.SIGNING != 'keyless'
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4.0.0
+        with:
+          url: ${{ vars.VAULT_ADDR }}
+          method: jwt
+          role: ${{ vars.VAULT_JWT_ROLE }}
+          # Must be in bound_audiences of the Vault/OpenBao JWT role.
+          jwtGithubAudience: ${{ vars.VAULT_JWT_AUDIENCE || 'rustryx-release' }}
+          exportToken: true
+      - name: Sign the index, keyless
+        if: env.SIGNING == 'keyless' || env.SIGNING == 'both'
+        run: cosign sign --yes "$IMAGE@$DIGEST"
+      - name: Sign the index with the key in KMS
+        if: env.SIGNING == 'kms' || env.SIGNING == 'both'
+        env:
+          VAULT_ADDR: ${{ vars.VAULT_ADDR }}
+        run: cosign sign --yes --key "$KMS_KEY_REF" "$IMAGE@$DIGEST"
+      # The SBOM of the amd64 image describes the variant: both architectures carry
+      # the same Rust crates and the same Debian packages, only the architecture
+      # field differs. It is attached to the index so that
+      # `cosign verify-attestation image:tag` finds it.
+      - name: Attach the SBOM as an attestation, keyless
+        if: env.SIGNING == 'keyless' || env.SIGNING == 'both'
+        run: cosign attest --yes --type cyclonedx --predicate "sbom/sbom-${{ matrix.variant }}-amd64.cdx.json" "$IMAGE@$DIGEST"
+      - name: Attach the SBOM as an attestation, key in KMS
+        if: env.SIGNING == 'kms' || env.SIGNING == 'both'
+        env:
+          VAULT_ADDR: ${{ vars.VAULT_ADDR }}
+        run: cosign attest --yes --key "$KMS_KEY_REF" --type cyclonedx --predicate "sbom/sbom-${{ matrix.variant }}-amd64.cdx.json" "$IMAGE@$DIGEST"
+
+  # SLSA Build provenance from the official generator (L3 by construction, which
+  # satisfies the L2 target). A reusable workflow, called by TAG: the generator's
+  # builder identity is verified by that tag, a SHA is not accepted there.
+  provenance:
+    needs: [meta, publish]
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [musl, glibc]
+    permissions:
+      actions: read
+      id-token: write
+      packages: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v2.1.0
+    with:
+      image: ${{ needs.publish.outputs.image }}
+      digest: ${{ needs.publish.outputs[format('{0}_digest', matrix.variant)] }}
+      registry-username: ${{ github.actor }}
+    secrets:
+      registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  # Gate after signing: verification by DIGEST, with the identity the policy
+  # expects, for the signature, the SBOM attestation and the provenance.
+  verify:
+    needs: [meta, publish, sign, provenance]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [musl, glibc]
+    env:
+      IMAGE: ${{ needs.meta.outputs.image }}
+      SIGNING: ${{ inputs.signing || vars.RUSTRYX_SIGNING || 'keyless' }}
+      DIGEST: ${{ matrix.variant == 'musl' && needs.publish.outputs.musl_digest || needs.publish.outputs.glibc_digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cosign@3.1.3
+          fallback: none
+      - name: cosign verify, keyless
+        if: env.SIGNING == 'keyless' || env.SIGNING == 'both'
+        run: |
+          # The signer is THIS workflow file, on main or on a release tag.
+          identity="^https://github.com/${GITHUB_REPOSITORY}/\.github/workflows/ci\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+)$"
+          issuer=https://token.actions.githubusercontent.com
+          cosign verify "$IMAGE@$DIGEST" --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$issuer"
+          cosign verify-attestation "$IMAGE@$DIGEST" --type cyclonedx \
+            --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$issuer" >/dev/null
+      - name: cosign verify, key in KMS (public key from the repository)
+        if: env.SIGNING == 'kms' || env.SIGNING == 'both'
+        run: |
+          # ci/cosign.pub is the PUBLIC key (`cosign public-key --key <kms ref>`), safe to commit.
+          test -s ci/cosign.pub || { echo "ci/cosign.pub is missing: commit the public key of the KMS key"; exit 1; }
+          cosign verify --key ci/cosign.pub "$IMAGE@$DIGEST"
+          cosign verify-attestation --key ci/cosign.pub --type cyclonedx "$IMAGE@$DIGEST" >/dev/null
+      - name: Install slsa-verifier
+        uses: slsa-framework/slsa-verifier/actions/installer@ea584f4502babc6f60d9bc799dbbb13c1caa9ee6 # v2.7.1
+      - name: SLSA provenance
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          IS_RELEASE: ${{ needs.meta.outputs.release }}
+        run: |
+          if [ "$IS_RELEASE" = true ]; then
+            slsa-verifier verify-image "$IMAGE@$DIGEST" --source-uri "github.com/${GITHUB_REPOSITORY}" --source-tag "$REF_NAME"
+          else
+            slsa-verifier verify-image "$IMAGE@$DIGEST" --source-uri "github.com/${GITHUB_REPOSITORY}" --source-branch "$REF_NAME"
+          fi

@@ -1,0 +1,12 @@
+# cargo-nextest configuration for CI: `--config-file ci/nextest.toml --profile ci`.
+# Not in .config/nextest.toml so that local `cargo nextest run` keeps its defaults.
+[profile.ci]
+# Report every failing test of the run, not only the first.
+fail-fast = false
+# A flaky test is a bug to fix, not to retry: retries would turn red into green.
+retries = 0
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[profile.ci.junit]
+# JUnit XML for the job artifacts (OPS-22). Relative to the profile directory.
+path = "junit.xml"

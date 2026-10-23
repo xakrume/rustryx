@@ -1,0 +1,12 @@
+# Local development stack for Rustryx. The services live in services.yaml; this
+# file only loads them with the values of .env.example. Using `include` with
+# env_file is what makes a plain `docker compose up` work without copying
+# anything: interpolation in services.yaml reads the example file, so there is
+# one place for every value. Override one value for a single run through the
+# shell, for example `POSTGRES_PASSWORD=x docker compose up`.
+name: rustryx-dev
+
+include:
+  - path: services.yaml
+    env_file:
+      - .env.example

@@ -1,0 +1,257 @@
+# Services of the local Rustryx stack. Pinned by version; every password is a
+# test value from .env.example. Ports are bound to 127.0.0.1 only.
+#
+#   docker compose up -d                       backing services
+#   docker compose --profile rustryx up --build   also builds and runs rustryx
+#
+# Fixtures shared with the integration tests (README 8.6):
+#   keycloak/realm-rustryx.json   realm `rustryx`, imported with --import-realm
+#   ldap/seed.ldif                OpenLDAP users and groups
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  # One-shot: writes a throwaway CA and server certificate into ./certs, shared
+  # by Keycloak and OpenLDAP (and mounted read-only into rustryx). Nothing else
+  # may start before it, otherwise TLS files can be half written.
+  certs:
+    build: ./ldap
+    image: rustryx-dev-ldap:local
+    entrypoint: ["/usr/local/bin/gen-certs.sh"]
+    volumes:
+      - ./certs:/certs
+    restart: "no"
+
+  postgres:
+    <<: *restart
+    image: postgres:16.15-alpine3.24
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    <<: *restart
+    image: redis:7.4.11-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    # No persistence: Redis is a cache and lock backend, never a source of truth.
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --save '' --appendonly no"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Upstream MinIO no longer publishes container images to a public registry, so
+  # the last Bitnami build is pinned instead. It is frozen and unpatched: local
+  # development only. Any S3 endpoint works; replace it in a .env-free override.
+  minio:
+    <<: *restart
+    image: bitnamilegacy/minio:2025.7.23
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_DEFAULT_BUCKETS: ""
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - miniodata:/bitnami/minio/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Bucket creation job. Idempotent (--ignore-existing), so re-running up is safe.
+  minio-init:
+    image: bitnamilegacy/minio-client:2025.7.21
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MC_CONFIG_DIR: /tmp/.mc
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: ${S3_BUCKET}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        && mc mb --ignore-existing "local/$$S3_BUCKET"
+    restart: "no"
+
+  keycloak:
+    <<: *restart
+    image: quay.io/keycloak/keycloak:26.8.1
+    # start-dev: embedded H2 database and relaxed hostname checks. Local use only.
+    command: ["start-dev", "--import-realm"]
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD}
+      # The issuer in every token is this URL, whichever address the client used.
+      # Containers reach Keycloak as https://keycloak:8443 and must treat
+      # https://localhost:<KEYCLOAK_HTTPS_PORT> as the public issuer
+      # (auth.oidc.public_issuer_url).
+      KC_HOSTNAME: https://localhost:${KEYCLOAK_HTTPS_PORT}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HTTPS_CERTIFICATE_FILE: /certs/server.crt
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /certs/server.key
+      KC_HEALTH_ENABLED: "true"
+      # The management port (9000) inherits TLS from the main listener by
+      # default, and the healthcheck below speaks plain HTTP over a bash socket.
+      # The port is not published, so plain HTTP stays inside the compose network.
+      KC_HTTP_MANAGEMENT_SCHEME: http
+    # Only HTTPS is published: the issuer is an https URL, and the plain 8080
+    # listener stays inside the compose network.
+    ports:
+      - "127.0.0.1:${KEYCLOAK_HTTPS_PORT}:8443"
+    volumes:
+      - ./keycloak/realm-rustryx.json:/opt/keycloak/data/import/realm-rustryx.json:ro
+      - ./certs:/certs:ro
+    healthcheck:
+      # The image has no curl; a bash TCP socket against the management port
+      # (9000) is the documented way. The body is checked, not only the connect.
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000;
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3;
+          grep -q '"status": "UP"' <&3
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+
+  ldap:
+    <<: *restart
+    build: ./ldap
+    image: rustryx-dev-ldap:local
+    depends_on:
+      certs:
+        condition: service_completed_successfully
+    environment:
+      LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD}
+    ports:
+      - "127.0.0.1:1389:389"
+      - "127.0.0.1:1636:636"
+    volumes:
+      - ./ldap/seed.ldif:/seed/seed.ldif:ro
+      - ./certs:/certs
+    healthcheck:
+      # Healthy only after the seed is loaded: the TCP listeners start after it.
+      test: ["CMD-SHELL", "ldapwhoami -x -H ldap://localhost -D cn=admin,dc=rustryx,dc=test -w \"$$LDAP_ADMIN_PASSWORD\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  rustryx-migrate:
+    profiles: ["rustryx"]
+    build: &rustryx-build
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${RUSTRYX_BUILD_VERSION}
+        REVISION: ${RUSTRYX_BUILD_REVISION}
+        CREATED: "1970-01-01T00:00:00Z"
+    image: rustryx:dev
+    command: ["migrate"]
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      RUSTRYX_ENVIRONMENT: development
+      RUSTRYX_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    restart: "no"
+
+  rustryx:
+    profiles: ["rustryx"]
+    build: *rustryx-build
+    image: rustryx:dev
+    command: ["serve"]
+    # Same hardening the Helm chart applies (OPS-11, OPS-12): this is also the
+    # local check that the process runs on a read-only root filesystem.
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      rustryx-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+      ldap:
+        condition: service_healthy
+    environment:
+      RUSTRYX_ENVIRONMENT: development
+      RUSTRYX_SERVER_LISTEN_ADDR: 0.0.0.0:8081
+      RUSTRYX_SERVER_BASE_URL: http://localhost:8081
+      RUSTRYX_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      RUSTRYX_LOCK_BACKEND: redis
+      RUSTRYX_LOCK_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      RUSTRYX_BLOB_KIND: s3
+      RUSTRYX_BLOB_S3_ENDPOINT: http://minio:9000
+      RUSTRYX_BLOB_S3_BUCKET: ${S3_BUCKET}
+      RUSTRYX_BLOB_S3_REGION: ${S3_REGION}
+      RUSTRYX_BLOB_S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      RUSTRYX_BLOB_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      RUSTRYX_BLOB_S3_PATH_STYLE: "true"
+      RUSTRYX_AUTH_BOOTSTRAP_ADMIN_USERNAME: admin
+      RUSTRYX_AUTH_BOOTSTRAP_ADMIN_PASSWORD: ${RUSTRYX_BOOTSTRAP_ADMIN_PASSWORD}
+      RUSTRYX_AUTH_OIDC_ENABLED: "true"
+      RUSTRYX_AUTH_OIDC_ISSUER: https://keycloak:8443/realms/rustryx
+      RUSTRYX_AUTH_OIDC_PUBLIC_ISSUER_URL: https://localhost:${KEYCLOAK_HTTPS_PORT}/realms/rustryx
+      RUSTRYX_AUTH_OIDC_CLIENT_ID: rustryx-ui
+      RUSTRYX_AUTH_OIDC_CLIENT_SECRET: ${RUSTRYX_UI_CLIENT_SECRET}
+      RUSTRYX_AUTH_OIDC_ADMIN_GROUPS: /rustryx/admins
+      # The throwaway CA of the local stack, mounted instead of baked into the
+      # image (OPS-13).
+      SSL_CERT_FILE: /certs/ca.crt
+      RUSTRYX_AUTH_LDAP_ENABLED: "true"
+      RUSTRYX_AUTH_LDAP_URL: ldaps://ldap:636
+      RUSTRYX_AUTH_LDAP_CA_FILE: /certs/ca.crt
+      RUSTRYX_AUTH_LDAP_BIND_DN: uid=svc-rustryx,ou=services,dc=rustryx,dc=test
+      RUSTRYX_AUTH_LDAP_BIND_PASSWORD: ${LDAP_SERVICE_PASSWORD}
+      RUSTRYX_AUTH_LDAP_USER_BASE_DN: ou=people,dc=rustryx,dc=test
+      RUSTRYX_AUTH_LDAP_SEARCH_FILTER: (uid={username})
+      RUSTRYX_AUTH_LDAP_GROUP_STRATEGY: member_of
+      RUSTRYX_AUTH_LDAP_GROUP_ATTRIBUTE: memberOf
+      RUSTRYX_AUTH_LDAP_ADMIN_GROUPS: cn=rustryx-admins,ou=groups,dc=rustryx,dc=test
+      RUSTRYX_OBSERVABILITY_LOG_FORMAT: text
+      RUSTRYX_OBSERVABILITY_METRICS_PUBLIC: "true"
+    ports:
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - ./certs:/certs:ro
+    restart: "no"
+
+volumes:
+  pgdata:
+  miniodata:

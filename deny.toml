@@ -1,0 +1,229 @@
+# cargo-deny policy of the workspace (README 8.6). Re-run it after every change of
+# Cargo.lock, other contributors add dependencies concurrently:
+#   cargo deny check                    advisories, bans, licenses, sources
+#   python3 ci/check-exceptions.py      every exception recorded, justified, unexpired
+#   ci/tests/deny-negative.sh           this file still rejects GPL, git and openssl-sys
+# Policy, SLA and the exception process: docs/supply-chain.md.
+
+[graph]
+# Check the dependency graph of every platform, not only the host. Rustryx ships
+# for Linux x86_64 and aarch64 (glibc and musl), so a crate that only the
+# Windows or macOS build pulls in can be ignored here, but the Linux set must be
+# complete. Listing the four release targets keeps the licence and ban checks
+# on what actually ships; the CI job runs the same file.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+]
+all-features = true
+
+[output]
+feature-depth = 1
+
+[advisories]
+# The advisory database is fetched on every run (the default). CI never passes
+# --disable-fetch, so a stale database cannot hide a new RUSTSEC entry.
+db-urls = ["https://github.com/RustSec/advisory-db"]
+# Vulnerabilities are errors without configuration (cargo-deny 0.18+ removed
+# the `vulnerability` switch), so "deny vulnerabilities" is the behaviour of an
+# empty ignore list.
+#
+# Unmaintained and unsound are NOT blocking for transitive crates, as required
+# ("warn, with a reason"). cargo-deny 0.20 has no `warn` level for these two:
+# `all` makes every transitive notice an error, `workspace` fails only a crate
+# that a Rustryx crate depends on DIRECTLY (we chose it, so we can swap it) and
+# stays completely silent about transitive ones. We take `workspace` and get the
+# visible warning from `cargo audit`, which reports the same RUSTSEC notices as
+# warnings; ci/audit-gate.py prints them in the job summary and the nightly run
+# repeats them. The SLA for acting on them is in docs/supply-chain.md. Never set
+# `none`: a direct unmaintained dependency would stop failing.
+unmaintained = "workspace"
+unsound = "workspace"
+# A yanked release is withdrawn by its author, usually for a defect. Locked
+# builds make it a real risk, so it fails.
+yanked = "deny"
+# An ignore that no longer matches anything is dead weight that hides the day
+# the exception stopped being needed. Fail so it is removed.
+unused-ignored-advisory = "deny"
+# cargo-deny 0.20 has no native expiry for an ignore (the `expiry` and `allow`
+# keys exist only on the main branch), so the date lives in the `reason` and
+# ci/check-exceptions.py fails the build when it is in the past. Do not rely on
+# cargo-deny alone for expiry.
+ignore = [
+    # Exception record format (enforced by ci/check-exceptions.py):
+    #   reason = "issue=<url or key>; until=YYYY-MM-DD; <why this is acceptable>"
+    # and the same id must appear in .cargo/audit.toml.
+    { id = "RUSTSEC-2023-0071", reason = "issue=RUSTRYX-SEC-0001; until=2027-01-22; Marvin attack is a timing leak of RSA PRIVATE key operations (decrypt, PKCS#1 v1.5 sign). Rustryx only VERIFIES RS256 signatures with public keys from the issuer JWKS and never signs or decrypts with an RSA key (the internal session JWT is EdDSA, README 8.3). Only jsonwebtoken and openidconnect may pull in `rsa`; a third dependent is a new exposure and needs its own record. There is no patched release, so the fix is to drop `rsa` when either crate moves off it. Re-evaluate on every upgrade of either crate." },
+]
+
+[licenses]
+# Allowlist, exactly as required by README 8.6. A crate whose SPDX expression
+# offers an allowed alternative (for example "MIT OR 0BSD") passes through that
+# alternative, so the list stays this short. Anything else needs a per-crate
+# entry in `exceptions` below, with a reason; do not widen this list.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    # MPL-2.0 is file-level copyleft: it is acceptable only while the MPL files
+    # are used UNMODIFIED as a dependency. A patched copy or a vendored fork of
+    # an MPL crate would oblige Rustryx to publish those files under MPL-2.0, so
+    # such a change needs a maintainer decision first. `[patch]` entries and
+    # vendoring are also blocked by the `sources` section below.
+    "MPL-2.0",
+]
+# GPL, LGPL and AGPL are never in the list above, so cargo-deny rejects a crate
+# whose expression offers only those. ci/check-exceptions.py additionally fails
+# if `exceptions` below ever allows one of them, because an exception is the one
+# place a copyleft licence could slip in without touching the allowlist.
+confidence-threshold = 0.9
+# The allowlist is normative (README 8.6) and stays exact even when a licence in
+# it is not used by the current lockfile (MPL-2.0, Unicode-DFS-2016 today), so an
+# unused entry is not a finding.
+unused-allowed-license = "allow"
+# A stale per-crate exception means the crate was dropped or relicensed; remove
+# the entry so it cannot be reused for a different crate version later.
+unused-license-exception = "deny"
+
+# Per-crate exceptions, each with the reason it is acceptable. Format enforced
+# by ci/check-exceptions.py: a comment line "# exception <crate>: <reason>"
+# directly above the entry.
+exceptions = [
+    # exception webpki-roots: CDLA-Permissive-2.0 is the permissive data licence
+    # of the Mozilla CA root list. Attribution only, no copyleft, so it does not
+    # restrict distributing Rustryx under MIT. It is not code, which is why it is
+    # not added to the global allowlist.
+    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots" },
+]
+
+[licenses.private]
+# Workspace crates are MIT (workspace.package.license) and are checked like any
+# other crate; `publish = false` does not exempt them.
+ignore = false
+
+# ring and aws-lc-sys: older releases shipped a licence expression cargo-deny
+# cannot evaluate (a LicenseRef for ring, an OpenSSL licence in aws-lc), which
+# is why README 8.6 asks for a clarification. The entries below describe the
+# licence files of the CURRENT locked releases (ring 0.17.14, aws-lc-sys 0.46.0)
+# and are pinned to the xxh32 hash of those files. cargo-deny applies a
+# clarification only while the hash matches; after a version bump with different
+# licence text it silently falls back to the manifest expression, which must then
+# pass the allowlist on its own. That is the intended failure mode: a changed
+# licence text is re-examined by a human instead of being trusted by hash.
+# The hash is not a CRC32 of the file; `ci/licence-hash.py <file>` prints the
+# value cargo-deny computes (line endings normalised, XXH32 seed 0).
+[[licenses.clarify]]
+crate = "ring"
+# LICENSE names ISC for new code, Apache-2.0 for the BoringSSL parts and MIT for
+# the vendored once_cell polyfill.
+expression = "Apache-2.0 AND ISC AND MIT"
+license-files = [{ path = "LICENSE", hash = 0x0d99693a }]
+
+[[licenses.clarify]]
+crate = "aws-lc-sys"
+# 0.46.0 states Apache-2.0, ISC, MIT and BSD-3-Clause for the bundled code and
+# the OpenSSL-derived files are relicensed to Apache-2.0 in this LICENSE. An
+# older aws-lc-sys with the original OpenSSL licence text has a different hash
+# and is therefore not clarified, and is rejected.
+expression = "Apache-2.0 AND ISC AND MIT AND BSD-3-Clause"
+license-files = [{ path = "LICENSE", hash = 0x6cb0b0bb }]
+
+[bans]
+# Duplicates are a warning with an explicit, documented skip list. Failing on
+# every duplicate would block unrelated PRs on upstream release timing; warning
+# without a list would make the report unreadable. A new duplicate shows up as a
+# warning that is not in `skip`, and the code-security job prints warnings.
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace members refer to each other by path without a version; that is a
+# wildcard to cargo-deny. Allowed for path dependencies only, a `*` requirement
+# on a registry crate is still an error.
+allow-wildcard-paths = true
+highlight = "all"
+
+deny = [
+    # TLS is rustls (CONTRIBUTING.md, OPS-04). A static musl build must not
+    # depend on the libssl of the image.
+    { crate = "openssl", reason = "TLS is rustls; system OpenSSL breaks the static musl image and the distroless runtime has no libssl" },
+    { crate = "openssl-sys", reason = "TLS is rustls; system OpenSSL breaks the static musl image and the distroless runtime has no libssl" },
+    { crate = "native-tls", reason = "native-tls pulls openssl on Linux; use rustls through reqwest feature `rustls`" },
+]
+
+# Duplicates we cannot remove from this repository, grouped by the dependency
+# that forces them. Every entry names the LAGGING version and its reason; the
+# newer version stays visible, so a third copy still warns. Remove an entry when
+# the upstream moves, cargo-deny then warns that the skip is unmatched.
+#
+# Root cause 1: openidconnect 4.0.1 / oauth2 5.0.0 are built on reqwest 0.12,
+# thiserror 1 and base64 0.21/0.22, while the workspace pins reqwest 0.13 and
+# thiserror 2. README 8.3 mandates `openidconnect`, so the old generation stays
+# until openidconnect releases on reqwest 0.13.
+#
+# Root cause 2: jsonwebtoken 11 with the `rust_crypto` backend (chosen to avoid
+# openssl, OPS-04) and openidconnect pull the 2023/2024 RustCrypto generation
+# (digest 0.10, sha2 0.10, hmac 0.12, rsa 0.9, p256 0.13, rand 0.8), while
+# sqlx 0.9 and the workspace crates use the 2025 generation (digest 0.11,
+# sha2 0.11, rand 0.10). The two generations cannot be unified from here
+# because the traits (`Digest`, `RngCore`) are different crates.
+#
+# Root cause 3: the syn 2 to syn 3 transition. serde_derive, thiserror 2 and
+# tokio-macros are on syn 3, sqlx-macros, prost-derive, pin-project and the x509
+# derive crates are still on syn 2. Proc macros are build-time only and are not
+# linked into the binary.
+#
+# Root cause 4: the observability stack. metrics-util and opentelemetry_sdk use
+# rand 0.9, while the workspace uses rand 0.10; reqwest pins tower-http 0.6; dashmap
+# 6 pins hashbrown 0.14.
+skip = [
+    # Root cause 1.
+    { crate = "reqwest@0.12", reason = "only via oauth2 5.0.0 / openidconnect 4.0.1; workspace uses reqwest 0.13" },
+    { crate = "thiserror@1", reason = "only via oauth2 5.0.0 / openidconnect 4.0.1; workspace uses thiserror 2" },
+    { crate = "thiserror-impl@1", reason = "proc macro of thiserror 1, see thiserror@1" },
+    { crate = "base64@0.21", reason = "only via openidconnect 4.0.1" },
+    { crate = "base64@0.22", reason = "via sqlx 0.9, jsonwebtoken 11, oauth2 5, reqwest 0.12, pem and the testcontainers stack; workspace uses base64 0.23" },
+    # Root cause 2.
+    { crate = "digest@0.10", reason = "RustCrypto 2023 generation via sha2 0.10, hmac 0.12, rsa 0.9, p256 0.13 (jsonwebtoken, openidconnect, sqlx-core)" },
+    { crate = "crypto-common@0.1", reason = "dependency of digest 0.10" },
+    { crate = "block-buffer@0.10", reason = "dependency of digest 0.10" },
+    { crate = "const-oid@0.9", reason = "dependency of der 0.7, digest 0.10 and rsa 0.9" },
+    { crate = "cpufeatures@0.2", reason = "dependency of sha2 0.10 and curve25519-dalek 4" },
+    { crate = "sha2@0.10", reason = "via jsonwebtoken 11, openidconnect 4, oauth2 5 and sqlx-core; workspace uses sha2 0.11" },
+    { crate = "hmac@0.12", reason = "via jsonwebtoken 11, openidconnect 4 and rfc6979/hkdf 0.12" },
+    { crate = "hkdf@0.12", reason = "via elliptic-curve 0.13 (p256, p384)" },
+    { crate = "rand@0.8", reason = "via jsonwebtoken 11, openidconnect 4, oauth2 5 and num-bigint-dig (rsa); workspace uses rand 0.10" },
+    { crate = "rand_core@0.6", reason = "via rand 0.8 and the RustCrypto 2023 generation (rsa, elliptic-curve, signature)" },
+    { crate = "getrandom@0.2", reason = "via rand_core 0.6, ring 0.17, jsonwebtoken 11 and oauth2 5" },
+    # Unrelated to the two roots above.
+    { crate = "hashbrown@0.16", reason = "via hashlink 0.11 inside sqlx-core 0.9; the rest of the tree is on 0.17" },
+    # Root cause 4 and small leftovers.
+    { crate = "rand@0.9", reason = "via metrics-util 0.20 and opentelemetry_sdk 0.33; workspace uses rand 0.10" },
+    { crate = "rand_core@0.9", reason = "via rand 0.9 and rand_chacha 0.9, rand_xoshiro 0.7" },
+    { crate = "rand_chacha@0.3", reason = "via rand 0.8 (jsonwebtoken, openidconnect)" },
+    { crate = "getrandom@0.3", reason = "via rand_core 0.9" },
+    { crate = "hashbrown@0.14", reason = "via dashmap 6; the rest of the tree is on 0.17" },
+    { crate = "itertools@0.10", reason = "only via openidconnect 4" },
+    { crate = "itertools@0.14", reason = "via prost-derive 0.14 (build time) and testcontainers (dev dependency)" },
+    { crate = "spin@0.9", reason = "via lazy_static 1.5; others are on 0.10" },
+    { crate = "tower-http@0.6", reason = "pinned by reqwest 0.12 and 0.13; the axum stack uses 0.7" },
+    # Root cause 3.
+    { crate = "syn@2", reason = "build-time proc macros not yet on syn 3 (sqlx-macros, prost-derive, pin-project, asn1-rs-derive)" },
+    { crate = "synstructure@0.13", reason = "build-time only, via asn1-rs-derive; zerofrom and yoke use 0.14" },
+]
+
+
+[sources]
+# Only crates.io. Git dependencies bypass the lockfile checksum and the
+# advisory database (RustSec matches registry crates only), so they are denied
+# outright; an approved git dependency needs a maintainer decision and an
+# `allow-git` entry with a commit pin and a reason.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

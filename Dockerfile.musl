@@ -1,0 +1,94 @@
+# Rustryx image, static musl variant: Alpine builder, gcr.io/distroless/static
+# runtime. The glibc variant is Dockerfile; the two are published as separate
+# images with separate tags and never share a tag (README 7, OPS-03).
+#
+# Build:
+#   docker build -f Dockerfile.musl \
+#     --build-arg VERSION=1.2.3 --build-arg REVISION=$(git rev-parse HEAD) \
+#     --build-arg CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ) -t rustryx:1.2.3-musl .
+# Debug symbols (separate artifact for core dump analysis, OPS-02):
+#   docker build -f Dockerfile.musl --target debug-symbols --output type=local,dest=out .
+#
+# Every FROM is pinned by digest (OPS-01, DSO-18); see Dockerfile for the rules.
+
+FROM rust:1.99.0-alpine3.24@sha256:0cce0a5e0e8ba67b455257a3a02a1d99005f382748789d6464460028810f1627 AS builder
+
+# build-base: gcc, g++, make, musl-dev and binutils (objcopy, strip). aws-lc-sys,
+# pulled in by rustls, compiles C and needs them. Without cmake and perl the
+# cc-based build of aws-lc-sys still works; if that ever changes, the build fails
+# here with a clear message rather than at runtime.
+# The alpine tag is fixed, so the package index it resolves against does not
+# move; pinning each package would only break when that index is refreshed.
+# hadolint ignore=DL3018
+RUN apk add --no-cache build-base
+
+ENV RUSTUP_TOOLCHAIN=1.99.0
+# See Dockerfile: no absolute build paths in the binary (OPS-80).
+ENV RUSTFLAGS="--remap-path-prefix=/src=/rustryx --remap-path-prefix=/usr/local/cargo=/cargo"
+
+# cargo-auditable writes the dependency list of the build into the binary (a
+# linker section). Without it a scanner sees nothing of the Rust crates inside
+# the image: Trivy reports only the handful of OS packages and the scan is green
+# while checking none of the code we ship (DSO-00, OPS-25). It wraps cargo, so the
+# build is still `cargo build --locked --release`.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    cargo install --locked --version 0.7.7 cargo-auditable
+
+WORKDIR /src
+COPY . .
+
+# musl targets link statically by default (crt-static). The last two commands are
+# the negative requirement "no dynamic loader": a program header of type INTERP
+# means a dynamic executable, and the build fails on it. OPS-03 asks for "not a
+# dynamic executable"; this is the same fact checked at build time on both
+# architectures.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/src/target,sharing=locked \
+    set -eu; \
+    CARGO_PROFILE_RELEASE_STRIP=none CARGO_PROFILE_RELEASE_DEBUG=line-tables-only \
+      cargo auditable build --locked --release -p rustryx-server; \
+    test -x target/release/rustryx || { echo "no target/release/rustryx: crates/rustryx-server needs [[bin]] name = \"rustryx\"" >&2; exit 1; }; \
+    mkdir -p /out/data; \
+    cp target/release/rustryx /out/rustryx.full; \
+    objcopy --only-keep-debug /out/rustryx.full /out/rustryx.debug; \
+    strip --strip-all -o /out/rustryx /out/rustryx.full; \
+    objcopy --add-gnu-debuglink=/out/rustryx.debug /out/rustryx; \
+    rm /out/rustryx.full; \
+    readelf -lW /out/rustryx > /tmp/program-headers; \
+    if grep -q INTERP /tmp/program-headers; then echo "rustryx is dynamically linked, the musl image must be static" >&2; exit 1; fi
+
+FROM scratch AS debug-symbols
+COPY --from=builder /out/rustryx.debug /rustryx.debug
+
+# distroless/static: CA certificates, tzdata, /etc/passwd, nothing else. No libc,
+# which is the point of the static binary (OPS-10).
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:d62067879de890a1def9da0e7766b7d20810a5e5555cef8506b752437d7a3e88 AS runtime
+
+# Provided by CI, deliberately WITHOUT defaults: an image built without them gets
+# empty labels and ci/check-image-labels.sh fails (OPS-15).
+ARG VERSION
+ARG REVISION
+ARG CREATED
+ARG SOURCE=https://github.com/rustryx/rustryx
+
+LABEL org.opencontainers.image.title="rustryx" \
+      org.opencontainers.image.description="Rustryx artifact manager (static musl, distroless/static)" \
+      org.opencontainers.image.source="${SOURCE}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.created="${CREATED}" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.vendor="Rustryx project"
+
+COPY LICENSE /licenses/rustryx/LICENSE
+COPY --from=builder /out/rustryx /usr/local/bin/rustryx
+# See Dockerfile: the data directory is created in the builder because this
+# image has no shell, and it is the only writable place besides /tmp.
+COPY --from=builder --chown=10001:10001 /out/data /var/lib/rustryx
+
+USER 10001:10001
+WORKDIR /var/lib/rustryx
+EXPOSE 8081
+# No HEALTHCHECK on purpose: probes belong to Kubernetes (OPS-14).
+ENTRYPOINT ["/usr/local/bin/rustryx"]
+CMD ["serve"]

@@ -1,0 +1,56 @@
+# slapd.conf for the Rustryx LDAP test fixture. The legacy file format is used
+# on purpose: it is one reviewable file, and the memberOf overlay is configured
+# in a few lines. @ROOTPW@ is replaced by entrypoint.sh with an SSHA hash.
+include /etc/openldap/schema/core.schema
+include /etc/openldap/schema/cosine.schema
+include /etc/openldap/schema/inetorgperson.schema
+
+pidfile  /run/openldap/slapd.pid
+argsfile /run/openldap/slapd.args
+
+modulepath /usr/lib/openldap
+moduleload back_mdb.so
+moduleload memberof.so
+
+# TLS for ldaps:// and StartTLS. Certificates come from gen-certs.sh.
+TLSCACertificateFile    /certs/ca.crt
+TLSCertificateFile      /certs/server.crt
+TLSCertificateKeyFile   /certs/server.key
+TLSVerifyClient         never
+
+# No anonymous bind and no anonymous reads. An empty-password bind with a DN
+# (RFC 4513 "unauthenticated bind") is refused by default since 2.4 and is
+# checked by ci/verify-fixtures.sh.
+disallow bind_anon
+require  authc
+
+database mdb
+maxsize  268435456
+suffix   "dc=rustryx,dc=test"
+rootdn   "cn=admin,dc=rustryx,dc=test"
+rootpw   @ROOTPW@
+directory /var/lib/openldap/openldap-data
+index objectClass eq
+index uid,cn eq
+index member,memberOf eq
+
+# memberOf is maintained by the server for DIRECT membership only. Nesting is
+# the client's job (auth.ldap.nested_group_depth); a deliberate cycle is part of
+# the seed to prove the traversal terminates. Adding a group whose member does
+# not exist yet leaves that member without memberOf, which is why seed.ldif
+# creates the cycle in a second step.
+overlay memberof
+memberof-group-oc   groupOfNames
+memberof-member-ad  member
+memberof-memberof-ad memberOf
+
+# rootdn is exempt from ACLs, so it is not listed here.
+access to attrs=userPassword
+    by anonymous auth
+    by self write
+    by * none
+
+access to *
+    by dn.exact="uid=svc-rustryx,ou=services,dc=rustryx,dc=test" read
+    by self read
+    by * none

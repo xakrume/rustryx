@@ -1,0 +1,536 @@
+# GitLab CI option of the Rustryx pipeline. GitHub Actions (.github/workflows/ci.yml)
+# is the primary CI; this file has the same stages and the same gates, built from
+# the same scripts in ci/. Reading guide: docs/ci-and-release.md.
+#
+# Rules this file follows, each for a reason:
+#  - GitLab validates a job's `stage` BEFORE it evaluates `rules`, so every stage
+#    that any job uses is in `stages`. ci/check-gitlab-ci.py enforces it, and the
+#    merged YAML can be checked on the server with
+#    POST /projects/:id/ci/lint?include_merged_yaml=true.
+#  - Every gate that is not blocking yet carries `allow_failure: true` on the line
+#    marked OBSERVATION MODE (DSO-17). Removing the line makes the gate blocking.
+#  - Nothing reaches a registry tag before image-security passed: build pushes
+#    untagged digests, publish is the only job that creates tags.
+#  - Job names carry no environment suffix: there is one pipeline, not one per zone.
+
+stages:
+  - lint
+  - test
+  - code-security
+  - build
+  - image-security
+  - publish
+  - sign
+  - verify
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+
+variables:
+  # Same digests as the Dockerfiles; ci/check-toolchain-pin.sh keeps them equal.
+  RUST_IMAGE: rust:1.99.0-trixie@sha256:81015672d6939b0265f09adf96d5de125482bb1330106076956b0518e74edc90
+  TOOLS_IMAGE: alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
+  DOCKER_CLI_IMAGE: docker:29.7-cli@sha256:3f4743208d2338c934d7b8bcfbe1bb54c0b2355c510ad5e0f31c0c4a54bd704e
+  DOCKER_DIND_IMAGE: docker:29.7-dind@sha256:3ef33f2e220b79ed3ef3b99d81746f06f306cd6340e2cb7331d17ae996e74cb6
+  CARGO_HOME: $CI_PROJECT_DIR/.cargo-home
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # Findings below CRITICAL: "false" warns, "true" blocks HIGH and above. CRITICAL
+  # blocks in both modes. Change it in a merge request of its own.
+  SECURITY_GATES_ENFORCE: "false"
+  # keyless | kms | both: chosen by whoever publishes the release. Override as a
+  # CI/CD variable (never a key, only the mode and a KMS reference).
+  RUSTRYX_SIGNING: keyless
+  # Release or default-branch pipelines publish; merge requests only build.
+  PUBLISH: "false"
+  # Runner tag of the shell executor that runs the fixtures job.
+  FIXTURES_RUNNER_TAG: docker-shell
+
+.publishing: &publishing
+  - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+
+.rust-cache: &rust-cache
+  key:
+    files: [Cargo.lock]
+    prefix: rust-amd64
+  paths:
+    - .cargo-home/registry
+    - .cargo-home/bin
+    - target/
+  policy: pull-push
+
+# ---------------------------------------------------------------- lint
+lint:
+  stage: lint
+  image: $RUST_IMAGE
+  interruptible: true
+  cache: *rust-cache
+  script:
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then ci/release-check.sh "$CI_COMMIT_TAG"; fi
+    - rustup toolchain install --profile minimal
+    - cargo fmt --all -- --check
+    - cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends shellcheck python3-venv >/dev/null
+    - ci/install-tool.sh hadolint
+    - ci/install-tool.sh actionlint
+    - hadolint Dockerfile Dockerfile.musl deploy/compose/ldap/Dockerfile
+    - python3 -m venv /tmp/lint-venv
+    - /tmp/lint-venv/bin/pip install --quiet --require-hashes --no-deps -r ci/requirements-lint.txt
+    - /tmp/lint-venv/bin/yamllint -c ci/yamllint.yml --strict .github deploy/compose ci .gitlab-ci.yml
+    - /tmp/lint-venv/bin/python ci/check-gitlab-ci.py .gitlab-ci.yml
+    - actionlint
+    - shellcheck ci/*.sh ci/tests/*.sh deploy/compose/ldap/*.sh
+    - python3 -I -m unittest discover -s ci/tests -v
+    - ci/check-toolchain-pin.sh
+
+# ---------------------------------------------------------------- test
+# Integration tests start their dependencies with testcontainers, so the job needs
+# a Docker daemon: docker-in-docker. RUSTRYX_IT=1 makes them required.
+test:
+  stage: test
+  image: $RUST_IMAGE
+  interruptible: true
+  cache: *rust-cache
+  services:
+    - name: $DOCKER_DIND_IMAGE
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: /certs
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: /certs/client
+    # testcontainers publishes ports on the dind host, which is `docker`, not localhost.
+    TESTCONTAINERS_HOST_OVERRIDE: docker
+    RUSTRYX_IT: "1"
+  script:
+    - rustup toolchain install --profile minimal
+    - cargo install --locked --version 0.9.148 cargo-nextest
+    - cargo install --locked --version 0.9.1 cargo-llvm-cov
+    - |
+      cargo llvm-cov nextest --workspace --all-features --locked \
+        --config-file ci/nextest.toml --profile ci --no-report
+    - cargo test --doc --workspace --all-features --locked
+    - |
+      ignore='(/tests/|/benches/|/rustryx-testkit/)'
+      cargo llvm-cov report --ignore-filename-regex "$ignore" --cobertura --output-path cobertura.xml
+      cargo llvm-cov report --ignore-filename-regex "$ignore" --json --summary-only --output-path coverage-summary.json
+      find target -path '*nextest*' -name junit.xml -exec cp {} junit.xml \; -quit
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths: [coverage-summary.json, cobertura.xml, junit.xml]
+    reports:
+      junit: junit.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: cobertura.xml
+
+coverage-gate:
+  stage: test
+  image: $TOOLS_IMAGE
+  needs: [test]
+  before_script:
+    - apk add --no-cache python3
+  script:
+    - python3 ci/coverage-gate.py --save-summary coverage-current.json coverage-summary.json
+  coverage: '/workspace line coverage ([0-9.]+)%/'
+  allow_failure: true # OBSERVATION MODE (DSO-17): remove this line to make the coverage gate blocking
+  artifacts:
+    expire_in: 30 days
+    paths: [coverage-current.json]
+
+# Boots Keycloak and OpenLDAP with docker compose and queries them on localhost, so
+# it needs a runner whose Docker daemon publishes ports on the job's own localhost:
+# a shell executor with docker compose, python3 and curl. Docker-in-docker does not
+# fit (its ports are on the `docker` host). The tag is a CI/CD variable.
+fixtures:
+  stage: test
+  interruptible: true
+  tags: [$FIXTURES_RUNNER_TAG]
+  script:
+    - ci/verify-fixtures.sh
+
+# ---------------------------------------------------------------- code-security
+.code-security:
+  stage: code-security
+  image: $RUST_IMAGE
+  cache: *rust-cache
+  before_script:
+    - rustup toolchain install --profile minimal
+
+cargo-audit:
+  extends: .code-security
+  script:
+    - cargo install --locked --version 0.22.2 cargo-audit
+    - |
+      set +e
+      cargo audit --json >audit.json 2>audit.err
+      python3 ci/audit-gate.py --fail-on high audit.json
+  allow_failure: true # OBSERVATION MODE (DSO-17): remove this line to make the gate blocking
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths: [audit.json]
+
+cargo-deny:
+  extends: .code-security
+  script:
+    - cargo install --locked --version 0.20.2 cargo-deny
+    - cargo deny check
+    - python3 ci/check-exceptions.py
+    - ci/tests/deny-negative.sh
+  allow_failure: true # OBSERVATION MODE (DSO-17): remove this line to make the gate blocking
+
+secret-detection:
+  extends: .code-security
+  variables:
+    GIT_DEPTH: "0"
+  script:
+    - ci/install-tool.sh gitleaks
+    - |
+      set +e
+      rc=0
+      for mode in git dir; do
+        gitleaks "$mode" --config ci/gitleaks.toml --redact --no-banner \
+          --report-format json --report-path "gitleaks-$mode.json" . 2>&1 | tee "gitleaks-$mode.log"
+        [ "${PIPESTATUS[0]}" -eq 0 ] || rc=1
+        bytes=$(sed -n 's/.*scanned ~\([0-9][0-9]*\) bytes.*/\1/p' "gitleaks-$mode.log" | tail -n 1)
+        if [ -z "$bytes" ] || [ "$bytes" -eq 0 ]; then echo "gitleaks $mode scanned nothing"; rc=1; fi
+      done
+      exit "$rc"
+  allow_failure: true # OBSERVATION MODE (DSO-17): remove this line to make the gate blocking
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths: [gitleaks-*.json]
+
+dependency-scan:
+  extends: .code-security
+  script:
+    - ci/install-tool.sh trivy
+    - |
+      set +e
+      trivy fs --scanners vuln --list-all-pkgs --skip-dirs target --skip-dirs .cargo-home \
+        --ignorefile ci/trivyignore.yaml --exit-code 0 --format json --output trivy-fs.json .
+      scan_rc=$?
+      python3 ci/check-trivy.py --label trivy-fs --scanner-exit-code "$scan_rc" --min-components 50 \
+        --enforce "$SECURITY_GATES_ENFORCE" trivy-fs.json
+      rc=$?
+      if [ "$rc" -eq 2 ]; then rc=0; fi
+      exit "$rc"
+  allow_failure: true # OBSERVATION MODE (DSO-17): remove this line to make the gate blocking
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths: [trivy-fs.json]
+
+sbom:
+  extends: .code-security
+  script:
+    - cargo install --locked --version 0.5.9 cargo-cyclonedx
+    - cargo cyclonedx --format json --spec-version 1.5 --describe binaries --target all
+    - sbom=$(find crates -name '*_bin.cdx.json' | head -n 1)
+    - test -n "$sbom"
+    - cp "$sbom" sbom-cargo.cdx.json
+    - python3 ci/check-sbom.py --min 20 --expect-purl-prefix pkg:cargo/ sbom-cargo.cdx.json
+  allow_failure: true # OBSERVATION MODE (DSO-17): remove this line to make the gate blocking
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths: [sbom-cargo.cdx.json]
+
+# ---------------------------------------------------------------- build
+# Two images (glibc and musl), each natively on amd64 and arm64: four jobs. The
+# arm64 runner tag is the one of GitLab SaaS; self-managed instances set their own
+# in the RUNNER_ARM64 CI/CD variable.
+.build:
+  stage: build
+  image: $DOCKER_CLI_IMAGE
+  services:
+    - name: $DOCKER_DIND_IMAGE
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: /certs
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: /certs/client
+  before_script:
+    - apk add --no-cache bash curl file jq git
+    - docker buildx create --use --name ci --driver docker-container >/dev/null
+  script:
+    - |
+      set -eu
+      dockerfile=Dockerfile; [ "$VARIANT" = musl ] && dockerfile=Dockerfile.musl
+      short=$(printf '%.7s' "$CI_COMMIT_SHA")
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then version=${CI_COMMIT_TAG#v}; else version="$(ci/workspace-version.sh)-dev.${short}"; fi
+      created=$(git show -s --format=%cI HEAD)
+      epoch=$(git show -s --format=%ct HEAD)
+      image=$CI_REGISTRY_IMAGE
+      args="--file $dockerfile --platform linux/$ARCH --provenance=false --sbom=false \
+        --build-arg VERSION=$version --build-arg REVISION=$CI_COMMIT_SHA --build-arg CREATED=$created \
+        --build-arg SOURCE_DATE_EPOCH=$epoch \
+        --cache-from type=registry,ref=$image/cache:$VARIANT-$ARCH"
+      if [ "$PUBLISH" = true ]; then
+        echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+        # shellcheck disable=SC2086
+        docker buildx build $args --cache-to "type=registry,ref=$image/cache:$VARIANT-$ARCH,mode=max" \
+          --output "type=image,name=$image,push-by-digest=true,name-canonical=true,push=true,rewrite-timestamp=true" \
+          --metadata-file meta.json .
+        digest=$(jq -r '."containerimage.digest"' meta.json)
+        mkdir -p digests
+        echo "$digest" >"digests/$VARIANT-$ARCH"
+        docker pull "$image@$digest"
+        ref="$image@$digest"
+        # shellcheck disable=SC2086
+        docker buildx build $args --target debug-symbols --output type=local,dest=symbols .
+      else
+        # shellcheck disable=SC2086
+        docker buildx build $args --load -t "rustryx:ci-$VARIANT" .
+        ref="rustryx:ci-$VARIANT"
+      fi
+      EXPECT_VERSION=$version EXPECT_REVISION=$CI_COMMIT_SHA IMAGE_SIZE_BUDGET_MB=${IMAGE_SIZE_BUDGET_MB:-} \
+        ci/test-image.sh "$ref" "$VARIANT"
+  artifacts:
+    expire_in: 90 days
+    paths:
+      - digests/
+      - symbols/rustryx.debug
+    when: on_success
+
+build-amd64:
+  extends: .build
+  parallel:
+    matrix:
+      - VARIANT: [glibc, musl]
+        ARCH: amd64
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      variables: { PUBLISH: "false" }
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      variables: { PUBLISH: "true" }
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+      variables: { PUBLISH: "true" }
+
+build-arm64:
+  extends: .build
+  tags: [saas-linux-medium-arm64]
+  parallel:
+    matrix:
+      - VARIANT: [glibc, musl]
+        ARCH: arm64
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      variables: { PUBLISH: "false" }
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      variables: { PUBLISH: "true" }
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+      variables: { PUBLISH: "true" }
+
+# ---------------------------------------------------------------- image-security
+# Trivy on the exact digests publish will tag. The scanner runs with --exit-code 0
+# and its real exit status goes to check-trivy.py, so a crashed scanner (exit 3) is
+# never read as a clean image. CRITICAL blocks in both modes: no allow_failure here.
+image-security:
+  stage: image-security
+  image: $TOOLS_IMAGE
+  rules: *publishing
+  needs:
+    - job: build-amd64
+      artifacts: true
+    - job: build-arm64
+      artifacts: true
+  before_script:
+    - apk add --no-cache bash curl python3 tar coreutils
+    - ci/install-tool.sh trivy
+  script:
+    - |
+      set +e
+      status=0
+      export TRIVY_USERNAME=$CI_REGISTRY_USER TRIVY_PASSWORD=$CI_REGISTRY_PASSWORD
+      for id in glibc-amd64 glibc-arm64 musl-amd64 musl-arm64; do
+        ref="$CI_REGISTRY_IMAGE@$(cat "digests/$id")"
+        trivy image --scanners vuln --list-all-pkgs --ignorefile ci/trivyignore.yaml \
+          --exit-code 0 --format json --output "trivy-$id.json" "$ref"
+        scan_rc=$?
+        python3 ci/check-trivy.py --label "trivy-$id" --scanner-exit-code "$scan_rc" --min-components 10 \
+          --enforce "$SECURITY_GATES_ENFORCE" "trivy-$id.json"
+        rc=$?
+        if [ "$rc" -eq 2 ]; then rc=0; fi
+        [ "$rc" -eq 0 ] || { echo "image scan of $ref failed with $rc"; status=$rc; }
+        trivy image --format cyclonedx --output "sbom-$id.cdx.json" "$ref" || status=3
+        python3 ci/check-sbom.py --min 10 --expect-purl-prefix pkg:cargo/ "sbom-$id.cdx.json" || status=3
+      done
+      exit "$status"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths: [trivy-*.json, sbom-*.cdx.json]
+
+# ---------------------------------------------------------------- publish
+# The only job that creates tags: X.Y.Z-<variant> (releases only) and
+# sha-<short>-<variant>. An existing tag pointing elsewhere fails the job, and a
+# guard refuses any other tag shape, `latest` included.
+publish:
+  stage: publish
+  image: $DOCKER_CLI_IMAGE
+  rules: *publishing
+  needs:
+    - job: lint
+    - job: test
+    - job: fixtures
+    - job: cargo-deny
+    - job: image-security
+    - job: build-amd64
+      artifacts: true
+    - job: build-arm64
+      artifacts: true
+  services:
+    - name: $DOCKER_DIND_IMAGE
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: /certs
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: /certs/client
+  before_script:
+    - apk add --no-cache bash
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    - |
+      set -eu
+      short=$(printf '%.7s' "$CI_COMMIT_SHA")
+      image=$CI_REGISTRY_IMAGE
+      : >index-digests.env
+      for variant in musl glibc; do
+        tags="sha-${short}-${variant}"
+        if [ -n "${CI_COMMIT_TAG:-}" ]; then tags="$tags ${CI_COMMIT_TAG#v}-${variant}"; fi
+        set --
+        for tag in $tags; do
+          echo "$tag" | grep -Eq '^(sha-[0-9a-f]{7}|[0-9]+\.[0-9]+\.[0-9]+)-(musl|glibc)$' || { echo "refusing tag $tag"; exit 1; }
+          set -- "$@" -t "$image:$tag"
+        done
+        amd64="$image@$(cat "digests/$variant-amd64")"
+        arm64="$image@$(cat "digests/$variant-arm64")"
+        docker buildx imagetools create "$@" "$amd64" "$arm64"
+        digest=$(docker buildx imagetools inspect "$image:sha-${short}-${variant}" --format '{{.Manifest.Digest}}')
+        echo "INDEX_DIGEST_$(echo "$variant" | tr a-z A-Z)=$digest" >>index-digests.env
+      done
+  artifacts:
+    reports:
+      dotenv: index-digests.env
+
+# ---------------------------------------------------------------- sign
+# keyless: the OIDC token of the job (aud sigstore) goes to Fulcio. kms: a short
+# lived Vault/OpenBao token from the job's JWT, and a key REFERENCE
+# (hashivault://...). No private key material is stored in CI variables.
+sign:
+  stage: sign
+  image: $TOOLS_IMAGE
+  rules: *publishing
+  needs:
+    - job: publish
+      artifacts: true
+    - job: image-security
+      artifacts: true
+  parallel:
+    matrix:
+      - VARIANT: [musl, glibc]
+  id_tokens:
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+    VAULT_ID_TOKEN:
+      aud: rustryx-release
+  before_script:
+    - apk add --no-cache bash curl jq tar coreutils
+    - ci/install-tool.sh cosign
+    - echo "$CI_REGISTRY_PASSWORD" | cosign login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    - |
+      set -eu
+      case "$RUSTRYX_SIGNING" in keyless | kms | both) ;; *) echo "RUSTRYX_SIGNING must be keyless, kms or both"; exit 1 ;; esac
+      if [ "$RUSTRYX_SIGNING" != keyless ] && [ -z "${COSIGN_KMS_KEY_REF:-}" ]; then
+        echo "signing '$RUSTRYX_SIGNING' needs the CI/CD variable COSIGN_KMS_KEY_REF (hashivault://...)"; exit 1
+      fi
+      digest=$INDEX_DIGEST_MUSL; [ "$VARIANT" = glibc ] && digest=$INDEX_DIGEST_GLIBC
+      ref="$CI_REGISTRY_IMAGE@$digest"
+      sbom="sbom-$VARIANT-amd64.cdx.json"
+      if [ "$RUSTRYX_SIGNING" = keyless ] || [ "$RUSTRYX_SIGNING" = both ]; then
+        cosign sign --yes "$ref"
+        cosign attest --yes --type cyclonedx --predicate "$sbom" "$ref"
+      fi
+      if [ "$RUSTRYX_SIGNING" = kms ] || [ "$RUSTRYX_SIGNING" = both ]; then
+        VAULT_TOKEN=$(curl -fsS --request POST --data "{\"jwt\": \"$VAULT_ID_TOKEN\", \"role\": \"${VAULT_JWT_ROLE:?}\"}" \
+          "${VAULT_ADDR:?}/v1/auth/jwt/login" | jq -r .auth.client_token)
+        export VAULT_TOKEN VAULT_ADDR
+        cosign sign --yes --key "$COSIGN_KMS_KEY_REF" "$ref"
+        cosign attest --yes --key "$COSIGN_KMS_KEY_REF" --type cyclonedx --predicate "$sbom" "$ref"
+      fi
+
+# SLSA provenance (in-toto v1) attested to the index, signed with the job identity.
+# The predicate is produced by a pipeline job: it is a signed statement of the CI
+# platform, not the isolated builder of SLSA L3. docs/ci-and-release.md says so.
+provenance:
+  stage: sign
+  image: $TOOLS_IMAGE
+  rules: *publishing
+  needs:
+    - job: publish
+      artifacts: true
+  parallel:
+    matrix:
+      - VARIANT: [musl, glibc]
+  id_tokens:
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+  before_script:
+    - apk add --no-cache bash curl jq tar coreutils
+    - ci/install-tool.sh cosign
+    - echo "$CI_REGISTRY_PASSWORD" | cosign login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    - |
+      set -eu
+      digest=$INDEX_DIGEST_MUSL; [ "$VARIANT" = glibc ] && digest=$INDEX_DIGEST_GLIBC
+      ci/gitlab-provenance.sh "$VARIANT" >provenance.json
+      cosign attest --yes --type slsaprovenance1 --predicate provenance.json "$CI_REGISTRY_IMAGE@$digest"
+
+# ---------------------------------------------------------------- verify
+verify:
+  stage: verify
+  image: $TOOLS_IMAGE
+  rules: *publishing
+  needs:
+    - job: publish
+      artifacts: true
+    - job: sign
+    - job: provenance
+  parallel:
+    matrix:
+      - VARIANT: [musl, glibc]
+  before_script:
+    - apk add --no-cache bash curl jq tar coreutils
+    - ci/install-tool.sh cosign
+    - echo "$CI_REGISTRY_PASSWORD" | cosign login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    - |
+      set -eu
+      digest=$INDEX_DIGEST_MUSL; [ "$VARIANT" = glibc ] && digest=$INDEX_DIGEST_GLIBC
+      ref="$CI_REGISTRY_IMAGE@$digest"
+      if [ "$RUSTRYX_SIGNING" = keyless ] || [ "$RUSTRYX_SIGNING" = both ]; then
+        # The signer is THIS file of THIS project, on the default branch or a release tag.
+        identity="^${CI_SERVER_URL}/${CI_PROJECT_PATH}//\.gitlab-ci\.yml@refs/(heads/${CI_DEFAULT_BRANCH}|tags/v[0-9]+\.[0-9]+\.[0-9]+)\$"
+        cosign verify "$ref" --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$CI_SERVER_URL"
+        for type in cyclonedx slsaprovenance1; do
+          cosign verify-attestation "$ref" --type "$type" \
+            --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$CI_SERVER_URL" >/dev/null
+        done
+      fi
+      if [ "$RUSTRYX_SIGNING" = kms ] || [ "$RUSTRYX_SIGNING" = both ]; then
+        test -s ci/cosign.pub || { echo "ci/cosign.pub is missing: commit the public key of the KMS key"; exit 1; }
+        cosign verify --key ci/cosign.pub "$ref"
+        cosign verify-attestation --key ci/cosign.pub --type cyclonedx "$ref" >/dev/null
+      fi

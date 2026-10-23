@@ -1,0 +1,22 @@
+# yamllint configuration for workflows, compose files and CI config. Helm
+# templates are not linted here: they are Go templates, not valid YAML.
+extends: default
+rules:
+  line-length:
+    max: 200
+    allow-non-breakable-words: true
+    allow-non-breakable-inline-mappings: true
+  document-start: disable
+  truthy:
+    # `on:` is a key in GitHub workflows, not a boolean.
+    check-keys: false
+  braces:
+    # `{ variant: musl, arch: arm64 }` reads better in build matrices.
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: disable
+  indentation:
+    spaces: 2
+    indent-sequences: consistent
