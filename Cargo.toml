@@ -83,6 +83,36 @@ tracing = "0.1"
 url = { version = "2", features = ["serde"] }
 uuid = { version = "1", features = ["v7", "serde"] }
 zeroize = "1"
+ed25519-dalek = { version = "2", features = ["pem"] }
+num_cpus = "1"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "migrate", "macros", "uuid", "time", "json"] }
+testcontainers = "0.28"
+object_store = { version = "0.14", default-features = false, features = ["aws"] }
+axum-core = "0.5"
+dashmap = "6"
+metrics = "0.24"
+wiremock = "0.6"
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+rustls-native-certs = "0.8"
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "aws_lc_rs", "pem"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "tls12"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "http2", "json", "matched-path", "original-uri", "query", "tokio", "tracing"] }
+clap = { version = "4", features = ["derive", "env"] }
+http-body = "1"
+http-body-util = "0.1"
+hyper = { version = "1", default-features = false, features = ["http1", "http2", "server"] }
+hyper-util = { version = "0.1", default-features = false, features = ["server-auto", "server-graceful", "service", "tokio", "http1", "http2"] }
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
+opentelemetry = "0.33"
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["trace", "grpc-tonic", "tls-aws-lc", "tls-roots", "http-proto", "reqwest-blocking-client", "reqwest-rustls"] }
+opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }
+serde_path_to_error = "0.1"
+serde_yaml_ng = "0.10"
+tower = { version = "0.5", default-features = false, features = ["limit", "load-shed", "timeout", "util"] }
+tower-http = { version = "0.7", default-features = false, features = ["catch-panic", "compression-gzip", "cors", "limit", "timeout"] }
+tracing-appender = "0.2"
+tracing-opentelemetry = "0.34"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "fmt", "std", "smallvec"] }
 
 [profile.dev]
 debug = "line-tables-only"
