@@ -39,7 +39,24 @@ tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 url.workspace = true
+rustls.workspace = true
+rustls-native-certs.workspace = true
+arc-swap.workspace = true
+ed25519-dalek.workspace = true
+num_cpus.workspace = true
+uuid.workspace = true
+metrics.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
 tempfile.workspace = true
+rcgen.workspace = true
+testcontainers.workspace = true
+tokio-rustls.workspace = true
+tracing-subscriber.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+# oidc test servers: in-process HTTPS mock of Keycloak (discovery, JWKS, token endpoint)
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+rustryx-testkit.workspace = true
