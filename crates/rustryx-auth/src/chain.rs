@@ -1,0 +1,1 @@
+//! chain (see crate docs).

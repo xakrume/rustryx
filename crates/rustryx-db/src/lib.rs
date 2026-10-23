@@ -1,0 +1,1 @@
+//! Rustryx crate `rustryx-db`.

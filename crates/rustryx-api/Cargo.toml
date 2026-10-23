@@ -1,0 +1,15 @@
+[package]
+name = "rustryx-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Rustryx: api"
+
+[lints]
+workspace = true
+
+[dependencies]
+rustryx-core.workspace = true

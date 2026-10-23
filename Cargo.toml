@@ -1,0 +1,102 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+repository = "https://github.com/rustryx/rustryx"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+dbg_macro = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+large_futures = "warn"
+pedantic = { level = "warn", priority = -1 }
+
+[workspace.dependencies]
+rustryx-core = { path = "crates/rustryx-core" }
+rustryx-config = { path = "crates/rustryx-config" }
+rustryx-observability = { path = "crates/rustryx-observability" }
+rustryx-db = { path = "crates/rustryx-db" }
+rustryx-blob = { path = "crates/rustryx-blob" }
+rustryx-auth = { path = "crates/rustryx-auth" }
+rustryx-rbac = { path = "crates/rustryx-rbac" }
+rustryx-format-core = { path = "crates/rustryx-format-core" }
+rustryx-format-maven = { path = "crates/rustryx-format-maven" }
+rustryx-format-npm = { path = "crates/rustryx-format-npm" }
+rustryx-format-pypi = { path = "crates/rustryx-format-pypi" }
+rustryx-format-oci = { path = "crates/rustryx-format-oci" }
+rustryx-format-helm = { path = "crates/rustryx-format-helm" }
+rustryx-format-raw = { path = "crates/rustryx-format-raw" }
+rustryx-format-pub = { path = "crates/rustryx-format-pub" }
+rustryx-api = { path = "crates/rustryx-api" }
+rustryx-tasks = { path = "crates/rustryx-tasks" }
+rustryx-testkit = { path = "crates/rustryx-testkit" }
+
+aes-gcm = "0.11"
+argon2 = "0.6"
+arc-swap = "1"
+bcrypt = "0.19"
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }
+ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-aws-lc-rs"] }
+moka = { version = "0.12", features = ["future"] }
+openidconnect = "4"
+rand = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "json", "http2", "gzip"] }
+anyhow = "1"
+async-trait = "0.1"
+base64 = "0.23"
+bytes = "1"
+futures = "0.3"
+hex = "0.4"
+http = "1"
+ipnet = "2"
+md-5 = "0.11"
+proptest = "1"
+regex = "1"
+secrecy = { version = "0.10", features = ["serde"] }
+semver = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.11"
+sha2 = "0.11"
+subtle = "2"
+tempfile = "3"
+thiserror = "2"
+time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "fs", "time", "io-util", "net"] }
+tokio-util = { version = "0.7", features = ["io", "rt"] }
+tracing = "0.1"
+url = { version = "2", features = ["serde"] }
+uuid = { version = "1", features = ["v7", "serde"] }
+zeroize = "1"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "unwind"
+strip = "symbols"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = "none"

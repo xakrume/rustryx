@@ -1,0 +1,15 @@
+[package]
+name = "rustryx-format-pub"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Rustryx: format-pub"
+
+[lints]
+workspace = true
+
+[dependencies]
+rustryx-core.workspace = true
