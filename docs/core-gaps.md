@@ -157,3 +157,13 @@ product.
 - Metrics `blob_store_{ops_total,bytes_total,free_bytes,total_bytes}` exist in the crate: add the constants to `rustryx-observability/names.rs` and update `deploy/monitoring/check_assets.py`.
 - Core problems: `BlobMeta` has no digest field (None is the only answer), no `BlobStore` method returns free or total bytes (so `blob_store_stats` cannot read them from the port), `ObjectStore::list` does not promise order so the crate verifies it.
 - statvfs was exercised on macOS only (compiles for musl). `Cargo.lock` was edited by hand for the new edges: re-check `--locked` at integration.
+
+## Auth adapted to core revision 2 (from the auth agent)
+
+- Gaps 16 to 25 and 32 are closed in the auth crate: `AccessDenied`, `RevokedTokenRepo` (the `tid` is a UUID on both sides), `ExternalGroups::confirmed_at` (a pinned test keeps the LDAP window at 5 minutes in total and refuses answers from the future), `AuthContext::deadline`, `set_password_hash_if` for rehash, `Principal` email, display name, `expires_at` and `external_id` (LDAP user DN), `authenticate_detailed` names the refusing method. The `auth.oidc.authorized_parties` config key itself is the config owner's.
+- LDAP refresh reads the entry at the known DN with the same user filter (base scope) and falls back to the subtree search (trusting the DN alone would stop excluding disabled accounts).
+- Robot and scan principals get no roles and no account and are refused without scopes; unknown methods are refused.
+- SEC-07 Basic cache: 60 s, HMAC key per process, local accounts only, a hit re-reads the row (enabled, hash, `tokens_valid_after`), never used past the login guard. LDAP Basic binds are not cached. The guard cache hook was NOT built (a cached check would let a lockout lag).
+- `auth_attempts_total` must be emitted once: `AuthServiceConfig::record_attempt_metrics = false` while the api middleware counts.
+- Root `Cargo.toml` got `hmac = "0.13"`, `Cargo.lock` edges were added by hand: re-check `--locked`. testkit has no `RevokedTokenRepo` double (auth keeps a local fake): add one when testkit is adapted.
+- The four auth series (`oidc_requests_total`, `oidc_jwks_age_seconds`, `ldap_requests_total`, `auth_breakglass_logins_total`) must move from "not exported" to "exported" in docs/slo.md and names.rs.
