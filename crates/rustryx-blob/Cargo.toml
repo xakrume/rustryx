@@ -6,10 +6,32 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "Rustryx: blob"
+description = "Rustryx: blob stores (local filesystem and S3-compatible)"
 
 [lints]
 workspace = true
 
 [dependencies]
 rustryx-core.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+futures.workspace = true
+hex.workspace = true
+md-5.workspace = true
+object_store.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
+testcontainers.workspace = true
+time.workspace = true
