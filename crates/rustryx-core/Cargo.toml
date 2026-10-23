@@ -19,5 +19,13 @@ secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-time.workspace = true
+# `serde-well-known` provides `time::serde::rfc3339`, which `crate::rfc3339` re-exports. The workspace
+# line enables only `serde`, which writes timestamps as tuples; a feature added here is unified
+# workspace-wide by cargo, so no workspace line had to change.
+time = { workspace = true, features = ["serde-well-known"] }
 uuid.workspace = true
+
+[dev-dependencies]
+# Differential and property tests of the glob translation (`glob_translation_matches_reference`).
+proptest.workspace = true
+regex.workspace = true

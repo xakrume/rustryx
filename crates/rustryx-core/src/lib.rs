@@ -14,12 +14,37 @@
 
 pub mod audit;
 pub mod error;
+pub mod events;
+pub mod glob;
 pub mod identity;
 pub mod ids;
+pub mod label;
+pub mod lifecycle;
 pub mod model;
 pub mod names;
+pub mod node;
+pub mod notification;
 pub mod ports;
+pub mod project;
+pub mod promotion;
+pub mod quota;
+pub mod registry;
+pub mod replication;
+pub mod rfc3339;
+pub mod robot;
+pub mod routing;
+pub mod scan;
 pub mod secret;
+pub mod settings;
+pub mod status;
+pub mod storage;
+pub mod tasks;
+pub mod webhook;
 
-pub use error::{AuthError, BlobError, DomainError, StoreError};
-pub use secret::Secret;
+#[cfg(test)]
+mod testing;
+
+pub use error::{
+    AuthError, BlobError, DomainError, MutationError, PolicyViolation, StoreError, UpstreamError,
+};
+pub use secret::{Secret, SecretStatus};

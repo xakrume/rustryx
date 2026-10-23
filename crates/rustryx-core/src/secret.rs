@@ -57,6 +57,34 @@ impl<'de> Deserialize<'de> for Secret {
     }
 }
 
+/// What a response DTO says about a stored secret instead of the secret itself.
+///
+/// A DTO that returns this type cannot leak the value by construction: `Secret` serializes its
+/// real text (persistence needs that), so a response type must never embed `Secret` and carries
+/// a `SecretStatus` instead. Every API crate has a test that scans its response types for
+/// `Secret` fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecretStatus {
+    /// True when a value is stored.
+    pub set: bool,
+}
+
+impl From<&Option<Secret>> for SecretStatus {
+    fn from(value: &Option<Secret>) -> Self {
+        Self {
+            set: value.is_some(),
+        }
+    }
+}
+
+impl From<Option<&Secret>> for SecretStatus {
+    fn from(value: Option<&Secret>) -> Self {
+        Self {
+            set: value.is_some(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,5 +102,30 @@ mod tests {
         let json = serde_json::to_string(&Secret::new("abc")).expect("serialize");
         let back: Secret = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.expose(), "abc");
+    }
+
+    #[test]
+    fn secret_status_reports_presence_only() {
+        let stored = Some(Secret::new("canary-value"));
+        let status = SecretStatus::from(&stored);
+        assert!(status.set);
+        assert!(!SecretStatus::from(&None).set);
+        assert!(SecretStatus::from(stored.as_ref()).set);
+        assert!(!SecretStatus::from(None::<&Secret>).set);
+        let json = serde_json::to_string(&status).expect("serialize");
+        assert_eq!(json, r#"{"set":true}"#);
+        assert!(!json.contains("canary-value"));
+    }
+
+    #[test]
+    fn must_not_leak_secret_through_an_option_debug() {
+        let rendered = format!("{:?}", Some(Secret::new("hunter2")));
+        assert!(!rendered.contains("hunter2"), "{rendered}");
+    }
+
+    #[test]
+    fn empty_secret_is_reported_empty() {
+        assert!(Secret::new("").is_empty());
+        assert!(!Secret::new("x").is_empty());
     }
 }

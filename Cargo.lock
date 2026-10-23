@@ -3773,6 +3773,8 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures",
+ "proptest",
+ "regex",
  "secrecy",
  "serde",
  "serde_json",
