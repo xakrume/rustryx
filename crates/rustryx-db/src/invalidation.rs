@@ -2,8 +2,10 @@
 //!
 //! Every RBAC relevant write sends `NOTIFY rustryx_rbac` INSIDE its transaction, so
 //! listeners hear about it only after commit and never for a rolled back change. The
-//! payload is one of `rbac`, `user:<uuid>`, `reset`; an unknown payload decodes to `Reset`,
-//! because dropping every cache entry is always safe while ignoring a message is not.
+//! payload is one of `rbac`, `user:<uuid>`, `reset`, `projects`, `config:<revision>`; an
+//! unknown payload decodes to `Reset`, because dropping every cache entry is always safe
+//! while ignoring a message is not. That is also what keeps an N-1 node correct when a newer
+//! node publishes a payload it has never heard of.
 
 use std::time::Duration;
 
@@ -29,7 +31,11 @@ pub(crate) fn encode_event(event: &InvalidationEvent) -> String {
     match event {
         InvalidationEvent::Rbac => "rbac".to_owned(),
         InvalidationEvent::User(id) => format!("user:{id}"),
-        InvalidationEvent::Reset => "reset".to_owned(),
+        InvalidationEvent::Projects => "projects".to_owned(),
+        InvalidationEvent::Config(revision) => format!("config:{revision}"),
+        // `Reset` and any variant added to the non exhaustive enum later: dropping every
+        // cache is the one message that is always safe.
+        _ => "reset".to_owned(),
     }
 }
 
@@ -37,6 +43,15 @@ pub(crate) fn encode_event(event: &InvalidationEvent) -> String {
 pub(crate) fn decode_event(payload: &str) -> InvalidationEvent {
     if payload == "rbac" {
         return InvalidationEvent::Rbac;
+    }
+    if payload == "projects" {
+        return InvalidationEvent::Projects;
+    }
+    if let Some(revision) = payload
+        .strip_prefix("config:")
+        .and_then(|s| s.parse::<i64>().ok())
+    {
+        return InvalidationEvent::Config(revision);
     }
     if let Some(id) = payload
         .strip_prefix("user:")
@@ -185,6 +200,9 @@ mod tests {
             InvalidationEvent::Rbac,
             InvalidationEvent::User(id),
             InvalidationEvent::Reset,
+            InvalidationEvent::Projects,
+            InvalidationEvent::Config(0),
+            InvalidationEvent::Config(i64::MAX),
         ] {
             assert_eq!(decode_event(&encode_event(&event)), event);
         }
@@ -192,7 +210,17 @@ mod tests {
 
     #[test]
     fn unknown_payload_resets_everything() {
-        for payload in ["", "rbac2", "user:not-a-uuid", "user:", "whatever"] {
+        for payload in [
+            "",
+            "rbac2",
+            "user:not-a-uuid",
+            "user:",
+            "whatever",
+            "projects:1",
+            "config:",
+            "config:abc",
+            "config:99999999999999999999",
+        ] {
             assert_eq!(decode_event(payload), InvalidationEvent::Reset, "{payload}");
         }
     }

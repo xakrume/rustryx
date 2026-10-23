@@ -15,9 +15,10 @@ pub(crate) fn corrupt(context: &'static str) -> StoreError {
 }
 
 /// `u64` to the `bigint` the schema uses. Quotas and sizes above `i64::MAX` do not exist
-/// on any real disk; rejecting them is cheaper than a wrapping cast.
+/// on any real disk; rejecting them is cheaper than a wrapping cast. The input is malformed,
+/// not in conflict with a stored state, hence `Invalid`.
 pub(crate) fn to_i64(value: u64) -> Result<i64, StoreError> {
-    i64::try_from(value).map_err(|_| StoreError::Conflict("numeric value out of range".to_owned()))
+    i64::try_from(value).map_err(|_| StoreError::Invalid("numeric value out of range".to_owned()))
 }
 
 /// `bigint` (checked non-negative by the schema) to `u64`.
@@ -57,7 +58,7 @@ mod tests {
 
     #[test]
     fn numeric_range_is_checked() {
-        assert!(to_i64(u64::MAX).is_err());
+        assert!(matches!(to_i64(u64::MAX), Err(StoreError::Invalid(_))));
         assert_eq!(to_i64(7).unwrap(), 7);
         assert!(to_u64(-1, "t").is_err());
     }

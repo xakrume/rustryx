@@ -334,11 +334,18 @@ mod tests {
         );
     }
 
+    /// Versions are strictly increasing from 1 but NOT contiguous: the streams of wave 2 own
+    /// number ranges (0020 to 0139, design section 2.7), and `sqlx` applies every embedded
+    /// version that is not recorded yet, so a gap is harmless. A duplicate or an unordered
+    /// pair would not be.
     #[test]
-    fn embedded_migrations_are_contiguous_and_forward_only() {
+    fn embedded_migrations_are_ordered_unique_and_forward_only() {
         let versions: Vec<i64> = MIGRATOR.iter().map(|m| m.version).collect();
-        let expected: Vec<i64> = (1..=i64::try_from(versions.len()).unwrap()).collect();
-        assert_eq!(versions, expected);
+        assert_eq!(versions.first(), Some(&1));
+        assert!(
+            versions.windows(2).all(|pair| pair[0] < pair[1]),
+            "{versions:?}"
+        );
         assert!(
             MIGRATOR
                 .iter()

@@ -6,13 +6,15 @@ use rustryx_core::Secret;
 use sqlx::PgPool;
 
 use crate::audit::PgAuditSink;
+use crate::audit_read::PgAuditRead;
 use crate::invalidation::PgInvalidationBus;
 use crate::lease::PgJobLeases;
 use crate::repos::{
     PgAssetRepo, PgBlobRepo, PgBlobStoreRepo, PgComponentRepo, PgIdpMappingRepo,
-    PgLoginAttemptRepo, PgPrivilegeRepo, PgRepositoryRepo, PgRoleRepo, PgSelectorRepo, PgTokenRepo,
-    PgUserRepo,
+    PgLoginAttemptRepo, PgPrivilegeRepo, PgRepositoryRepo, PgRoleRepo, PgRoutingRuleRepo,
+    PgSelectorRepo, PgTokenRepo, PgUserRepo,
 };
+use crate::revoked::PgRevokedTokens;
 use crate::sealer::SecretSealer;
 use crate::system_config::PgSystemConfig;
 
@@ -49,18 +51,25 @@ pub struct PgStore {
     pub login_attempts: PgLoginAttemptRepo,
     /// [`rustryx_core::ports::AuditSink`].
     pub audit: PgAuditSink,
-    /// Durable job queues (no port in core).
+    /// [`rustryx_core::ports::AuditReadRepo`].
+    pub audit_read: PgAuditRead,
+    /// [`rustryx_core::ports::JobLeaseRepo`]: durable job queues.
     pub job_leases: PgJobLeases,
-    /// Runtime key/value configuration (no port in core).
+    /// [`rustryx_core::ports::SystemConfigRepo`]: runtime key/value configuration.
     pub system_config: PgSystemConfig,
+    /// [`rustryx_core::ports::RevokedTokenRepo`].
+    pub revoked_tokens: PgRevokedTokens,
+    /// [`rustryx_core::ports::RoutingRuleRepo`].
+    pub routing_rules: PgRoutingRuleRepo,
 }
 
 impl PgStore {
-    /// Builds the bundle. `sealer` protects upstream credentials of proxy repositories.
+    /// Builds the bundle. `sealer` protects upstream credentials of proxy repositories and the
+    /// sealed fields of the settings.
     #[must_use]
     pub fn new(pool: PgPool, sealer: Arc<dyn SecretSealer>) -> Self {
         Self {
-            repositories: PgRepositoryRepo::new(pool.clone(), sealer),
+            repositories: PgRepositoryRepo::new(pool.clone(), Arc::clone(&sealer)),
             blob_stores: PgBlobStoreRepo::new(pool.clone()),
             blobs: PgBlobRepo::new(pool.clone()),
             components: PgComponentRepo::new(pool.clone()),
@@ -73,8 +82,11 @@ impl PgStore {
             idp_mappings: PgIdpMappingRepo::new(pool.clone()),
             login_attempts: PgLoginAttemptRepo::new(pool.clone()),
             audit: PgAuditSink::new(pool.clone()),
+            audit_read: PgAuditRead::new(pool.clone()),
             job_leases: PgJobLeases::new(pool.clone()),
-            system_config: PgSystemConfig::new(pool.clone()),
+            system_config: PgSystemConfig::new(pool.clone(), sealer),
+            revoked_tokens: PgRevokedTokens::new(pool.clone()),
+            routing_rules: PgRoutingRuleRepo::new(pool.clone()),
             pool,
         }
     }

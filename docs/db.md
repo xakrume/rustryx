@@ -12,16 +12,18 @@ enforces; everything else is the services' job.
 |---|---|
 | `config`, `pool` | `PgConfig`, `connect`, `connect_lazy`, `ping` |
 | `migrate` | `migrate(url)`, `schema_status(pool)`, `SchemaStatus`, `expected_schema_version()` |
-| `repos::*` | `PgRepositoryRepo`, `PgBlobStoreRepo`, `PgBlobRepo`, `PgComponentRepo`, `PgAssetRepo`, `PgUserRepo`, `PgRoleRepo`, `PgPrivilegeRepo`, `PgSelectorRepo`, `PgTokenRepo`, `PgIdpMappingRepo`, `PgLoginAttemptRepo` |
-| `store` | `PgStore`: all of the above plus audit, job leases and system config over one pool |
-| `audit`, `maintenance` | `PgAuditSink`, partition maintenance, retention, login counter purge |
+| `repos::*` | `PgRepositoryRepo`, `PgBlobStoreRepo`, `PgBlobRepo`, `PgComponentRepo`, `PgAssetRepo`, `PgUserRepo`, `PgRoleRepo`, `PgPrivilegeRepo`, `PgSelectorRepo`, `PgTokenRepo`, `PgIdpMappingRepo`, `PgLoginAttemptRepo`, `PgRoutingRuleRepo` |
+| `store` | `PgStore`: all of the above plus audit write and read, job leases, system config and revoked tokens over one pool |
+| `audit`, `audit_read`, `maintenance` | `PgAuditSink`, `PgAuditRead` (`AuditReadRepo`: filtered keyset query and the export stream), partition maintenance, retention, login counter purge |
 | `lock` | `PgLockBackend` (`LockBackend` on advisory locks) |
 | `invalidation` | `PgInvalidationBus` (`InvalidationBus` on `LISTEN`/`NOTIFY`) |
-| `lease` | `PgJobLeases`: durable queues with `FOR UPDATE SKIP LOCKED` (no port in core) |
+| `lease` | `PgJobLeases` (`JobLeaseRepo`): durable queues with `FOR UPDATE SKIP LOCKED`, batch enqueue with the outbox cursor hand-off |
+| `revoked` | `PgRevokedTokens` (`RevokedTokenRepo`): revoked internal JWT ids with expiry purge |
+| `outbox` | the in-transaction insert of outbox events and the consumer cursor compare and set (crate internal, plus the channel name); the `OutboxRepo` port itself is not here yet |
 | `bootstrap` | `bootstrap_admin(pool, username, password_hash)` |
-| `sealer` | `SecretSealer`, `AeadSealer` for upstream credentials at rest |
-| `system_config` | `PgSystemConfig`: small runtime key/value settings |
-| `error` | `map_err`: the one place that turns `sqlx::Error` into `StoreError` |
+| `sealer` | `SecretSealer`, `AeadSealer` for upstream credentials and sealed settings at rest |
+| `system_config` | `PgSystemConfig` (`SystemConfigRepo`): runtime settings with sealed fields and a revision |
+| `error` | `map_err` and `map_mutation_err`: the one place that turns `sqlx::Error` into `StoreError` and `MutationError` |
 
 Wiring in the composition root:
 
@@ -70,6 +72,8 @@ forward-only. `build.rs` makes cargo rebuild when a file is added.
 | 0004 rbac seed and guards | built-in roles and privileges, then the read-only triggers |
 | 0005 audit | `audit_events` partitioned by month, append-only triggers, partition functions |
 | 0006 jobs | `job_leases` |
+| 0007 wave 2 foundation | `projects`, `repositories.project_id` with its triggers, uploader and pull time columns, `audit_events.actor_kind` and `project_id`, settings revision (`system_config_revision_seq`, trigger `system_config_bump`), `revoked_tokens`, `node_heartbeats`, `event_outbox` (partitioned) with `outbox_cursors` and its partition functions, `task_definitions`, `task_runs`, `task_run_log` |
+| 0008 routing rules | `routing_rules` and the foreign key `repositories.routing_rule_id` |
 
 Invariants and what holds them:
 
@@ -90,9 +94,17 @@ Invariants and what holds them:
 | Content selector expression is at most 1 KiB | check constraint |
 | Audit rows are never updated, deleted or truncated | trigger `audit_events_append_only` (SQLSTATE `RX003`) |
 | One queued or running job per `(queue, dedupe_key)` | partial unique index |
+| `allow_anonymous` of a repository in a project follows the project visibility, for every writer | triggers `repositories_project_sync` and `projects_visibility_sync` |
+| A project that has repositories is not deleted | `repositories.project_id` is `ON DELETE RESTRICT` |
+| Every settings write gets a new revision from one sequence, also from an N-1 writer | trigger `system_config_bump` |
+| One queued or running task run per `(kind, scope_key)` | partial unique index `uq_task_runs_active` |
+| An outbox partition is not dropped while a consumer has not handled an event in it | `drop_old_outbox_partitions` checks `(tx_id, seq) > cursor` itself |
+| A routing rule in use is not deleted; a rule has 1 to 32 patterns of 1 to 256 bytes | `fk_repositories_routing_rule` (`RESTRICT`), `ck_routing_rules_patterns` |
 
 Custom SQLSTATEs: `RX001` role nesting cycle, `RX002` built-in row is read-only, `RX003` audit
-log is append-only. `error.rs` maps them to `StoreError::Conflict`.
+log is append-only. `error.rs` maps them to `StoreError::Conflict`. The policy guards of later
+migrations use `RX004` immutable, `RX005` held, `RX006` quota exceeded, `RX007` read only mode and
+`RX008` scope violation; their mapping is in section 5 and the DETAIL convention in ADR-DB-10.
 
 No user and no password is seeded. The built-in roles are `nx-admin`, `nx-anonymous` and
 `nx-developer` (names from `rustryx_core::identity`). `nx-anonymous` holds browse and read on
@@ -136,6 +148,19 @@ Rules for migration authors:
 3. Never edit an applied file: `migrate` fails on a checksum mismatch, deliberately.
 4. A `-- no-transaction` file can leave a failed row behind; `schema_status` then reports
    `Behind` at the version before it until an operator repairs it.
+5. Version numbers are strictly increasing, not contiguous: the streams of wave 2 own ranges
+   (0020 to 0139, wave2-design.md section 2.7) and `sqlx` applies every embedded version that is
+   not recorded yet, so a gap is harmless. A unit test pins "ordered, unique, forward only".
+
+Migration 0007 is an expand migration and leaves `schema_contract.min_binary_schema` at 1: a
+binary of the previous release (schema 6) stays ready against schema 8
+(`SchemaStatus::OlderCompatible`). The test `a_binary_of_the_previous_release_keeps_working_against_the_new_schema`
+runs the phase 1 statements verbatim against the new schema (no new column named, the new
+triggers firing around them) and checks that the floor is untouched. What an N-1 binary cannot do
+is use the new data: it rewrites `proxy_config` without the four wave 2 fields, which only matters
+once an operator has set one (gated by the feature level), and `PgSystemConfig::set` of the old
+build writes a value without sealing, which is why settings with secrets are written only after
+the gate of the settings stream opens.
 
 `Migrator::run_direct` (hidden in the sqlx docs, used by sqlx itself) is called instead of
 `Migrator::run`, because the future of `run` is not provably `Send` ("implementation of
@@ -155,6 +180,10 @@ wrapper or `raw_sql`.
 |---|---|
 | unique, foreign key, check, not null violation | `Conflict` with a static text per constraint |
 | `RX001`, `RX002`, `RX003` | `Conflict` ("role nesting cycle", "built-in entity is read-only", "audit log is append-only") |
+| `RX004` to `RX008` from `map_err` (the phase 1 methods) | `Conflict` with the words of the matching `PolicyViolation` ("item is immutable", "item is under a hold", "quota exceeded", "read only mode", "scope violation") |
+| `RX004` to `RX007` from `map_mutation_err` (the typed methods) | `MutationError::Violation(Immutable { rule } / Held { hold } / QuotaExceeded(..) / ReadOnly)`; a guard whose DETAIL is missing or malformed degrades to the `Conflict` above, never to a backend error |
+| `RX008` from `map_mutation_err` | `MutationError::Store(Conflict("scope violation"))`: there is no `PolicyViolation` for it |
+| bad page token, number out of range, oversized event, invalid pointer, queue name or key out of bounds | `Invalid` (never `Conflict`) |
 | pool timeout, pool closed, I/O, TLS, connection class 08, shutdown, `statement_timeout`, too many connections | `Unavailable` |
 | deadlock, serialization failure | `Unavailable` ("transaction conflict, retry") |
 | row not found | `NotFound` |
@@ -166,21 +195,91 @@ and hint fields and the statement. Parse errors of a connection URL report a fix
 because the parser's text can contain the password.
 
 Absent target semantics: `NotFound` for admin facing entities (repository, blob store, user,
-role, privilege, selector, mapping, token revoke, component), idempotent success for GC facing
-calls (`BlobRepo::delete`, `touch_*`) and for `delete_by_path`, which returns `None`.
+role, privilege, selector, mapping, token revoke, component, routing rule, the repository of a
+publish, the blob of a link), idempotent success for GC facing calls (`BlobRepo::delete`,
+`delete_if_unreferenced` answering `false`, `touch_downloaded`, `record_downloads`) and for
+`delete_by_path` and `delete_by_path_checked`, which return `None`. `touch_fresh` of a missing
+asset is `NotFound`; `set_password_hash_if` of a missing user is `NotFound` and of an account
+without a hash is `false`.
 
 Pagination is keyset. The token is `base64url("<kind>:<last key>")`: it carries a position, not
 a permission (filters are applied in `WHERE` regardless), so it is not signed. Orders: users and
-components by id (UUIDv7, creation order), assets by path in byte order. The limit is clamped
-to 1..=1000. `StoreError` has no invalid-input variant, so a malformed token is a `Conflict`
-("invalid page token"); restarting from page one would make a client with a bad token loop.
+components by id (UUIDv7, creation order), assets by path in byte order, audit events newest
+first by `(event_time, id)` (the token key is `<microseconds>:<uuid>`). The limit is clamped to
+1..=1000. A malformed token, a token of another listing and an out of range number are
+`StoreError::Invalid` ("invalid page token", mapped to 400 by the HTTP layer); restarting from
+page one would make a client with a bad token loop, and a `Conflict` would claim a state clash
+that does not exist.
 
 ## 6. Concurrency design
 
-* `AssetRepo::publish` is one transaction: insert the blob row, `SELECT .. FOR UPDATE` the asset
-  by path, then `UPDATE` or `INSERT .. ON CONFLICT DO NOTHING`, retrying into the update branch
-  if another publisher won the insert. Concurrent publishers of one path each report exactly
-  the blob they displaced; a failure anywhere rolls the blob row back with the rest.
+* `AssetRepo::publish_with` is one transaction, and `publish` is the provided wrapper over it
+  (a violation flattened to `Conflict`). Order of work: validate the options (an event over
+  16 KiB is `Invalid` before anything is opened), `SELECT .. FOR SHARE` the repository row (write
+  policy and quota are read from it), refuse at once when the policy is `Deny`, insert the blob
+  row, `SELECT .. FOR UPDATE` the asset by path, check the mode and the policy against what that
+  locked read found, then `UPDATE` or `INSERT .. ON CONFLICT DO NOTHING` (retrying into the update
+  branch if another publisher won the insert), check the repository quota, write the outbox
+  events, commit. Every refusal returns before the commit, so no asset, blob row or event is left.
+  Because the existing row is read under its lock, `PublishMode::CreateOnly` and `allow_once`
+  hold across nodes: of twelve concurrent create-only publishers of one path exactly one wins.
+  Concurrent publishers of one path each report exactly the blob they displaced, and the
+  displaced blob is returned only when it lost its last reference (with `link` two assets can
+  share a blob, and handing out a live one "for GC" would invite deleting served content).
+* `AssetRepo::link` publishes by reference. Lock order everywhere: repository row (share), asset
+  row (`FOR UPDATE`), blob row (`FOR NO KEY UPDATE`). The `assets_blob_ref` trigger touches the
+  blob rows of a switch in the same order, and the GC sweep takes a blob row only, so there is no
+  cycle. `FOR NO KEY UPDATE` and not `FOR SHARE` on the blob: two links of one orphaned blob would
+  both hold a share lock and both need the row lock of that trigger, a deadlock the test
+  `two_links_of_one_orphaned_blob_do_not_deadlock` pins down.
+* Garbage collection order, decided by the lead: ROW first under a row lock, OBJECT second.
+  `BlobRepo::delete_if_unreferenced` locks the row `FOR UPDATE`, re-checks age (`orphaned_at`, or
+  `created_at` for a never referenced blob) and references in a separate statement (a fresh
+  `READ COMMITTED` snapshot, so it sees a link that committed while it waited for the lock; a
+  single `DELETE .. WHERE NOT EXISTS` would not), deletes the row and commits, and only an
+  answer of `true` lets the caller delete the object. A link that wins the race makes the sweep
+  answer `false`; a sweep that wins makes the link `NotFound`; so a link never points at a
+  deleted object. The test `must_not_leave_a_link_pointing_at_a_deleted_object_under_concurrent_gc`
+  models the object store as a set, runs 40 rounds of three linkers against one sweep with a
+  staggered start, and checks both outcomes and the invariant. The foreign key `RESTRICT` is
+  the backstop: without the lock the failure would be a `Conflict` from the sweep, not a dangling
+  asset. `BlobRepo::delete` stays for tests and tooling and is documented as not safe for GC.
+* The repository quota is the phase 1 sum, checked inside the publish transaction on the actual
+  size: usage is the sum over DISTINCT blobs of the repository, the delta of the write is the new
+  blob's size when no other asset of the repository holds it minus the old blob's size when the
+  replaced blob has no holder left, and a write that does not grow the repository (`delta <= 0`)
+  is never refused. A repository with a quota takes a transaction advisory lock named after it
+  between reading and writing, so twenty concurrent publishes into a quota of 100 bytes with ten
+  byte blobs succeed exactly ten times; repositories without a quota do not serialize. Project
+  quotas and the counters belong to the lifecycle stream and replace this sum.
+* Outbox events ride in the transaction of the write (`publish_with`, `link`,
+  `delete_by_path_checked`, `delete_checked`): one `INSERT .. SELECT FROM unnest(..) WITH ORDINALITY
+  ORDER BY ord`, so sequence numbers follow the order of the drafts, and one `pg_notify` of
+  `rustryx_outbox` with an empty payload, delivered after commit only. A month without a partition
+  (the maintenance job fell behind) is repaired inside the same transaction: the first insert runs
+  in a savepoint, `ensure_outbox_partitions(now(), 0)` creates the partition, the insert repeats
+  once. Failing a publish because housekeeping was late would be worse than a short DDL lock.
+* Of the other `WriteOptions` fields only `mode`, `override_immutable` and `events` act in this
+  crate. `actor` and `request_id` are not used: every `EventDraft` carries its own actor and
+  request id, and the audit batch row of a lifecycle run is written by its caller through the
+  sink.
+* `WriteOptions::override_immutable` becomes `set_config('rustryx.override_immutable', 'on',
+  true)`, written only when set and local to the transaction, so a pooled connection never
+  carries the bypass into the next request (`must_not_carry_the_override_into_the_next_transaction_of_a_pooled_connection`
+  runs on a one connection pool).
+* `record_downloads` takes the row locks first, in ascending id order, with a materialized
+  `SELECT .. FOR UPDATE .. ORDER BY id`, then updates assets and their components; two nodes
+  flushing overlapping sets wait for each other instead of deadlocking. A stored time is rewritten
+  only when it lags the new one by more than the write interval (default 60 s, a hot asset costs
+  one write a minute). The counts are accepted and not used yet: `asset_downloads_daily` belongs
+  to the lifecycle stream, which adds its insert here.
+* `UserRepo::set_password_hash_if` is one `UPDATE .. WHERE password_hash = $old`; of twelve
+  concurrent rehashes exactly one wins.
+* `JobLeaseRepo::enqueue_batch` makes the cursor move first and the inserts second, in one
+  transaction, and a lost compare and set returns 0 with nothing inserted: of ten consumers that
+  read the same batch exactly one writes its rows (the atomic hand-off of the design). A consumer
+  that never ran has no cursor row, which is the position `(0, 0)`; the first move creates the
+  row, and only from that position.
 * `ComponentRepo::find_or_create` reads first and inserts with `ON CONFLICT DO NOTHING`, so the
   common case is one indexed read and no write, and concurrent creators converge on one row.
 * Login counters are one `INSERT .. ON CONFLICT DO UPDATE` with the increment inside the
@@ -208,6 +307,17 @@ current key and any number of retired keys; `PgRepositoryRepo::reseal_upstream_s
 every envelope under the current key (compare-and-set per row), after which a retired key can be
 dropped. A KMS or Vault Transit backed sealer can implement the trait without touching this
 crate; the in-crate sealer has one level of keys, not DEK plus KEK.
+
+Sealed settings. `SystemConfigRepo::put` seals the strings at the JSON pointers the caller names
+and stores the envelope at the same pointer plus a top level `_sealed` array that lists the
+pointers, so the row says by itself which fields are sealed and the N-1 binary reads it as opaque
+JSON. The associated data is the key AND the pointer (`rustryx/system-config/seal/v1/<key>\0<pointer>`):
+an envelope copied to another key or to another field of the same value does not open. A field
+absent from a later write keeps its stored envelope, a JSON `null` clears it, a new string is
+sealed afresh. `get` and `list_prefix` with `SecretView::Mask` remove the sealed fields and keep
+the `_sealed` list (the API says "password set" from it, and a masked read never decrypts);
+`Reveal` opens them and drops the list. `put` returns the masked view, so a write never echoes a
+secret. `_sealed` is reserved: a caller value that has the key is `Invalid`.
 
 Other secrets: API tokens are stored as the SHA-256 hex only; password hashes only as argon2
 PHC or bcrypt strings (anything else is refused by a constraint, so passing a password instead
@@ -248,7 +358,11 @@ so a caller never starts a singleton job on an unavailable backend.
 
 ## 9. Invalidation bus (`PgInvalidationBus`)
 
-Channel `rustryx_rbac`; payloads `rbac`, `user:<uuid>`, `reset`. An unknown payload decodes to
+Channel `rustryx_rbac`; payloads `rbac`, `user:<uuid>`, `reset`, `projects` and `config:<revision>`
+(settings written through `SystemConfigRepo`, the revision being the one of the write or, for a
+delete, a fresh one from the sequence). The trigger `projects_visibility_sync` sends `projects`
+from SQL. A blob store edit sends `reset`: there is no finer event for the registry cache yet.
+An unknown payload decodes to
 `Reset`: dropping all caches is always safe, ignoring a message is not. `subscribe()` is lazy and
 pull based (no internal buffer, so a slow consumer cannot lose events silently). The first item
 after every (re)connection is `Reset`, yielded only after `LISTEN` succeeded, so no change falls
@@ -267,6 +381,22 @@ Retention drops partitions, it does not archive them; archive first if the polic
 Only partitions with a generated name are candidates, so a partition attached by hand (a legal
 hold) is never dropped. If an event arrives for a month with no partition, the sink creates it
 and retries once rather than lose the event. Also available: `purge_login_attempts`.
+
+`event_outbox` follows the same scheme (`ensure_outbox_partitions(now, lookahead)`, default two
+months ahead, created by the migration; `drop_old_outbox_partitions(now, retention_days)`, default
+30). The drop function adds a rule the audit one does not have: a partition that holds an event a
+consumer has not handled (`(tx_id, seq) > (last_tx_id, last_seq)` for some row of
+`outbox_cursors`) is kept, so "never drop past the slowest cursor" cannot be forgotten by a
+caller. A consumer without a cursor row is not waited for. A dead consumer therefore pins its
+partitions, which is what the lag alert is for.
+
+`AuditReadRepo` reads the same table. `query` pages newest first and `export` streams oldest
+first, both by `(event_time, id)`. The export runs in keyset batches of 500 rows, each a separate
+statement, so a slow NDJSON consumer holds no pooled connection between batches and dropping the
+stream ends the work; the price is that an export is not one snapshot (an event stamped before the
+position already handed out is missed, a window of the clock skew between nodes). A row whose
+kind or actor kind this build does not know is an error item that ends the stream, never a
+skipped row: an incomplete audit trail must not look complete.
 
 ## 11. ADRs
 
@@ -311,6 +441,51 @@ is not used. The target is PostgreSQL 16.
 **ADR-DB-8: rustls with aws-lc-rs.** One crypto provider across the workspace (`ldap3` and
 `reqwest` already use it); no `openssl-sys`.
 
+**ADR-DB-9: GC order, row first.** `BlobRepo::delete_if_unreferenced` locks the blob row, re-checks
+age and references, deletes the ROW and commits; the caller deletes the OBJECT after `true`. With
+`AssetRepo::link` an orphan can be referenced again, so deleting the object first could leave an
+asset that points at nothing; deleting the row first can leave, after a crash, an orphan object
+that `verify_blobs` finds. This reverses the phase 1 wording of `delete` ("object first"), which
+stays for tests and tooling. Section 6 has the lock order and the race test.
+
+**ADR-DB-10: typed policy guards by SQLSTATE and DETAIL.** A guard trigger raises `RX004`
+(DETAIL: the rule id), `RX005` (DETAIL: the hold id), `RX006` (DETAIL:
+`<project|repository>:<scope id>:<limit>:<used>:<requested>`) or `RX007` (no DETAIL). `map_mutation_err`
+parses the DETAIL into a `PolicyViolation`; `map_err` ignores it and gives the phase 1 `Conflict`
+the same words. The DETAIL is parsed and never copied, a missing or malformed one degrades to the
+fixed `Conflict`, and the tests install stand-in triggers to prove the contract before the real
+guards exist. `RX008` has no `PolicyViolation` and stays a `Conflict`.
+
+**ADR-DB-11: repository quota by sum under an advisory lock, for now.** The design wants conditional
+counter updates (`quota_usage`), which belong to the lifecycle migrations. Until the counters
+are authoritative the commit check is the phase 1 sum, made exact by a per repository advisory
+transaction lock that only repositories with a quota take. It scans the repository's blobs, which
+is the cost the design accepts for the interim.
+
+**ADR-DB-12: sealing metadata inside the settings value.** The `_sealed` pointer list lives in the
+JSON of the row, not in a column, so migration 0007 stays as designed, an N-1 reader sees opaque
+JSON, and a row copied anywhere carries its own description. The envelope is bound to key and
+pointer, which is stricter than the design's `settings.<key>` purpose.
+
+**ADR-DB-13: the audit export is keyset batches, not a cursor.** One long query would pin a pooled
+connection for as long as the client downloads and ties the stream's lifetime to a transaction;
+batches of 500 hold nothing between rows and cancel by dropping the stream.
+
+**ADR-DB-14: outbox partitions repaired in the transaction, and a drop that respects cursors.** See
+section 6 and section 10. The cursor check lives in `drop_old_outbox_partitions` so every caller
+gets it.
+
+**ADR-DB-15: `routing_rules` in migration 0008.** The foundation design keeps it out of 0007
+(only the streams that reference a table share it) and gives no number to its owner, so it is
+the next free one. `repositories.routing_rule_id` gets a foreign key that is `NOT VALID`: it is
+enforced for every new and changed value, and the migration cannot fail on bare ids written
+before the table existed (none of which can be a valid reference).
+
+**ADR-DB-16: `BlobStoreRepo::update` publishes `Reset`.** No dedicated event exists and a registry
+cache that rebuilds a store is the only consumer; the edit is rare, so dropping every cache is
+cheap. Name and kind are identity (a mismatch is `Conflict`), and soft quota and group settings,
+which have no column yet, are refused with `Invalid` instead of being dropped silently.
+
 ## 12. Tests
 
 `cargo test -p rustryx-db` needs Docker (testcontainers 0.28, image `postgres:16-alpine`). One
@@ -326,20 +501,61 @@ migrated schema is built once as a template database and every test gets
 is used by the migration tests. `pg_locks` and `pg_stat_activity` are cluster wide: tests that
 look up a session pid filter by database.
 
-Unit tests cover the pure parts (cursor tokens, error mapping, event payloads, schema
-classification, sealing). Test names starting with `must_not_` are the negative requirements:
-no SQL text, row value or password in errors, no `AssertSqlSafe`, no plaintext password, no
-default admin, no edit of built-ins, no update or delete of audit rows, no sealed secret that
-opens on another row, no GC of a freshly replaced blob, no concatenated issuer and subject, no
-link by email.
+Unit tests cover the pure parts (cursor tokens, error mapping and the guard DETAIL parser, event
+payloads, schema classification and numbering, sealing, JSON pointer handling of settings, the
+write policy matrix, audit positions). The integration binary has one module per area; the new
+ones are `publish_with_tests`, `link_gc_tests`, `guard_tests`, `downloads_tests`,
+`foundation_tests` (migrations 0007 and 0008, N-1 statements, outbox partition functions),
+`outbox_tests`, `audit_read_tests`, `revoked_tests`, `routing_tests`, `repository_wave2_tests`
+(projects, proxy fields, blob store update, application grants) and `closed_pool_tests` (every
+port method reports a closed pool as `Unavailable`). The guards of later migrations do not exist
+yet, so `guard_tests` installs stand-in triggers that raise the documented SQLSTATEs.
+
+Test names starting with `must_not_` are the negative requirements: no SQL text, row value, guard
+text or password in errors, no `AssertSqlSafe`, no plaintext password, no default admin, no edit of
+built-ins, no update or delete of audit rows, no sealed secret that opens on another row, key or
+field, no sealed setting in clear text, no GC of a freshly replaced blob, no link that points at a
+deleted object under concurrent GC, no replacement of an existing path in create only mode (and no
+second winner among concurrent create only publishers), no override of immutability that outlives
+its transaction, no wake-up for a refused write, no batch written after losing the outbox cursor,
+no drop of an outbox partition with unhandled events, no purge of a revoked token id before its
+expiry (and no shortened expiry), no row of another project in a project filtered audit read
+(viewer pages and export), no concatenated issuer and subject, no link by email. Mutating the
+code under four of them (create only check, purge boundary, expiry maximum) makes them fail.
 
 ## 13. Known gaps and open items
 
-* `cleanup_policy_ids` and `routing_rule_id` on repositories are stored as bare ids. There are
-  no tables or ports for cleanup policies and routing rules in core yet.
-* No audit read port in core: export (NDJSON) and queries need one.
-* `StoreError` has no invalid-input variant: malformed page tokens and out-of-range numbers are
-  reported as `Conflict`.
-* `PgJobLeases` and `PgSystemConfig` are inherent APIs because core has no ports for them.
-* `login_attempts` rows are purged by `purge_login_attempts`, which a scheduler must call.
-* Audit partition privileges for the application role are an operational step (section 7).
+* Not implemented here, by assignment: the ports of the other wave 2 streams, and of the
+  foundation ones that have a table but no port yet: `OutboxRepo` (read side, lag, purge),
+  `NodeRegistryRepo`, `TaskDefinitionRepo`, `TaskRunRepo`. Their tables exist (migration 0007)
+  and the shared pieces they need are here (`outbox` insert and cursor compare and set).
+* `cleanup_policy_ids` on repositories is still a bare id list: the table belongs to the
+  lifecycle stream. `registry_id` of a proxy is stored and returned but not resolved: the
+  `registries` table belongs to the distribution stream, so `remote_url` and `auth` are the
+  repository's own until then.
+* `BlobStoreDef::soft_quota` and `group` have no column yet (lifecycle and storage streams); a
+  definition that carries them is refused with `Invalid`. The `blob_stores.kind` CHECK still lists
+  `local` and `s3`; `Azure` and `Group` are mapped and refused by the constraint until the
+  storage migration.
+* Application privileges (`PrivilegeGrant::Application`) read back, but the privileges CHECKs do
+  not list the kind: writing one is refused with a fixed `Conflict` until the migration of the
+  `ApplicationPrivileges` feature.
+* The immutability, hold and read only guards (`RX004`, `RX005`, `RX007`) and the project and
+  quota counters are later migrations. `publish_with` already runs under them (they fire on its
+  statements), enforces the repository quota with the phase 1 sum (ADR-DB-11) and does not look at
+  project quotas.
+* `link` requires the blob's store to equal the repository's store. A group backed repository
+  (blob rows name the concrete member store) needs the membership check of the storage stream.
+* `record_downloads` does not count downloads yet (`asset_downloads_daily` is the lifecycle
+  stream's table).
+* The settings delete takes a fresh revision for its announcement, but `current_revision` is a
+  maximum over existing rows and can go down after a delete; a node must also reload on the
+  `config:` event.
+* `login_attempts` rows are purged by `purge_login_attempts`, which a scheduler must call, and
+  so are the outbox partitions (`drop_old_outbox_partitions`) and the finished job rows
+  (`purge_finished`); the new `purge_expired` of revoked tokens is one more scheduled call.
+* The unique index of `event_outbox` is `(id, occurred_at)`, as every unique index of a
+  partitioned table must contain the partition key: an event id is unique within its instant,
+  not globally. Ids are `UUIDv7` made here.
+* Audit partition privileges for the application role are an operational step (section 7); the
+  same holds for the outbox partition functions, which need ownership of the parent.

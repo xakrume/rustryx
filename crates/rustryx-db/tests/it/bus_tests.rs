@@ -125,3 +125,17 @@ async fn a_database_that_is_down_keeps_the_stream_retrying_instead_of_ending() {
         "no event and no end of stream while the listener cannot connect"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_wave_2_events_round_trip_through_the_bus() {
+    let db = TestDb::new().await;
+    let pool = db.pool().await;
+    let bus = PgInvalidationBus::new(pool, db.url.clone());
+    let mut events = bus.subscribe();
+    assert_eq!(next(&mut events).await, InvalidationEvent::Reset);
+
+    bus.publish(InvalidationEvent::Projects).await.unwrap();
+    assert_eq!(next(&mut events).await, InvalidationEvent::Projects);
+    bus.publish(InvalidationEvent::Config(42)).await.unwrap();
+    assert_eq!(next(&mut events).await, InvalidationEvent::Config(42));
+}

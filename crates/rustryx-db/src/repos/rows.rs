@@ -1,7 +1,7 @@
 //! Row structs shared by more than one repository.
 
 use rustryx_core::StoreError;
-use rustryx_core::ids::{AssetId, BlobId, BlobStoreId, ComponentId, RepositoryId};
+use rustryx_core::ids::{AssetId, BlobId, BlobStoreId, ComponentId, RepositoryId, UserId};
 use rustryx_core::model::{Asset, BlobRecord, Checksums};
 use sqlx::FromRow;
 use time::OffsetDateTime;
@@ -46,8 +46,8 @@ macro_rules! asset_select {
     ($($tail:literal),*) => {
         concat!(
             "SELECT a.id, a.repository_id, a.component_id, a.path, a.blob_id, a.content_type, \
-             b.size_bytes, b.sha1, b.sha256, b.md5, a.last_downloaded_at, a.created_at, \
-             a.updated_at FROM assets a JOIN blobs b ON b.id = a.blob_id ",
+             b.size_bytes, b.sha1, b.sha256, b.md5, a.last_downloaded_at, a.created_by, \
+             a.created_at, a.updated_at FROM assets a JOIN blobs b ON b.id = a.blob_id ",
             $($tail),*
         )
     };
@@ -67,6 +67,7 @@ pub(crate) struct AssetRow {
     pub sha256: String,
     pub md5: String,
     pub last_downloaded_at: Option<OffsetDateTime>,
+    pub created_by: Option<Uuid>,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
 }
@@ -76,22 +77,24 @@ impl AssetRow {
         if self.path.is_empty() {
             return Err(corrupt("read asset"));
         }
-        Ok(Asset {
-            id: AssetId::from_uuid(self.id),
-            repository_id: RepositoryId::from_uuid(self.repository_id),
-            component_id: self.component_id.map(ComponentId::from_uuid),
-            path: self.path,
-            blob_id: BlobId::from_uuid(self.blob_id),
-            content_type: self.content_type,
-            size_bytes: to_u64(self.size_bytes, "read asset")?,
-            checksums: Checksums {
+        let mut asset = Asset::new(
+            AssetId::from_uuid(self.id),
+            RepositoryId::from_uuid(self.repository_id),
+            self.path,
+            BlobId::from_uuid(self.blob_id),
+            self.content_type,
+            to_u64(self.size_bytes, "read asset")?,
+            Checksums {
                 sha1: self.sha1,
                 sha256: self.sha256,
                 md5: self.md5,
             },
-            last_downloaded_at: self.last_downloaded_at,
-            created_at: self.created_at,
-            updated_at: self.updated_at,
-        })
+            self.created_at,
+        );
+        asset.component_id = self.component_id.map(ComponentId::from_uuid);
+        asset.last_downloaded_at = self.last_downloaded_at;
+        asset.created_by = self.created_by.map(UserId::from_uuid);
+        asset.updated_at = self.updated_at;
+        Ok(asset)
     }
 }

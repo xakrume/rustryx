@@ -17,21 +17,32 @@
 )]
 
 mod fixtures;
+mod foundation_tests;
+mod guard_tests;
 mod support;
 
 mod asset_tests;
+mod audit_read_tests;
 mod audit_tests;
 mod bootstrap_tests;
 mod bus_tests;
+mod closed_pool_tests;
 mod component_tests;
+mod downloads_tests;
 mod error_tests;
 mod lease_tests;
+mod link_gc_tests;
 mod lock_tests;
 mod login_tests;
 mod migrate_tests;
+mod outbox_tests;
 mod privilege_tests;
+mod publish_with_tests;
 mod rbac_tests;
 mod repository_tests;
+mod repository_wave2_tests;
+mod revoked_tests;
+mod routing_tests;
 mod system_config_tests;
 mod token_tests;
 mod user_tests;

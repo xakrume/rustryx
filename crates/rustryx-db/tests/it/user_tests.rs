@@ -396,7 +396,7 @@ async fn list_paginates_by_keyset() {
         })
         .await
         .unwrap_err();
-    assert!(matches!(err, StoreError::Conflict(_)));
+    assert!(matches!(err, StoreError::Invalid(_)), "{err:?}");
 }
 
 async fn make_roles(store: &rustryx_db::PgStore, names: &[&str]) -> Vec<RoleId> {
@@ -574,4 +574,97 @@ async fn user_changes_notify_and_delete_cascades() {
         .unwrap();
     assert_eq!(rows, 0);
     assert!(store.users.get(user.id).await.unwrap().is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn compare_and_set_swaps_the_hash_only_while_it_is_unchanged() {
+    let db = TestDb::new().await;
+    let store = db.store().await;
+    let old = ARGON2;
+    let user = store.users.create(&local("cas-user")).await.unwrap();
+    let rehashed = format!("{ARGON2}x");
+    let other = format!("{ARGON2}y");
+
+    assert!(
+        store
+            .users
+            .set_password_hash_if(user.id, old, &rehashed)
+            .await
+            .unwrap()
+    );
+    // The loser of a race sees `false` and keeps the winner's hash.
+    assert!(
+        !store
+            .users
+            .set_password_hash_if(user.id, old, &other)
+            .await
+            .unwrap()
+    );
+    let stored = store.users.get(user.id).await.unwrap().unwrap();
+    assert_eq!(
+        stored.password_hash.as_ref().map(Secret::expose),
+        Some(rehashed.as_str())
+    );
+
+    let err = store
+        .users
+        .set_password_hash_if(UserId::generate(), old, &rehashed)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, StoreError::NotFound(_)), "{err:?}");
+
+    // An external account has no hash: nothing matches, and that is not an error.
+    let external = store
+        .users
+        .create(&NewUser {
+            username: "ldap-cas".to_owned(),
+            source: UserSource::Ldap,
+            issuer: None,
+            subject: None,
+            email: None,
+            display_name: None,
+            password_hash: None,
+        })
+        .await
+        .unwrap();
+    assert!(
+        !store
+            .users
+            .set_password_hash_if(external.id, old, &rehashed)
+            .await
+            .unwrap()
+    );
+
+    // A value that is not a hash is refused by the table constraint, like `set_password_hash`.
+    let err = store
+        .users
+        .set_password_hash_if(user.id, &rehashed, "plain-password")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, StoreError::Conflict(_)), "{err:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn exactly_one_of_many_concurrent_rehashes_wins() {
+    let db = TestDb::new().await;
+    let store = db.store().await;
+    let user = store.users.create(&local("race-user")).await.unwrap();
+    let mut tasks = tokio::task::JoinSet::new();
+    for n in 0..12 {
+        let users = store.users.clone();
+        let candidate = format!("{ARGON2}{n}");
+        tasks.spawn(async move {
+            users
+                .set_password_hash_if(user.id, ARGON2, &candidate)
+                .await
+                .unwrap()
+        });
+    }
+    let mut winners = 0;
+    while let Some(done) = tasks.join_next().await {
+        if done.unwrap() {
+            winners += 1;
+        }
+    }
+    assert_eq!(winners, 1);
 }

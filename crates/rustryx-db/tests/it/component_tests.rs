@@ -332,3 +332,110 @@ async fn component_in_a_missing_repository_is_refused() {
         "{err:?}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_uploader_is_stored_with_the_first_creation_and_is_not_part_of_the_coordinate() {
+    let db = TestDb::new().await;
+    let store = db.store().await;
+    let (_, repo) = seed_repository(&store).await;
+    let first_uploader = crate::fixtures::user(&store).await;
+    let second_uploader = crate::fixtures::user(&store).await;
+
+    let mut new = new_component(repo.id, None, "app", Some("1"));
+    new.created_by = Some(first_uploader);
+    let created = store.components.find_or_create(&new).await.unwrap();
+    assert_eq!(created.created_by, Some(first_uploader));
+    assert!(created.last_downloaded_at.is_none());
+
+    // The same coordinate from another uploader finds the row and does not rewrite its author:
+    // the author is the one a promotion approver must differ from.
+    new.created_by = Some(second_uploader);
+    let again = store.components.find_or_create(&new).await.unwrap();
+    assert_eq!(again.id, created.id);
+    assert_eq!(again.created_by, Some(first_uploader));
+    assert_eq!(
+        store.components.find(&new).await.unwrap().unwrap().id,
+        created.id
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bad_page_token_is_invalid_input_not_a_conflict() {
+    let db = TestDb::new().await;
+    let store = db.store().await;
+    for bad in ["not base64!!", "Zm9vOmJhcg", ""] {
+        let err = store
+            .components
+            .list(
+                &ComponentFilter::default(),
+                &PageRequest {
+                    limit: 10,
+                    after: Some(bad.to_owned()),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, StoreError::Invalid(_)), "{bad}: {err:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn delete_checked_cascades_announces_and_reports_a_missing_component() {
+    use rustryx_core::audit::ActorRef;
+    use rustryx_core::error::MutationError;
+    use rustryx_core::events::{EventDraft, EventKind};
+    use rustryx_core::model::WriteOptions;
+
+    let db = TestDb::new().await;
+    let store = db.store().await;
+    let (bs, repo) = seed_repository(&store).await;
+    let component = store
+        .components
+        .find_or_create(&new_component(repo.id, None, "app", Some("1")))
+        .await
+        .unwrap();
+    let mut asset = new_asset(repo.id, "app-1.jar", blob(bs.id, 1));
+    asset.component_id = Some(component.id);
+    store.assets.publish(&asset).await.unwrap();
+
+    let mut draft = EventDraft::new(
+        EventKind::Delete,
+        ActorRef::system("test"),
+        serde_json::json!({"c": "app"}),
+    );
+    draft.repository_id = Some(repo.id);
+    store
+        .components
+        .delete_checked(component.id, &WriteOptions::new().with_event(draft))
+        .await
+        .unwrap();
+    assert!(store.components.get(component.id).await.unwrap().is_none());
+    assert!(
+        store
+            .assets
+            .get_by_path(repo.id, "app-1.jar")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let kinds: Vec<String> = sqlx::query_scalar("SELECT kind FROM event_outbox")
+        .fetch_all(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(kinds, ["delete"]);
+
+    let err = store
+        .components
+        .delete_checked(component.id, &WriteOptions::new())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, MutationError::Store(StoreError::NotFound(_))),
+        "{err:?}"
+    );
+    let kinds: i64 = sqlx::query_scalar("SELECT count(*) FROM event_outbox")
+        .fetch_one(store.pool())
+        .await
+        .unwrap();
+    assert_eq!(kinds, 1, "a delete that found nothing announces nothing");
+}

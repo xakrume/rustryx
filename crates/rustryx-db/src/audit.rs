@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use rustryx_core::StoreError;
-use rustryx_core::audit::{AuditEvent, AuditKind};
+use rustryx_core::audit::AuditEvent;
 use rustryx_core::ports::AuditSink;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -24,17 +24,6 @@ impl PgAuditSink {
     }
 }
 
-const fn kind_label(kind: AuditKind) -> &'static str {
-    match kind {
-        AuditKind::LoginSuccess => "login_success",
-        AuditKind::LoginFailure => "login_failure",
-        AuditKind::RbacChange => "rbac_change",
-        AuditKind::TokenChange => "token_change",
-        AuditKind::ConfigChange => "config_change",
-        AuditKind::ContentChange => "content_change",
-    }
-}
-
 /// `detail` is documented as a JSON object; anything else is wrapped so the column keeps one
 /// shape and queries over `detail ->> 'x'` stay valid.
 fn detail_object(detail: &serde_json::Value) -> serde_json::Value {
@@ -48,12 +37,14 @@ fn detail_object(detail: &serde_json::Value) -> serde_json::Value {
 async fn insert(pool: &PgPool, event: &AuditEvent) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO audit_events (id, event_time, kind, actor_id, actor_name, client_ip, \
-         request_id, action, target, outcome, detail) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+         request_id, action, target, outcome, detail, actor_kind, project_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
     )
     .bind(Uuid::now_v7())
     .bind(event.at)
-    .bind(kind_label(event.kind))
+    // `as_str` is exhaustive inside core, so a kind added there is stored without a change
+    // here (the column is plain text).
+    .bind(event.kind.as_str())
     .bind(event.actor_id.map(|id| id.as_uuid()))
     .bind(&event.actor_name)
     .bind(&event.client_ip)
@@ -62,6 +53,8 @@ async fn insert(pool: &PgPool, event: &AuditEvent) -> Result<(), sqlx::Error> {
     .bind(&event.target)
     .bind(&event.outcome)
     .bind(detail_object(&event.detail))
+    .bind(event.actor_kind.as_str())
+    .bind(event.project_id.map(|id| id.as_uuid()))
     .execute(pool)
     .await
     .map(|_| ())

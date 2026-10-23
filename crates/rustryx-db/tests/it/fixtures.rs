@@ -4,7 +4,7 @@ use rustryx_core::identity::{Action, Privilege, PrivilegeGrant, Role};
 use rustryx_core::ids::{AssetId, BlobId, BlobStoreId, PrivilegeId, RepositoryId, RoleId};
 use rustryx_core::model::{
     BlobRecord, BlobStoreDef, BlobStoreKind, Checksums, NewAsset, NewComponent, RepoFormat,
-    RepoType, Repository, WritePolicy,
+    RepoType, Repository,
 };
 use rustryx_core::names::RepoName;
 use rustryx_core::ports::{BlobStoreRepo, RepositoryRepo};
@@ -24,35 +24,24 @@ pub fn unique(prefix: &str) -> String {
 }
 
 pub fn blob_store(name: &str) -> BlobStoreDef {
-    BlobStoreDef {
-        id: BlobStoreId::generate(),
-        name: name.to_owned(),
-        kind: BlobStoreKind::Local,
-        config: serde_json::json!({ "path": "/var/lib/rustryx/blobs" }),
-        quota_bytes: None,
-        created_at: now(),
-    }
+    BlobStoreDef::new(
+        BlobStoreId::generate(),
+        name,
+        BlobStoreKind::Local,
+        serde_json::json!({ "path": "/var/lib/rustryx/blobs" }),
+        now(),
+    )
 }
 
 pub fn hosted_repository(name: &str, store: BlobStoreId) -> Repository {
-    Repository {
-        id: RepositoryId::generate(),
-        name: RepoName::parse(name).unwrap(),
-        format: RepoFormat::Maven2,
-        repo_type: RepoType::Hosted,
-        blob_store_id: store,
-        write_policy: WritePolicy::Allow,
-        allow_anonymous: false,
-        online: true,
-        quota_bytes: None,
-        cleanup_policy_ids: vec![],
-        routing_rule_id: None,
-        proxy: None,
-        group: None,
-        format_config: serde_json::json!({}),
-        created_at: now(),
-        updated_at: now(),
-    }
+    Repository::new(
+        RepositoryId::generate(),
+        RepoName::parse(name).unwrap(),
+        RepoFormat::Maven2,
+        RepoType::Hosted,
+        store,
+        now(),
+    )
 }
 
 pub fn checksums(seed: Uuid) -> Checksums {
@@ -77,13 +66,7 @@ pub fn blob(store: BlobStoreId, size: u64) -> BlobRecord {
 }
 
 pub fn new_asset(repo: RepositoryId, path: &str, blob: BlobRecord) -> NewAsset {
-    NewAsset {
-        repository_id: repo,
-        component_id: None,
-        path: path.to_owned(),
-        content_type: "application/octet-stream".to_owned(),
-        blob,
-    }
+    NewAsset::new(repo, path, "application/octet-stream", blob)
 }
 
 pub fn new_component(
@@ -92,13 +75,10 @@ pub fn new_component(
     name: &str,
     version: Option<&str>,
 ) -> NewComponent {
-    NewComponent {
-        repository_id: repo,
-        format: RepoFormat::Maven2,
-        group_id: group.map(ToOwned::to_owned),
-        name: name.to_owned(),
-        version: version.map(ToOwned::to_owned),
-    }
+    let mut new = NewComponent::new(repo, RepoFormat::Maven2, name);
+    new.group_id = group.map(ToOwned::to_owned);
+    new.version = version.map(ToOwned::to_owned);
+    new
 }
 
 pub fn role(name: &str, privileges: Vec<PrivilegeId>, nested: Vec<RoleId>) -> Role {
@@ -149,5 +129,26 @@ pub async fn publish(
         .await
         .unwrap()
         .asset
+        .id
+}
+
+/// An external (LDAP) account without a password hash: the cheapest valid user, for tests that
+/// need a `created_by` or `updated_by` to point at.
+pub async fn user(store: &PgStore) -> rustryx_core::ids::UserId {
+    use rustryx_core::identity::{NewUser, UserSource};
+    use rustryx_core::ports::UserRepo;
+    store
+        .users
+        .create(&NewUser {
+            username: unique("user"),
+            source: UserSource::Ldap,
+            issuer: None,
+            subject: None,
+            email: None,
+            display_name: None,
+            password_hash: None,
+        })
+        .await
+        .unwrap()
         .id
 }

@@ -12,12 +12,17 @@ pub mod login_attempt;
 pub mod privilege;
 pub mod repository;
 pub mod role;
+pub mod routing_rule;
 pub mod selector;
 pub mod token;
 pub mod user;
 
+mod asset_write;
 mod common;
 mod rows;
+mod write;
+
+pub(crate) use common::{escape_like, notify};
 
 pub use asset::PgAssetRepo;
 pub use blob::PgBlobRepo;
@@ -28,6 +33,7 @@ pub use login_attempt::PgLoginAttemptRepo;
 pub use privilege::PgPrivilegeRepo;
 pub use repository::PgRepositoryRepo;
 pub use role::PgRoleRepo;
+pub use routing_rule::PgRoutingRuleRepo;
 pub use selector::PgSelectorRepo;
 pub use token::PgTokenRepo;
 pub use user::PgUserRepo;

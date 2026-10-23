@@ -100,13 +100,13 @@ async fn publish_over_existing_path_switches_blob_and_returns_the_old_one() {
 async fn must_not_leave_a_blob_row_when_the_asset_insert_fails() {
     let db = TestDb::new().await;
     let store = db.store().await;
-    let (bs, _repo) = seed_repository(&store).await;
+    let (bs, repo) = seed_repository(&store).await;
     let record = blob(bs.id, 5);
-    // The repository does not exist: the asset insert violates its foreign key after the
+    // A path over the 2048 character limit: the asset insert violates its CHECK after the
     // blob row was inserted in the same transaction.
     let err = store
         .assets
-        .publish(&new_asset(RepositoryId::generate(), "x", record.clone()))
+        .publish(&new_asset(repo.id, &"p".repeat(3000), record.clone()))
         .await
         .unwrap_err();
     assert!(matches!(err, StoreError::Conflict(_)), "{err:?}");
@@ -116,6 +116,21 @@ async fn must_not_leave_a_blob_row_when_the_asset_insert_fails() {
         .await
         .unwrap();
     assert_eq!(blobs, 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn publishing_to_a_missing_repository_is_not_found_and_writes_nothing() {
+    let db = TestDb::new().await;
+    let store = db.store().await;
+    let (bs, _repo) = seed_repository(&store).await;
+    let record = blob(bs.id, 5);
+    let err = store
+        .assets
+        .publish(&new_asset(RepositoryId::generate(), "x", record.clone()))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, StoreError::NotFound(_)), "{err:?}");
+    assert!(store.blobs.get(record.id).await.unwrap().is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -289,7 +304,7 @@ async fn must_not_accept_a_forged_page_token() {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, StoreError::Conflict(ref m) if m == "invalid page token"),
+            matches!(err, StoreError::Invalid(ref m) if m == "invalid page token"),
             "{bad}: {err:?}"
         );
     }

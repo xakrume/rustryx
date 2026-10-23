@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use rustryx_core::StoreError;
-use rustryx_core::identity::{Action, Privilege, PrivilegeGrant};
+use rustryx_core::identity::{Action, AppArea, Privilege, PrivilegeGrant};
 use rustryx_core::ids::{ContentSelectorId, PrivilegeId};
 use rustryx_core::model::RepoFormat;
 use rustryx_core::ports::{InvalidationEvent, PrivilegeRepo};
@@ -65,8 +65,16 @@ struct GrantColumns {
     selector_id: Option<Uuid>,
 }
 
-fn grant_columns(grant: &PrivilegeGrant) -> GrantColumns {
-    match grant {
+/// An application grant keeps its area name in the `grant_repository` column (no new column:
+/// the area is a short word and the two meanings never meet in one row, the kind decides).
+/// The `ck_privileges_grant_shape` CHECK does not list the kind yet, so the database refuses
+/// to store one until the migration of the `ApplicationPrivileges` feature widens it; reading
+/// one that such a newer node wrote already works.
+///
+/// A grant this build does not know is an `Invalid` error and never a default grant: storing
+/// the wrong grant would widen or narrow access silently.
+fn grant_columns(grant: &PrivilegeGrant) -> Result<GrantColumns, StoreError> {
+    Ok(match grant {
         PrivilegeGrant::Admin => GrantColumns {
             kind: "admin",
             format: None,
@@ -88,7 +96,18 @@ fn grant_columns(grant: &PrivilegeGrant) -> GrantColumns {
             repository: Some(repository.clone()),
             selector_id: Some(selector_id.as_uuid()),
         },
-    }
+        PrivilegeGrant::Application { area } => GrantColumns {
+            kind: "application",
+            format: None,
+            repository: Some(area.as_str().to_owned()),
+            selector_id: None,
+        },
+        _ => {
+            return Err(StoreError::Invalid(
+                "privilege grant is not supported by this build".to_owned(),
+            ));
+        }
+    })
 }
 
 #[derive(Debug, FromRow)]
@@ -127,6 +146,13 @@ impl PrivilegeRow {
                     selector_id: ContentSelectorId::from_uuid(selector),
                 }
             }
+            ("application", Some(area), None) => PrivilegeGrant::Application {
+                area: AppArea::ALL
+                    .iter()
+                    .copied()
+                    .find(|candidate| candidate.as_str() == area)
+                    .ok_or_else(|| corrupt("read privilege"))?,
+            },
             _ => return Err(corrupt("read privilege")),
         };
         let actions = self
@@ -178,7 +204,7 @@ impl PrivilegeRepo for PgPrivilegeRepo {
     /// `builtin` is owned by the migrations: a privilege created here is never built-in,
     /// whatever the struct says, so an API caller cannot mint an undeletable privilege.
     async fn create(&self, privilege: &Privilege) -> Result<(), StoreError> {
-        let g = grant_columns(&privilege.grant);
+        let g = grant_columns(&privilege.grant)?;
         let mut tx = self
             .pool
             .begin()
@@ -208,7 +234,7 @@ impl PrivilegeRepo for PgPrivilegeRepo {
 
     /// A built-in privilege is refused by the `privileges` trigger (`Conflict`).
     async fn update(&self, privilege: &Privilege) -> Result<(), StoreError> {
-        let g = grant_columns(&privilege.grant);
+        let g = grant_columns(&privilege.grant)?;
         let mut tx = self
             .pool
             .begin()

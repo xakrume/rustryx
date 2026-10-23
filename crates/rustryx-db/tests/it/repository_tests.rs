@@ -3,23 +3,20 @@ use rustryx_core::StoreError;
 use rustryx_core::ids::{BlobStoreId, RepositoryId};
 use rustryx_core::model::{GroupConfig, ProxyConfig, RepoFormat, RepoType, UpstreamAuth};
 use rustryx_core::names::RepoName;
-use rustryx_core::ports::{BlobStoreRepo, RepositoryRepo};
+use rustryx_core::ports::{BlobStoreRepo, RepositoryRepo, RoutingRuleRepo};
 
 use crate::fixtures::{blob_store, hosted_repository, now, seed_repository, unique};
 use crate::support::TestDb;
 
 fn proxy(password: &str) -> ProxyConfig {
-    ProxyConfig {
-        remote_url: "https://repo.example.org/maven2".to_owned(),
-        auth: Some(UpstreamAuth {
-            username: "svc".to_owned(),
-            password: Secret::new(password),
-        }),
-        content_max_age_secs: 86_400,
-        metadata_max_age_secs: 600,
-        negative_cache_ttl_secs: 60,
-        max_concurrent_upstream: 8,
-    }
+    let mut proxy = ProxyConfig::new("https://repo.example.org/maven2");
+    proxy.auth = Some(UpstreamAuth {
+        username: "svc".to_owned(),
+        password: Secret::new(password),
+    });
+    proxy.content_max_age_secs = 86_400;
+    proxy.metadata_max_age_secs = 600;
+    proxy
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -100,7 +97,15 @@ async fn repository_round_trip_and_listing_order() {
     repo.online = false;
     repo.format_config = serde_json::json!({ "layout": "strict", "versionPolicy": "release" });
     repo.cleanup_policy_ids = vec![rustryx_core::ids::CleanupPolicyId::generate()];
-    repo.routing_rule_id = Some(rustryx_core::ids::RoutingRuleId::generate());
+    let rule = rustryx_core::routing::RoutingRule::new(
+        rustryx_core::ids::RoutingRuleId::generate(),
+        unique("rule"),
+        rustryx_core::routing::RoutingMode::Block,
+        vec!["^com/acme/".to_owned()],
+        now(),
+    );
+    store.routing_rules.create(&rule).await.unwrap();
+    repo.routing_rule_id = Some(rule.id);
     store.repositories.update(&repo).await.unwrap();
 
     let back = store.repositories.get(repo.id).await.unwrap().unwrap();

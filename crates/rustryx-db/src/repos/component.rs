@@ -4,20 +4,23 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use rustryx_core::StoreError;
-use rustryx_core::ids::{ComponentId, RepositoryId};
-use rustryx_core::model::{Component, NewComponent, RepoFormat};
+use rustryx_core::error::MutationError;
+use rustryx_core::ids::{ComponentId, RepositoryId, UserId};
+use rustryx_core::model::{Component, NewComponent, RepoFormat, WriteOptions};
 use rustryx_core::ports::{ComponentFilter, ComponentRepo, Page, PageRequest};
 use sqlx::{FromRow, PgPool, Postgres, QueryBuilder};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::common::{corrupt, escape_like};
+use super::write;
 use crate::cursor;
-use crate::error::map_err;
+use crate::error::{map_err, map_mutation_err};
 
 const KIND: &str = "component";
 
-const COLUMNS: &str = "id, repository_id, format, group_id, name, version, created_at, updated_at";
+const COLUMNS: &str = "id, repository_id, format, group_id, name, version, created_by, \
+                       last_downloaded_at, created_at, updated_at";
 
 /// Components.
 #[derive(Debug, Clone)]
@@ -41,22 +44,27 @@ struct Row {
     group_id: Option<String>,
     name: String,
     version: Option<String>,
+    created_by: Option<Uuid>,
+    last_downloaded_at: Option<OffsetDateTime>,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
 }
 
 impl Row {
     fn into_component(self) -> Result<Component, StoreError> {
-        Ok(Component {
-            id: ComponentId::from_uuid(self.id),
-            repository_id: RepositoryId::from_uuid(self.repository_id),
-            format: RepoFormat::from_str(&self.format).map_err(|_| corrupt("read component"))?,
-            group_id: self.group_id,
-            name: self.name,
-            version: self.version,
-            created_at: self.created_at,
-            updated_at: self.updated_at,
-        })
+        let mut component = Component::new(
+            ComponentId::from_uuid(self.id),
+            RepositoryId::from_uuid(self.repository_id),
+            RepoFormat::from_str(&self.format).map_err(|_| corrupt("read component"))?,
+            self.name,
+            self.created_at,
+        );
+        component.group_id = self.group_id;
+        component.version = self.version;
+        component.created_by = self.created_by.map(UserId::from_uuid);
+        component.last_downloaded_at = self.last_downloaded_at;
+        component.updated_at = self.updated_at;
+        Ok(component)
     }
 }
 
@@ -109,10 +117,11 @@ impl ComponentRepo for PgComponentRepo {
                 return Ok(existing);
             }
             let inserted = sqlx::query_as::<_, Row>(
-                "INSERT INTO components (id, repository_id, format, group_id, name, version) \
-                 VALUES ($1, $2, $3, $4, $5, $6) \
+                "INSERT INTO components (id, repository_id, format, group_id, name, version, \
+                 created_by) VALUES ($1, $2, $3, $4, $5, $6, $7) \
                  ON CONFLICT ON CONSTRAINT uq_components_coordinate DO NOTHING \
-                 RETURNING id, repository_id, format, group_id, name, version, created_at, updated_at",
+                 RETURNING id, repository_id, format, group_id, name, version, created_by, \
+                 last_downloaded_at, created_at, updated_at",
             )
             .bind(ComponentId::generate().as_uuid())
             .bind(new.repository_id.as_uuid())
@@ -120,6 +129,7 @@ impl ComponentRepo for PgComponentRepo {
             .bind(&new.group_id)
             .bind(&new.name)
             .bind(&new.version)
+            .bind(new.created_by.map(|id| id.as_uuid()))
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| map_err("create component", e))?;
@@ -135,8 +145,8 @@ impl ComponentRepo for PgComponentRepo {
 
     async fn get(&self, id: ComponentId) -> Result<Option<Component>, StoreError> {
         sqlx::query_as::<_, Row>(
-            "SELECT id, repository_id, format, group_id, name, version, created_at, updated_at \
-             FROM components WHERE id = $1",
+            "SELECT id, repository_id, format, group_id, name, version, created_by, \
+             last_downloaded_at, created_at, updated_at FROM components WHERE id = $1",
         )
         .bind(id.as_uuid())
         .fetch_optional(&self.pool)
@@ -191,8 +201,7 @@ impl ComponentRepo for PgComponentRepo {
         }
         if let Some(after) = &page.after {
             let key = cursor::decode(KIND, after)?;
-            let after_id = Uuid::parse_str(&key)
-                .map_err(|_| StoreError::Conflict("invalid page token".to_owned()))?;
+            let after_id = Uuid::parse_str(&key).map_err(|_| cursor::invalid_token())?;
             builder.push(" AND id > ").push_bind(after_id);
         }
         builder.push(" ORDER BY id LIMIT ").push_bind(fetch);
@@ -208,16 +217,32 @@ impl ComponentRepo for PgComponentRepo {
         Ok(cursor::finish(items, limit, KIND, |c| c.id.to_string()))
     }
 
-    /// Cascades to the component's assets. `NotFound` when absent.
+    /// The phase 1 delete is `delete_checked` with no options, so a guard (immutable, held,
+    /// read only) refuses it exactly as it refuses the typed call, as a `Conflict`.
     async fn delete(&self, id: ComponentId) -> Result<(), StoreError> {
-        let result = sqlx::query("DELETE FROM components WHERE id = $1")
-            .bind(id.as_uuid())
-            .execute(&self.pool)
+        self.delete_checked(id, &WriteOptions::new())
             .await
-            .map_err(|e| map_err("delete component", e))?;
-        if result.rows_affected() == 0 {
-            return Err(StoreError::NotFound("component".to_owned()));
+            .map_err(MutationError::into_store_error)
+    }
+
+    /// Cascades to the component's assets (the guards on `assets` fire for each of them, so a
+    /// protected asset keeps its component). `NotFound` when absent. The events ride in the
+    /// same transaction: a refused delete writes none.
+    async fn delete_checked(
+        &self,
+        id: ComponentId,
+        options: &WriteOptions,
+    ) -> Result<(), MutationError> {
+        const CONTEXT: &str = "delete component";
+        let mut tx = write::begin(&self.pool, options, CONTEXT).await?;
+        let deleted = sqlx::query("DELETE FROM components WHERE id = $1")
+            .bind(id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| map_mutation_err(CONTEXT, e))?;
+        if deleted.rows_affected() == 0 {
+            return Err(StoreError::NotFound("component".to_owned()).into());
         }
-        Ok(())
+        write::commit(tx, options, CONTEXT).await
     }
 }

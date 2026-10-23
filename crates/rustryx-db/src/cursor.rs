@@ -18,13 +18,17 @@ pub(crate) fn encode(kind: &str, key: &str) -> String {
     URL_SAFE_NO_PAD.encode(format!("{kind}:{key}"))
 }
 
+/// The error of a token that cannot be used: [`StoreError::Invalid`], which the HTTP layer
+/// maps to 400 `invalid_page_token`. It is not a `Conflict` (the request is malformed, not in
+/// conflict with state) and it does not restart from the first page: a client that keeps
+/// sending a bad token would then loop forever.
+pub(crate) fn invalid_token() -> StoreError {
+    StoreError::Invalid("invalid page token".to_owned())
+}
+
 /// Decodes the token of `kind`.
-///
-/// `StoreError` has no invalid-input variant, so a malformed token is reported as a
-/// `Conflict`. Silently restarting from the first page would make a client that keeps
-/// sending a bad token loop forever.
 pub(crate) fn decode(kind: &str, token: &str) -> Result<String, StoreError> {
-    let bad = || StoreError::Conflict("invalid page token".to_owned());
+    let bad = invalid_token;
     let raw = URL_SAFE_NO_PAD.decode(token).map_err(|_| bad())?;
     let text = String::from_utf8(raw).map_err(|_| bad())?;
     let (found_kind, key) = text.split_once(':').ok_or_else(bad)?;
@@ -70,10 +74,18 @@ mod tests {
     }
 
     #[test]
-    fn rejects_garbage_tokens() {
+    fn rejects_garbage_tokens_as_invalid_input() {
         for bad in ["!!!", "", "bm9jb2xvbg", "////"] {
-            assert!(decode("asset", bad).is_err(), "{bad}");
+            assert!(
+                matches!(decode("asset", bad), Err(StoreError::Invalid(_))),
+                "{bad}"
+            );
         }
+        let other_kind = encode("user", "x");
+        assert!(matches!(
+            decode("asset", &other_kind),
+            Err(StoreError::Invalid(_))
+        ));
     }
 
     #[test]

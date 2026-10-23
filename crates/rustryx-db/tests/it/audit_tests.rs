@@ -11,18 +11,14 @@ use crate::fixtures::now;
 use crate::support::{TestDb, sqlstate};
 
 fn event(kind: AuditKind, at: time::OffsetDateTime) -> AuditEvent {
-    AuditEvent {
-        at,
-        kind,
-        actor_id: Some(UserId::generate()),
-        actor_name: "alice".to_owned(),
-        client_ip: Some("203.0.113.5".to_owned()),
-        request_id: Some("req-1".to_owned()),
-        action: "role.update".to_owned(),
-        target: Some("nx-developer".to_owned()),
-        outcome: "success".to_owned(),
-        detail: serde_json::json!({ "changed": ["description"] }),
-    }
+    let mut event = AuditEvent::new(kind, "alice", "role.update", "success");
+    event.at = at;
+    event.actor_id = Some(UserId::generate());
+    event.client_ip = Some("203.0.113.5".to_owned());
+    event.request_id = Some("req-1".to_owned());
+    event.target = Some("nx-developer".to_owned());
+    event.detail = serde_json::json!({ "changed": ["description"] });
+    event
 }
 
 async fn partitions(store: &rustryx_db::PgStore) -> Vec<String> {

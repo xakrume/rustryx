@@ -212,7 +212,7 @@ impl UserRepo for PgUserRepo {
         let after = match &page.after {
             Some(token) => Some(
                 Uuid::parse_str(&cursor::decode(KIND, token)?)
-                    .map_err(|_| StoreError::Conflict("invalid page token".to_owned()))?,
+                    .map_err(|_| cursor::invalid_token())?,
             ),
             None => None,
         };
@@ -243,6 +243,51 @@ impl UserRepo for PgUserRepo {
             "set password hash",
         )
         .await
+    }
+
+    /// Compare and set in one statement: the row is updated only while `password_hash` still
+    /// equals `old_hash`, so of two concurrent rehashes (or a rehash and a password change)
+    /// exactly one wins and the other learns it by `false`. The comparison is the plain `=` on
+    /// the stored text; a user without a password hash (an external account) never matches,
+    /// because `NULL = $2` is not true, and the answer is `false`, not an error. `NotFound` is
+    /// reserved for a user that does not exist, found by a second read only when nothing was
+    /// updated, so the common success path stays one statement and one notification.
+    async fn set_password_hash_if(
+        &self,
+        id: UserId,
+        old_hash: &str,
+        new_hash: &str,
+    ) -> Result<bool, StoreError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| map_err("compare and set password hash", e))?;
+        let result =
+            sqlx::query("UPDATE users SET password_hash = $3 WHERE id = $1 AND password_hash = $2")
+                .bind(id.as_uuid())
+                .bind(old_hash)
+                .bind(new_hash)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| map_err("compare and set password hash", e))?;
+        if result.rows_affected() == 1 {
+            notify(&mut tx, &InvalidationEvent::User(id.as_uuid())).await?;
+            tx.commit()
+                .await
+                .map_err(|e| map_err("compare and set password hash", e))?;
+            return Ok(true);
+        }
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)")
+            .bind(id.as_uuid())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| map_err("compare and set password hash", e))?;
+        if exists {
+            Ok(false)
+        } else {
+            Err(StoreError::NotFound("user".to_owned()))
+        }
     }
 
     async fn set_enabled(&self, id: UserId, enabled: bool) -> Result<(), StoreError> {

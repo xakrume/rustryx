@@ -1,117 +1,83 @@
-//! [`AssetRepo`] on `PostgreSQL`.
+//! [`AssetRepo`] on `PostgreSQL`: reads, listings and the batched statistics. The state
+//! changing transactions (publish, link, delete) are in [`super::asset_write`].
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use rustryx_core::StoreError;
+use rustryx_core::error::MutationError;
 use rustryx_core::ids::{AssetId, ComponentId, RepositoryId};
-use rustryx_core::model::{Asset, BlobRecord, NewAsset, PublishOutcome};
+use rustryx_core::model::{
+    Asset, BlobRecord, DownloadTick, NewAsset, NewAssetLink, PublishOutcome, WriteOptions,
+};
 use rustryx_core::ports::{AssetRepo, Page, PageRequest};
-use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder};
+use sqlx::{PgPool, Postgres, QueryBuilder};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use super::common::{escape_like, to_i64};
-use super::rows::{AssetRow, BlobRow, asset_select};
+use super::asset_write;
+use super::common::escape_like;
+use super::rows::{AssetRow, asset_select};
 use crate::cursor;
 use crate::error::map_err;
 
 const KIND: &str = "asset";
 
+/// How far a stored `last_downloaded_at` must lag a new download before it is rewritten.
+///
+/// A hot artifact downloaded every second would otherwise be rewritten by every flush, one
+/// dead tuple per flush per asset for a statistic whose consumers (retention by last pull,
+/// the "last downloaded" column) work in days. A minute keeps the column honest to the
+/// minute and cuts the writes of a hot asset to one per minute.
+pub const DEFAULT_DOWNLOAD_WRITE_INTERVAL: Duration = Duration::from_secs(60);
+
 /// Assets.
 #[derive(Debug, Clone)]
 pub struct PgAssetRepo {
     pool: PgPool,
+    download_write_interval: Duration,
 }
 
 impl PgAssetRepo {
     /// Creates the repository over `pool`.
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            download_write_interval: DEFAULT_DOWNLOAD_WRITE_INTERVAL,
+        }
+    }
+
+    /// Sets how far a stored download time must lag before `record_downloads` rewrites it
+    /// (default [`DEFAULT_DOWNLOAD_WRITE_INTERVAL`]; zero rewrites on every newer time).
+    #[must_use]
+    pub fn with_download_write_interval(mut self, interval: Duration) -> Self {
+        self.download_write_interval = interval;
+        self
     }
 }
 
-/// Upper bound of publish attempts when a concurrent publisher keeps winning the insert.
-const PUBLISH_ATTEMPTS: u32 = 5;
-
-async fn insert_blob(conn: &mut PgConnection, new: &NewAsset) -> Result<(), StoreError> {
-    sqlx::query(
-        "INSERT INTO blobs (id, blob_store_id, key, size_bytes, sha1, sha256, md5, created_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-    )
-    .bind(new.blob.id.as_uuid())
-    .bind(new.blob.blob_store_id.as_uuid())
-    .bind(&new.blob.key)
-    .bind(to_i64(new.blob.size_bytes)?)
-    .bind(&new.blob.checksums.sha1)
-    .bind(&new.blob.checksums.sha256)
-    .bind(&new.blob.checksums.md5)
-    .bind(new.blob.created_at)
-    .execute(conn)
-    .await
-    .map_err(|e| map_err("insert blob", e))?;
-    Ok(())
-}
-
-/// Points the asset at the new blob, creating it when the path is new. Returns the asset id
-/// and the blob it displaced.
-///
-/// `SELECT .. FOR UPDATE` first, then `UPDATE` or `INSERT .. ON CONFLICT DO NOTHING`:
-/// - a concurrent publisher of the same path blocks on the row lock and, when it wakes,
-///   reads the row the winner committed, so each publisher reports exactly the blob IT
-///   displaced (a single `INSERT .. ON CONFLICT DO UPDATE` cannot return the old value);
-/// - for a new path nothing can be locked, so two publishers may both reach the insert; the
-///   loser's `DO NOTHING` returns no row and the loop retries into the update branch.
-async fn upsert_asset(
-    conn: &mut PgConnection,
-    new: &NewAsset,
-) -> Result<(Uuid, Option<Uuid>), StoreError> {
-    for _ in 0..PUBLISH_ATTEMPTS {
-        let existing: Option<(Uuid, Uuid)> = sqlx::query_as(
-            "SELECT id, blob_id FROM assets WHERE repository_id = $1 AND path = $2 FOR UPDATE",
-        )
-        .bind(new.repository_id.as_uuid())
-        .bind(&new.path)
-        .fetch_optional(&mut *conn)
-        .await
-        .map_err(|e| map_err("lock asset", e))?;
-        if let Some((id, old_blob)) = existing {
-            sqlx::query(
-                "UPDATE assets SET blob_id = $2, content_type = $3, component_id = $4, \
-                 updated_at = now() WHERE id = $1",
-            )
-            .bind(id)
-            .bind(new.blob.id.as_uuid())
-            .bind(&new.content_type)
-            .bind(new.component_id.map(|c| c.as_uuid()))
-            .execute(&mut *conn)
-            .await
-            .map_err(|e| map_err("switch asset blob", e))?;
-            return Ok((id, Some(old_blob)));
-        }
-        let id = AssetId::generate().as_uuid();
-        let inserted: Option<Uuid> = sqlx::query_scalar(
-            "INSERT INTO assets (id, repository_id, component_id, path, blob_id, content_type) \
-             VALUES ($1, $2, $3, $4, $5, $6) \
-             ON CONFLICT ON CONSTRAINT uq_assets_repo_path DO NOTHING RETURNING id",
-        )
-        .bind(id)
-        .bind(new.repository_id.as_uuid())
-        .bind(new.component_id.map(|c| c.as_uuid()))
-        .bind(&new.path)
-        .bind(new.blob.id.as_uuid())
-        .bind(&new.content_type)
-        .fetch_optional(&mut *conn)
-        .await
-        .map_err(|e| map_err("insert asset", e))?;
-        if let Some(id) = inserted {
-            return Ok((id, None));
-        }
+/// The newest time per asset: `UPDATE .. FROM` with several source rows for one target row
+/// applies an arbitrary one of them.
+fn newest_per_asset(
+    ticks: impl Iterator<Item = (AssetId, OffsetDateTime)>,
+) -> (Vec<Uuid>, Vec<OffsetDateTime>) {
+    let mut newest: HashMap<Uuid, OffsetDateTime> = HashMap::new();
+    for (id, at) in ticks {
+        newest
+            .entry(id.as_uuid())
+            .and_modify(|current| {
+                if at > *current {
+                    *current = at;
+                }
+            })
+            .or_insert(at);
     }
-    Err(StoreError::Unavailable(
-        "publish kept losing a race, retry".to_owned(),
-    ))
+    let mut pairs: Vec<(Uuid, OffsetDateTime)> = newest.into_iter().collect();
+    // Ascending ids: the lock order of every flush, see `record_downloads`.
+    pairs.sort_unstable_by_key(|(id, _)| *id);
+    pairs.into_iter().unzip()
 }
 
 #[async_trait]
@@ -141,41 +107,20 @@ impl AssetRepo for PgAssetRepo {
             .transpose()
     }
 
-    /// One transaction: insert the blob row, create or switch the asset. A failure anywhere
-    /// rolls the blob row back too, so no unreferenced row is left by a failed publish, and
-    /// a cancelled future leaves the old state (dropping an open `sqlx` transaction rolls it
-    /// back).
-    async fn publish(&self, new: &NewAsset) -> Result<PublishOutcome, StoreError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| map_err("begin publish", e))?;
-        insert_blob(&mut tx, new).await?;
-        let (asset_id, replaced_blob_id) = upsert_asset(&mut tx, new).await?;
-        let replaced = match replaced_blob_id {
-            Some(blob_id) => sqlx::query_as::<_, BlobRow>(
-                "SELECT id, blob_store_id, key, size_bytes, sha1, sha256, md5, created_at \
-                 FROM blobs WHERE id = $1",
-            )
-            .bind(blob_id)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| map_err("read replaced blob", e))?
-            .map(BlobRow::into_record)
-            .transpose()?,
-            None => None,
-        };
-        let asset = sqlx::query_as::<_, AssetRow>(asset_select!("WHERE a.id = $1"))
-            .bind(asset_id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| map_err("read published asset", e))?
-            .into_asset()?;
-        tx.commit()
-            .await
-            .map_err(|e| map_err("commit publish", e))?;
-        Ok(PublishOutcome { asset, replaced })
+    async fn publish_with(
+        &self,
+        new: &NewAsset,
+        options: &WriteOptions,
+    ) -> Result<PublishOutcome, MutationError> {
+        asset_write::publish(&self.pool, new, options).await
+    }
+
+    async fn link(
+        &self,
+        link: &NewAssetLink,
+        options: &WriteOptions,
+    ) -> Result<PublishOutcome, MutationError> {
+        asset_write::link(&self.pool, link, options).await
     }
 
     /// Ordered by path in byte order (`COLLATE "C"`), which is also the keyset order.
@@ -230,6 +175,7 @@ impl AssetRepo for PgAssetRepo {
             .collect()
     }
 
+    /// The phase 1 delete is the typed one with no options: a guard refuses it as a `Conflict`.
     /// Returns the blob only when no other asset references it any more, so GC candidates are
     /// exactly the blobs that lost their last reference.
     async fn delete_by_path(
@@ -237,43 +183,22 @@ impl AssetRepo for PgAssetRepo {
         repository_id: RepositoryId,
         path: &str,
     ) -> Result<Option<BlobRecord>, StoreError> {
-        let mut tx = self
-            .pool
-            .begin()
+        asset_write::delete_by_path(&self.pool, repository_id, path, &WriteOptions::new())
             .await
-            .map_err(|e| map_err("begin delete asset", e))?;
-        let deleted: Option<Uuid> = sqlx::query_scalar(
-            "DELETE FROM assets WHERE repository_id = $1 AND path = $2 RETURNING blob_id",
-        )
-        .bind(repository_id.as_uuid())
-        .bind(path)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| map_err("delete asset", e))?;
-        let Some(blob_id) = deleted else {
-            return Ok(None);
-        };
-        let record = sqlx::query_as::<_, BlobRow>(
-            "SELECT b.id, b.blob_store_id, b.key, b.size_bytes, b.sha1, b.sha256, b.md5, b.created_at \
-             FROM blobs b WHERE b.id = $1 \
-               AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.blob_id = b.id)",
-        )
-        .bind(blob_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| map_err("read freed blob", e))?
-        .map(BlobRow::into_record)
-        .transpose()?;
-        tx.commit()
-            .await
-            .map_err(|e| map_err("commit delete asset", e))?;
-        Ok(record)
+            .map_err(MutationError::into_store_error)
     }
 
-    /// One `UPDATE .. FROM unnest(..)` for the whole batch. Duplicate ids in the batch are
-    /// reduced to the newest time first: `UPDATE .. FROM` with several source rows for one
-    /// target row applies an arbitrary one of them. A time older than the stored one never
-    /// moves `last_downloaded_at` backwards.
+    async fn delete_by_path_checked(
+        &self,
+        repository_id: RepositoryId,
+        path: &str,
+        options: &WriteOptions,
+    ) -> Result<Option<BlobRecord>, MutationError> {
+        asset_write::delete_by_path(&self.pool, repository_id, path, options).await
+    }
+
+    /// One `UPDATE .. FROM unnest(..)` for the whole batch, a time older than the stored one
+    /// never moves `last_downloaded_at` backwards.
     async fn touch_downloaded(
         &self,
         batch: &[(AssetId, OffsetDateTime)],
@@ -281,18 +206,7 @@ impl AssetRepo for PgAssetRepo {
         if batch.is_empty() {
             return Ok(());
         }
-        let mut newest: HashMap<Uuid, OffsetDateTime> = HashMap::with_capacity(batch.len());
-        for (id, at) in batch {
-            newest
-                .entry(id.as_uuid())
-                .and_modify(|current| {
-                    if *at > *current {
-                        *current = *at;
-                    }
-                })
-                .or_insert(*at);
-        }
-        let (ids, times): (Vec<Uuid>, Vec<OffsetDateTime>) = newest.into_iter().unzip();
+        let (ids, times) = newest_per_asset(batch.iter().copied());
         sqlx::query(
             "UPDATE assets a SET last_downloaded_at = v.at \
              FROM unnest($1::uuid[], $2::timestamptz[]) AS v(id, at) \
@@ -304,5 +218,92 @@ impl AssetRepo for PgAssetRepo {
         .await
         .map_err(|e| map_err("record downloads", e))?;
         Ok(())
+    }
+
+    /// Moves `updated_at` forward only: a stale revalidation (an older `at`) never rewinds the
+    /// freshness of an entry another node refreshed meanwhile. The common case is one
+    /// statement; the existence read happens only when nothing was updated.
+    async fn touch_fresh(&self, id: AssetId, at: OffsetDateTime) -> Result<(), StoreError> {
+        let updated =
+            sqlx::query("UPDATE assets SET updated_at = $2 WHERE id = $1 AND updated_at < $2")
+                .bind(id.as_uuid())
+                .bind(at)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| map_err("touch asset", e))?;
+        if updated.rows_affected() > 0 {
+            return Ok(());
+        }
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM assets WHERE id = $1)")
+            .bind(id.as_uuid())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| map_err("touch asset", e))?;
+        if exists {
+            Ok(())
+        } else {
+            Err(StoreError::NotFound("asset".to_owned()))
+        }
+    }
+
+    /// Sets `last_downloaded_at` of the assets and of their components, in one transaction,
+    /// only where the stored time lags the new one by more than the write interval.
+    ///
+    /// Row locks are taken first, in ascending id order, by a materialized
+    /// `SELECT .. FOR UPDATE .. ORDER BY id`: two nodes flushing overlapping sets then wait
+    /// for each other instead of deadlocking (an `UPDATE .. FROM` locks in the order of its
+    /// join, which differs between plans). The counts of the ticks are not used yet: the daily
+    /// counters table belongs to the lifecycle stream (`asset_downloads_daily`, migration 0040)
+    /// and that stream adds its insert here, in the same transaction.
+    async fn record_downloads(&self, batch: &[DownloadTick]) -> Result<(), StoreError> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+        let (ids, times) = newest_per_asset(batch.iter().map(|t| (t.asset_id, t.at)));
+        let lag = self.download_write_interval.as_secs_f64();
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| map_err("record downloads", e))?;
+        sqlx::query(
+            "WITH locked AS MATERIALIZED ( \
+                 SELECT id FROM assets WHERE id = ANY($1) ORDER BY id FOR UPDATE) \
+             UPDATE assets a SET last_downloaded_at = v.at \
+             FROM unnest($1::uuid[], $2::timestamptz[]) AS v(id, at) \
+             WHERE a.id = v.id AND a.id IN (SELECT id FROM locked) \
+               AND (a.last_downloaded_at IS NULL \
+                    OR a.last_downloaded_at < v.at - make_interval(secs => $3))",
+        )
+        .bind(&ids)
+        .bind(&times)
+        .bind(lag)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| map_err("record asset downloads", e))?;
+        sqlx::query(
+            "WITH newest AS ( \
+                 SELECT a.component_id AS id, max(v.at) AS at \
+                 FROM unnest($1::uuid[], $2::timestamptz[]) AS v(id, at) \
+                 JOIN assets a ON a.id = v.id WHERE a.component_id IS NOT NULL \
+                 GROUP BY a.component_id), \
+             locked AS MATERIALIZED ( \
+                 SELECT c.id FROM components c WHERE c.id IN (SELECT id FROM newest) \
+                 ORDER BY c.id FOR UPDATE) \
+             UPDATE components c SET last_downloaded_at = n.at \
+             FROM newest n \
+             WHERE c.id = n.id AND c.id IN (SELECT id FROM locked) \
+               AND (c.last_downloaded_at IS NULL \
+                    OR c.last_downloaded_at < n.at - make_interval(secs => $3))",
+        )
+        .bind(&ids)
+        .bind(&times)
+        .bind(lag)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| map_err("record component downloads", e))?;
+        tx.commit()
+            .await
+            .map_err(|e| map_err("record downloads", e))
     }
 }

@@ -8,11 +8,21 @@
 //! - The `source` of a `Backend` error is a [`DbFault`]: SQLSTATE plus the server's
 //!   primary message only. The detail and hint fields (which carry row values) and the
 //!   statement are dropped, so even a `Debug` dump of the chain holds no row data.
+//! - The one exception to the last rule is the DETAIL of the policy guards `RX004` to `RX006`:
+//!   the guard puts an identifier there (the immutability rule, the hold, the quota scope), and
+//!   [`map_mutation_err`] parses it into a typed [`PolicyViolation`]. It is parsed, never
+//!   copied: a detail that does not have the documented shape is dropped, and the error then
+//!   degrades to a `Conflict` with a fixed text.
 
 use std::fmt;
 
 use rustryx_core::StoreError;
+use rustryx_core::error::{MutationError, PolicyViolation};
+use rustryx_core::ids::{ImmutabilityRuleId, LifecycleHoldId, ProjectId, RepositoryId};
+use rustryx_core::quota::{QuotaExceeded, QuotaScope};
 use sqlx::error::DatabaseError;
+use sqlx::postgres::PgDatabaseError;
+use uuid::Uuid;
 
 /// SQLSTATE raised by the role nesting guard.
 pub const SQLSTATE_ROLE_CYCLE: &str = "RX001";
@@ -20,6 +30,18 @@ pub const SQLSTATE_ROLE_CYCLE: &str = "RX001";
 pub const SQLSTATE_BUILTIN_READONLY: &str = "RX002";
 /// SQLSTATE raised when the append-only audit table is modified.
 pub const SQLSTATE_AUDIT_APPEND_ONLY: &str = "RX003";
+/// SQLSTATE raised by the immutability guard (DETAIL: the rule id).
+pub const SQLSTATE_IMMUTABLE: &str = "RX004";
+/// SQLSTATE raised by the hold guard (DETAIL: the hold id).
+pub const SQLSTATE_HELD: &str = "RX005";
+/// SQLSTATE raised when a quota would be exceeded (DETAIL:
+/// `<project|repository>:<scope id>:<limit>:<used>:<requested>`).
+pub const SQLSTATE_QUOTA_EXCEEDED: &str = "RX006";
+/// SQLSTATE raised by the read only mode guard.
+pub const SQLSTATE_READ_ONLY: &str = "RX007";
+/// SQLSTATE raised by the scope guards (a label on a component of another project, the last
+/// project administrator).
+pub const SQLSTATE_SCOPE_VIOLATION: &str = "RX008";
 
 /// Sanitised error source for logs: no statement text, no row values.
 #[derive(Debug)]
@@ -66,6 +88,21 @@ const CONSTRAINT_MESSAGES: &[(&str, &str)] = &[
     ("uq_user_tokens_hash", "token already exists"),
     ("uq_idp_mapping_group", "group mapping already exists"),
     ("uq_job_leases_dedupe", "job is already queued or running"),
+    ("uq_projects_name", "project name already exists"),
+    ("uq_routing_rules_name", "routing rule name already exists"),
+    (
+        "ck_routing_rules_patterns",
+        "a routing rule needs 1 to 32 patterns of 1 to 256 bytes",
+    ),
+    ("uq_task_definitions_name", "task name already exists"),
+    (
+        "uq_task_runs_active",
+        "a run of this task is already queued or running",
+    ),
+    (
+        "fk_repositories_routing_rule",
+        "routing rule is still used by a repository or does not exist",
+    ),
     (
         "fk_repositories_blob_store",
         "blob store reference conflict",
@@ -74,7 +111,10 @@ const CONSTRAINT_MESSAGES: &[(&str, &str)] = &[
         "repositories_blob_store_id_fkey",
         "blob store reference conflict",
     ),
-    ("blobs_blob_store_id_fkey", "blob store is still in use"),
+    (
+        "blobs_blob_store_id_fkey",
+        "blob store is still in use or does not exist",
+    ),
     (
         "assets_blob_id_fkey",
         "blob is still referenced by an asset",
@@ -119,6 +159,14 @@ const CONSTRAINT_MESSAGES: &[(&str, &str)] = &[
         "local accounts have no external identity",
     ),
     ("ck_role_roles_not_self", "a role cannot contain itself"),
+    (
+        "ck_privileges_grant_shape",
+        "privilege grant is not valid for this schema version",
+    ),
+    (
+        "privileges_grant_kind_check",
+        "privilege grant is not valid for this schema version",
+    ),
 ];
 
 fn constraint_message(constraint: Option<&str>) -> &'static str {
@@ -190,6 +238,11 @@ fn map_database(context: &'static str, db: &dyn DatabaseError) -> StoreError {
             StoreError::Conflict("built-in entity is read-only".to_owned())
         }
         SQLSTATE_AUDIT_APPEND_ONLY => StoreError::Conflict("audit log is append-only".to_owned()),
+        SQLSTATE_IMMUTABLE => StoreError::Conflict(IMMUTABLE_TEXT.to_owned()),
+        SQLSTATE_HELD => StoreError::Conflict(HELD_TEXT.to_owned()),
+        SQLSTATE_QUOTA_EXCEEDED => StoreError::Conflict(QUOTA_TEXT.to_owned()),
+        SQLSTATE_READ_ONLY => StoreError::Conflict(READ_ONLY_TEXT.to_owned()),
+        SQLSTATE_SCOPE_VIOLATION => StoreError::Conflict(SCOPE_TEXT.to_owned()),
         // serialization_failure, deadlock_detected: the caller may retry the whole operation
         "40001" | "40P01" => StoreError::Unavailable("transaction conflict, retry".to_owned()),
         // query_canceled (statement_timeout), admin_shutdown, crash_shutdown, cannot_connect_now
@@ -209,6 +262,73 @@ fn map_database(context: &'static str, db: &dyn DatabaseError) -> StoreError {
             }),
         },
     }
+}
+
+/// The same words as the `Display` of the matching [`PolicyViolation`], so a phase 1 caller
+/// (`StoreError::Conflict`) and a typed caller (`MutationError::Violation`) read one text.
+const IMMUTABLE_TEXT: &str = "item is immutable";
+const HELD_TEXT: &str = "item is under a hold";
+const QUOTA_TEXT: &str = "quota exceeded";
+const READ_ONLY_TEXT: &str = "read only mode";
+const SCOPE_TEXT: &str = "scope violation";
+
+/// DETAIL of a policy guard error, or `None` for any other error.
+fn guard_detail(db: &dyn DatabaseError) -> Option<&str> {
+    db.try_downcast_ref::<PgDatabaseError>()
+        .and_then(PgDatabaseError::detail)
+}
+
+/// `<project|repository>:<scope id>:<limit>:<used>:<requested>` of an `RX006` guard.
+fn parse_quota_detail(detail: &str) -> Option<QuotaExceeded> {
+    let mut parts = detail.splitn(5, ':');
+    let kind = parts.next()?;
+    let id = Uuid::parse_str(parts.next()?).ok()?;
+    let scope = match kind {
+        "project" => QuotaScope::Project(ProjectId::from_uuid(id)),
+        "repository" => QuotaScope::Repository(RepositoryId::from_uuid(id)),
+        _ => return None,
+    };
+    Some(QuotaExceeded {
+        scope,
+        limit_bytes: parts.next()?.parse().ok()?,
+        used_bytes: parts.next()?.parse().ok()?,
+        requested_bytes: parts.next()?.parse().ok()?,
+    })
+}
+
+/// The typed violation behind a guard error, `None` when the error is not a guard error or its
+/// DETAIL does not have the documented shape.
+fn violation_of(db: &dyn DatabaseError) -> Option<PolicyViolation> {
+    let code = db.code()?;
+    let detail = guard_detail(db);
+    match code.as_ref() {
+        SQLSTATE_IMMUTABLE => Some(PolicyViolation::Immutable {
+            rule: ImmutabilityRuleId::from_uuid(Uuid::parse_str(detail?).ok()?),
+        }),
+        SQLSTATE_HELD => Some(PolicyViolation::Held {
+            hold: LifecycleHoldId::from_uuid(Uuid::parse_str(detail?).ok()?),
+        }),
+        SQLSTATE_QUOTA_EXCEEDED => parse_quota_detail(detail?).map(PolicyViolation::QuotaExceeded),
+        SQLSTATE_READ_ONLY => Some(PolicyViolation::ReadOnly),
+        _ => None,
+    }
+}
+
+/// Like [`map_err`] for the typed port methods: a policy guard (`RX004` to `RX007`) becomes
+/// [`MutationError::Violation`], everything else a [`MutationError::Store`].
+///
+/// A guard whose DETAIL cannot be parsed (an older or hand written guard) still reports as a
+/// store `Conflict` with the fixed text, never as a backend failure: the write was refused on
+/// purpose. `RX008` has no `PolicyViolation` (it is a scope mistake of the caller, not a
+/// policy) and stays a `Conflict` in both flavours.
+#[must_use]
+pub fn map_mutation_err(context: &'static str, err: sqlx::Error) -> MutationError {
+    if let sqlx::Error::Database(db) = &err
+        && let Some(violation) = violation_of(db.as_ref())
+    {
+        return MutationError::Violation(violation);
+    }
+    MutationError::Store(map_err(context, err))
 }
 
 /// Wraps a message that is already safe into a `Backend` error.
@@ -269,5 +389,76 @@ mod tests {
         let shown = format!("{mapped} {mapped:?}");
         assert!(!shown.contains("hunter2"), "{shown}");
         assert!(matches!(mapped, StoreError::Backend { .. }));
+    }
+
+    #[test]
+    fn quota_details_are_parsed_strictly() {
+        let id = Uuid::now_v7();
+        let parsed = parse_quota_detail(&format!("repository:{id}:1000:900:200")).unwrap();
+        assert_eq!(
+            parsed.scope,
+            QuotaScope::Repository(RepositoryId::from_uuid(id))
+        );
+        assert_eq!(
+            (
+                parsed.limit_bytes,
+                parsed.used_bytes,
+                parsed.requested_bytes
+            ),
+            (1000, 900, 200)
+        );
+        let project = parse_quota_detail(&format!("project:{id}:1:2:3")).unwrap();
+        assert_eq!(project.scope, QuotaScope::Project(ProjectId::from_uuid(id)));
+        for bad in [
+            "",
+            "project",
+            "project:not-a-uuid:1:2:3",
+            &format!("galaxy:{id}:1:2:3"),
+            &format!("project:{id}:1:2"),
+            &format!("project:{id}:-1:2:3"),
+            &format!("project:{id}:1:two:3"),
+            &format!("project:{id}:1:2:3:4"),
+        ] {
+            assert!(parse_quota_detail(bad).is_none(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn guard_texts_match_the_violation_display() {
+        // A phase 1 caller and a typed caller read one text for one refusal.
+        assert_eq!(
+            IMMUTABLE_TEXT,
+            PolicyViolation::Immutable {
+                rule: ImmutabilityRuleId::generate()
+            }
+            .to_string()
+        );
+        assert_eq!(
+            HELD_TEXT,
+            PolicyViolation::Held {
+                hold: LifecycleHoldId::generate()
+            }
+            .to_string()
+        );
+        assert_eq!(READ_ONLY_TEXT, PolicyViolation::ReadOnly.to_string());
+        let quota = QuotaExceeded {
+            scope: QuotaScope::Project(ProjectId::generate()),
+            limit_bytes: 1,
+            used_bytes: 1,
+            requested_bytes: 1,
+        };
+        assert_eq!(
+            QUOTA_TEXT,
+            PolicyViolation::QuotaExceeded(quota).to_string()
+        );
+    }
+
+    #[test]
+    fn a_non_database_error_is_never_a_violation() {
+        let mapped = map_mutation_err("t", sqlx::Error::PoolTimedOut);
+        assert!(matches!(
+            mapped,
+            MutationError::Store(StoreError::Unavailable(_))
+        ));
     }
 }
