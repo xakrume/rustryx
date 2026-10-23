@@ -13,3 +13,35 @@ workspace = true
 
 [dependencies]
 rustryx-core.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+axum-core.workspace = true
+bytes.workspace = true
+dashmap.workspace = true
+futures.workspace = true
+hex.workspace = true
+http.workspace = true
+ipnet.workspace = true
+metrics.workspace = true
+moka.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+rustryx-testkit.workspace = true
+proptest.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+tokio-rustls.workspace = true
+wiremock.workspace = true
