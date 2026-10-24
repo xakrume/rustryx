@@ -1,0 +1,33 @@
+[package]
+name = "rustryx-format-raw-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "cargo-fuzz targets of rustryx-format-raw (a nightly toolchain is needed to run them)"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+http = "1"
+rustryx-format-raw = { path = ".." }
+
+[[bin]]
+name = "path_normalizer"
+path = "fuzz_targets/path_normalizer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "accept_header"
+path = "fuzz_targets/accept_header.rs"
+test = false
+doc = false
+bench = false
+
+# The fuzz crate is its own workspace: the root workspace globs `crates/*` and must not pick it
+# up, and a libfuzzer build has its own lock file and toolchain.
+[workspace]
