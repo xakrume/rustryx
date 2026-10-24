@@ -70,6 +70,8 @@ use crate::supervisor::BackgroundTask;
 
 /// Interval of the runtime and process sampler.
 const RUNTIME_SAMPLE_INTERVAL: Duration = Duration::from_secs(10);
+/// How long the shutdown waits for the session revocations that were waiting out their grace.
+const SESSION_DRAIN_DEADLINE: Duration = Duration::from_secs(5);
 
 /// Everything the server runs with, produced by [`assemble`].
 pub struct Components {
@@ -263,11 +265,20 @@ pub async fn assemble(config: &AppConfig, metrics: &MetricsHandle) -> anyhow::Re
         )),
     ];
 
+    let sessions = session_manager(config, &identity, &repos, &cookie_key, Arc::new(bus))?;
+    let draining_sessions = Arc::clone(&sessions);
     let engine = formats.engine.clone();
     let engine_stop = formats.shutdown.clone();
     let registry = Arc::clone(&blob_registry);
     let closing_pool = pool.clone();
     let finalizers = vec![
+        // First, and before the pool closes: the replaced session tokens that are still waiting
+        // out their grace are revoked now, through the pool, instead of being lost with the
+        // process. A few statements, so they go ahead of the slower steps.
+        Finalizer::new("session_revocations", async move {
+            // The manager logs what it could not finish.
+            let _unfinished = draining_sessions.drain(SESSION_DRAIN_DEADLINE).await;
+        }),
         Finalizer::new("format_engine", async move {
             engine_stop.cancel();
             engine.drain().await;
@@ -280,13 +291,7 @@ pub async fn assemble(config: &AppConfig, metrics: &MetricsHandle) -> anyhow::Re
         readiness: Arc::new(PgReadiness::new(pool, metrics.clone())),
         authenticator: Some(Arc::clone(&identity.service) as Arc<dyn Authenticator>),
         rbac: Some(rbac),
-        sessions: Some(session_manager(
-            config,
-            &identity,
-            &repos,
-            &cookie_key,
-            Arc::new(bus),
-        )?),
+        sessions: Some(sessions),
         modules,
         background,
         finalizers,
@@ -569,7 +574,13 @@ mod tests {
         let finalizers: Vec<_> = components.finalizers.iter().map(Finalizer::name).collect();
         assert_eq!(
             finalizers,
-            ["format_engine", "blob_stores", "database_pool"]
+            [
+                "session_revocations",
+                "format_engine",
+                "blob_stores",
+                "database_pool"
+            ],
+            "the session revocations run first and the pool closes last"
         );
         let report = components.readiness.check().await;
         assert_eq!(report.database, rustryx_api::Outcome::Failed);
@@ -583,7 +594,7 @@ mod tests {
             crate::shutdown::run_all(components.finalizers, std::time::Duration::from_secs(10))
                 .await;
         assert_eq!(report.abandoned, 0);
-        assert_eq!(report.finished, 3);
+        assert_eq!(report.finished, 4);
     }
 
     #[tokio::test]

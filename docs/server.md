@@ -52,9 +52,10 @@ On SIGTERM or SIGINT:
    The drain is logged with the number of connections cut off.
 4. At the same moment the background-task token is cancelled and the tasks get the
    same deadline; stragglers are aborted.
-5. The final steps run in order, within a second budget of the same length: the format
-   engine stops its cache fills, lets uploads finish committing and flushes the download
-   counters (`FormatEngine::drain`), the blob stores finish their cleanup, and the
+5. The final steps run in order, within a second budget of the same length: the session
+   revocations that were waiting out their grace run now (`SessionManager::drain`), the
+   format engine stops its cache fills, lets uploads finish committing and flushes the
+   download counters (`FormatEngine::drain`), the blob stores finish their cleanup, and the
    database pool closes last because the steps before it still write through it.
 6. Logs and traces are flushed and the process exits with code 0.
 
@@ -91,7 +92,7 @@ Mounted by `NativeAuthModule` (`crates/rustryx-api/src/native/`), contract in
 | Route | Requires | Notes |
 |---|---|---|
 | `GET /api/v1/auth/providers` | public | Which sign-in methods are on. |
-| `POST /api/v1/auth/login` | public | Username and password, local or LDAP. Starts a cookie session. Its CSRF defence is the `Origin` check (the origin of `server.base_url` or of `server.cors_allowed_origins`; the `Host` when no base URL is set). A password starting with `ryx_` is refused: a token must not open a UI session. |
+| `POST /api/v1/auth/login` | public | Username and password, local or LDAP. Starts a cookie session. Subject to the HTTPS rule of Basic (below): 403 `https_required` before the Origin check and before the chain is called. Its CSRF defence is the `Origin` check (the origin of `server.base_url` or of `server.cors_allowed_origins`; the `Host` when no base URL is set). A password starting with `ryx_` is refused: a token must not open a UI session. |
 | `GET /api/v1/auth/oidc/login`, `GET /api/v1/auth/oidc/callback` | public | Authorization code with PKCE. `return_to` is a plain absolute path, checked again on the way back. A failed callback redirects a browser to `/login?error=<code>` and answers anyone else with the envelope. |
 | `POST /api/v1/auth/logout` | public | Idempotent. Revokes the token id, drops the user's cached principals on every node and clears the cookies. |
 | `GET /api/v1/auth/session` | public | State of the session; `authenticated: false` for an anonymous caller. |
@@ -142,11 +143,11 @@ else: a token in the query string is ignored), runs the authenticator chain from
   that refused (the chain reports it). The chain's own counter is switched off
   (`record_attempt_metrics: false`) so that no series is doubled.
 
-**Basic over plain HTTP.** TLS ends in front of the node, so a request is "HTTPS" only
+**Passwords over plain HTTP.** TLS ends in front of the node, so a request is "HTTPS" only
 when the peer is in `server.trusted_proxies` and the right-most `X-Forwarded-Proto` (or
 `Forwarded: proto=`) says `https`. With `server.require_https` on (the default) HTTP
-Basic credentials from any other request are refused with 403 `https_required`, before
-the chain sees them. Bearer tokens, the session cookie (which is `Secure`) and `/metrics`
+Basic credentials and the JSON password login (`POST /api/v1/auth/login`) from any other
+request are refused with 403 `https_required`, before the chain sees them. Bearer tokens, the session cookie (which is `Secure`) and `/metrics`
 are not subject to the guard. A development node on plain HTTP sets
 `RUSTRYX_SERVER_REQUIRE_HTTPS=false`.
 
@@ -160,6 +161,20 @@ stateless, so any node can serve it.
 | Absolute | `auth.session.absolute_timeout_secs`, 8 hours at most | the token's `exp`, fixed at login and kept by every reissue |
 | Idle | `auth.session.idle_timeout_secs`, 30 minutes at most | `iat + idle`, checked before the chain; a request that finds less than half of it left reissues the token in the same response |
 | Group snapshot (SSO) | 5 minutes | the chain refuses an older snapshot (see the gap below) |
+| Replaced token | 30 seconds after a reissue (`SessionSettings::revoke_grace`, at most 5 minutes) | a revocation task per replaced token id, see below |
+
+**Replaced tokens end.** A reissue (transparent or `POST /auth/session/refresh`) revokes the token it
+replaced, but only after a grace: a page sends many requests in parallel, and the ones already in flight
+with the old cookie must not suddenly get 401. The revocation is a task on a tracker owned by
+`SessionManager`, sleeping for the grace or until the manager is drained. It is scheduled only after the new
+token was issued (a failed reissue leaves the old token alone), a failure to revoke is logged and never fails
+the request, and parallel reissues from one old token share one task. `POST /auth/logout` revokes the current
+token at once and, through an in-memory link from each token to the one it replaced, any predecessor still
+waiting out its grace (a logout that lands on another node ends it when the issuing node's timer fires, so the
+window is the grace at most). `SessionManager::drain` cancels the sleeps, so at shutdown the pending
+revocations run immediately, and waits for them within a deadline; the server calls it first in the final
+steps, before the database pool closes. A crash loses the revocations that were waiting: those tokens then
+live to their own end, as they did before the grace existed.
 
 A mutating request (`POST`, `PUT`, `PATCH`, `DELETE`) authenticated by the cookie must
 carry the CSRF token in `X-CSRF-Token` (equal to the CSRF cookie and the token of this
@@ -334,8 +349,8 @@ a key the schema lacks adds it to `rustryx-config` first (schema, key table,
   timeout reaps slow clients. A separate internal probe port is a deployment option.
 - TLS is terminated in front of the node. `Strict-Transport-Security` is sent regardless
   (browsers ignore it over plain HTTP).
-- A reissued session token does not revoke the one it replaces: the old one stays valid
-  until its own idle end (30 minutes at most) and expires by itself.
+- Tokens issued to requests that reissue in parallel (one per in-flight request) are not revoked
+  when the browser keeps only the last: each ends at its own idle end (30 minutes at most).
 
 ## Running the tests
 

@@ -6,9 +6,9 @@
 //! process, because that is the same code path as the binary and the test can then read the
 //! outcome of the shutdown.
 //!
-//! One test function on purpose: the steps depend on each other (the readiness flip needs the
-//! migration, the login needs the bootstrap task, the shutdown needs the whole run), and a
-//! container per step would dominate the run time.
+//! Each test starts its own container. Inside a test the steps stay in one function: the
+//! readiness flip needs the migration, the login needs the bootstrap task, and the shutdown
+//! needs the whole run.
 
 #![allow(
     clippy::unwrap_used,
@@ -151,16 +151,16 @@ where
     panic!("timed out waiting for: {what}");
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn serves_before_the_schema_exists_becomes_ready_after_migrate_and_signs_the_admin_in() {
-    let postgres = Postgres::start().await;
-    let blob_dir = tempfile::tempdir().unwrap();
-    let config = config(&postgres.url(), &blob_dir.path().join("blobs"));
-    config.validate().expect("the test configuration is valid");
-
-    let metrics = MetricsHandle::new().unwrap();
-    metrics.install_global().unwrap();
-    let components = wiring::assemble(&config, &metrics)
+/// Assembles and runs the node in process; returns a client, the stop switch and the task.
+async fn start_server(
+    config: &AppConfig,
+    metrics: &MetricsHandle,
+) -> (
+    Node,
+    CancellationToken,
+    tokio::task::JoinHandle<anyhow::Result<Outcome>>,
+) {
+    let components = wiring::assemble(config, metrics)
         .await
         .expect("assembly needs no running service");
     let stop = CancellationToken::new();
@@ -192,6 +192,19 @@ async fn serves_before_the_schema_exists_becomes_ready_after_migrate_and_signs_t
         base: format!("http://{addr}"),
         origin: format!("http://{addr}"),
     };
+    (node, stop, server)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn serves_before_the_schema_exists_becomes_ready_after_migrate_and_signs_the_admin_in() {
+    let postgres = Postgres::start().await;
+    let blob_dir = tempfile::tempdir().unwrap();
+    let config = config(&postgres.url(), &blob_dir.path().join("blobs"));
+    config.validate().expect("the test configuration is valid");
+
+    let metrics = MetricsHandle::new().unwrap();
+    metrics.install_global().unwrap();
+    let (node, stop, server) = start_server(&config, &metrics).await;
 
     // 1. Liveness does not depend on the database; readiness does, and the schema is empty.
     let health = node.get("/healthz", &[]).await;
@@ -420,4 +433,77 @@ fn base64_encode(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn shutdown_revokes_the_replaced_session_token_that_was_still_waiting_out_its_grace() {
+    let postgres = Postgres::start().await;
+    let blob_dir = tempfile::tempdir().unwrap();
+    let mut config = config(&postgres.url(), &blob_dir.path().join("blobs"));
+    // A short idle time makes a reissue due after two seconds instead of fifteen minutes.
+    config.auth.session.idle_timeout_secs = 4;
+    config.validate().expect("the test configuration is valid");
+    wiring::migrator()
+        .migrate(&config)
+        .await
+        .expect("migrations apply");
+    let metrics = MetricsHandle::new().unwrap();
+    let (node, stop, server) = start_server(&config, &metrics).await;
+    let probe = sqlx::PgPool::connect(&postgres.url()).await.unwrap();
+    until("the bootstrap administrator row", || async {
+        let found: Option<i64> =
+            sqlx::query_scalar("SELECT count(*) FROM users WHERE username = 'admin'")
+                .fetch_one(&probe)
+                .await
+                .ok();
+        (found == Some(1)).then_some(())
+    })
+    .await;
+
+    let login = node.login("admin", ADMIN_PASSWORD).await;
+    assert_eq!(login.status, StatusCode::OK, "{}", login.body);
+    let old_session = login
+        .cookie_pair("__Host-rustryx_session")
+        .expect("session");
+    let old_csrf = login.cookie_pair("__Host-rustryx_csrf").expect("csrf");
+
+    // More than half of the idle time has passed: this request is answered with a new token.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let reissue = node
+        .get(
+            "/api/v1/me",
+            &[("cookie", format!("{old_session}; {old_csrf}"))],
+        )
+        .await;
+    assert_eq!(reissue.status, StatusCode::OK, "{}", reissue.body);
+    let new_session = reissue
+        .cookie_pair("__Host-rustryx_session")
+        .expect("the response carries the replacement");
+    assert_ne!(new_session, old_session);
+
+    // Inside the 30 second grace the old token is not revoked yet.
+    let revoked: i64 = sqlx::query_scalar("SELECT count(*) FROM revoked_tokens")
+        .fetch_one(&probe)
+        .await
+        .unwrap();
+    assert_eq!(revoked, 0, "the old token is still waiting out its grace");
+
+    stop.cancel();
+    let outcome = tokio::time::timeout(Duration::from_secs(30), server)
+        .await
+        .expect("the server stops in time")
+        .expect("no panic")
+        .expect("a clean outcome");
+    assert_eq!(outcome.background.aborted, 0);
+
+    // The shutdown did not wait for the grace and did not lose the revocation.
+    let revoked: i64 = sqlx::query_scalar("SELECT count(*) FROM revoked_tokens")
+        .fetch_one(&probe)
+        .await
+        .unwrap();
+    assert_eq!(
+        revoked, 1,
+        "must not lose the pending revocation of the replaced token at shutdown"
+    );
+    postgres.stop().await;
 }
