@@ -37,9 +37,9 @@ Status: `open` until the change lands in core.
 | 29 | format-core | `BlobStore` has no resumable or compose upload, which OCI chunked uploads in HA need | design in wave 2 with the oci format (staging key + server-side compose, or multipart kept open across requests) | open |
 | 30 | format-core | `ProxyConfig` has no per-repository CA bundle | add `ca_bundle_secret_ref` | open |
 | 31 | runtime | `DomainError::{Invalid, Conflict, AlreadyExists}` strings reach clients verbatim, so services must keep internals out of them | document in core, add a lint-like test in `rustryx-api` over every service message | open |
-| 32 | runtime | `AuthError` does not say which authenticator refused, so `auth_attempts_total` uses method `unknown` on failures | add a `method` to the failure variants or return it in a wrapper | open |
-| 33 | runtime | core has no upstream error type | add `UpstreamError` (502 and 504 mapping) used by format-core and api | open |
-| 34 | runtime | core `Secret` serializes its real value, config wraps secrets in its own redacting type | keep, but forbid `Secret` in response DTOs by a test in `rustryx-api` | open |
+| 32 | runtime | `AuthError` does not say which authenticator refused, so `auth_attempts_total` uses method `unknown` on failures | add a `method` to the failure variants or return it in a wrapper | closed, see "Runtime adapted to core revision 2" |
+| 33 | runtime | core has no upstream error type | add `UpstreamError` (502 and 504 mapping) used by format-core and api | closed, see "Runtime adapted to core revision 2" |
+| 34 | runtime | core `Secret` serializes its real value, config wraps secrets in its own redacting type | keep, but forbid `Secret` in response DTOs by a test in `rustryx-api` | closed, see "Runtime adapted to core revision 2" |
 
 Open non-core issues from the blob agent: no disk-free 10% write rejection
 (needs statvfs, `unsafe` is forbidden: solve through a metrics-based alert or a
@@ -183,3 +183,37 @@ product.
 - API changes for format and API authors: `cx.store()` is async, `cx.store_for_blob(&record)` is new, `hosted().delete()` returns `Option<BlobRecord>`, `UploadOutcome.created` is a field, `ClientInfo` literals need `..Default::default()`, `Limits::{chunk_segment_bytes, validator_cache_capacity}`, `FormatEngine::tasks()`, the HTTP layer reads `RequestLabels::of(&response)`.
 - Deviations: `class` uses `download`, not `artifact` (the TTFB alert selects `class="download"`); `cache` has hit, miss, stale, bypass, none; hosted reads count as `hit`. docs/slo.md A2 must add `stale` and `bypass` and move `upstream_circuit_state` to the exported table; `p95_metadata_5m` does not exclude `cache="miss"`.
 - Open: `Asset` has no field for upstream validators (ETag, Last-Modified) so they live in a per-node cache (after a restart or on another node an expired copy is asked without a condition); gap 28 (pending blob row) was rejected by core, a leaked object is found by the `verify_blobs` sweep and `blob_orphan_leak_total`; presigned redirects are undecided (need a cached per-store `presign` setting on the hot path); `UploadSpec` carries no push events; per-repository CA bundles unsupported; `ContentPolicy` has no real implementer yet; a pre-check refusal (deny, allow_once, taken path) is counted but not audited.
+
+## Runtime adapted to core revision 2 and wired (from the runtime agent)
+
+Crates: `rustryx-config`, `rustryx-observability`, `rustryx-api`, `rustryx-server`. Details in
+docs/server.md ("The composition root", "Known gaps and decisions").
+
+- Gap 31 (client-visible `DomainError` text): the envelope cleans and caps the messages of `Invalid`,
+  `Conflict` and `AlreadyExists` (control characters stripped, 240 characters) and has tests for both
+  (`error/tests.rs`). The lint-like test over every service message needs the services; it belongs to the
+  first native API module that writes such messages. Still open for that reason.
+- Gap 32 (which authenticator refused): closed. The chain returns `AuthFailure` with the method, the HTTP
+  layer counts `auth_attempts_total` once with it, and the chain's own counter is off.
+- Gap 33 (upstream error type): closed. `ApiError::upstream_error` and `upstream_timeout` map core's
+  `UpstreamError` to 502 and 504.
+- Gap 34 (`Secret` in response DTOs): closed by `must_not_embed_the_secret_type_in_a_response_dto` and the
+  credential field scan over `native/dto.rs`.
+- Closed from the runtime notes: Basic over plain HTTP (`server.require_https` with `trusted_proxies`), deny by
+  default as structure (`Requires`, `Authorized`, the route layer and the backstop), `process_*` and `tokio_*`
+  metrics (except `tokio_blocking_queue_depth`, which needs `--cfg tokio_unstable`).
+- New core-level findings:
+  - The chain's principal cache (5 minutes) skips the revocation check, so every revoke must also invalidate the
+    user on the bus. `InternalJwtService::revoke` does not publish; `JwtSessionIssuer` in the server does. Token
+    revocation and password change will need the same.
+  - `OidcLoginFlow::complete` discards the Keycloak refresh token and `rustryx-auth` has no refresh grant, so an
+    SSO browser session ends five minutes after login (the group snapshot age limit). The seam in `rustryx-api`
+    and the server is ready.
+  - `rustryx-auth` accepts an OIDC issuer only over https in every environment; `rustryx-config` used to allow
+    http in development and now refuses it too, so a valid configuration cannot stop the node at startup.
+  - `database.connect_timeout_secs` has no counterpart in `rustryx-db` (`PgConfig` has no connect timeout), so it
+    is not applied; `acquire_timeout_secs` bounds the wait including the connect.
+  - No Redis lock backend exists; `lock.backend: redis` is refused at startup. `rustryx-tasks` is empty, so the
+    schedulers and GC are not wired.
+  - Audit retention (`drop_expired_audit_partitions`) is deliberately not run by any task: it deletes data and
+    needs the archive step first.
