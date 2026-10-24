@@ -84,8 +84,8 @@ pub use request_id::{REQUEST_ID_HEADER, RequestId, current_request_id};
 pub use router::{RouteModule, RouterBuilder, build_router};
 pub use routes::{RouteCatalog, RouteDecl, RouteSet};
 pub use session::{
-    CSRF_COOKIE, CSRF_HEADER, CsrfKey, CsrfKeyError, SESSION_COOKIE, SSO_COOKIE, SessionManager,
-    SessionSettings,
+    CSRF_COOKIE, CSRF_HEADER, CsrfKey, CsrfKeyError, DEFAULT_REVOKE_GRACE, MAX_REVOKE_GRACE,
+    SESSION_COOKIE, SSO_COOKIE, SessionManager, SessionSettings,
 };
 pub use state::{
     ApiSettings, AppState, ChallengeSelector, Lifecycle, MetricsAccess, RateLimitSettings,

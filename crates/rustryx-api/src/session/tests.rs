@@ -10,7 +10,7 @@ use super::*;
 use crate::ports::SsoRefreshed;
 use crate::session_support::{Account, FakeAuth, FakeRefresher};
 
-fn key() -> CsrfKey {
+pub(super) fn key() -> CsrfKey {
     use base64::Engine;
     let mut bytes = [5_u8; 32];
     bytes[1] = 11;
@@ -20,14 +20,14 @@ fn key() -> CsrfKey {
     .expect("key")
 }
 
-struct Rig {
-    clock: FixedClock,
-    auth: Arc<FakeAuth>,
-    manager: SessionManager,
-    user: UserId,
+pub(super) struct Rig {
+    pub(super) clock: FixedClock,
+    pub(super) auth: Arc<FakeAuth>,
+    pub(super) manager: SessionManager,
+    pub(super) user: UserId,
 }
 
-fn rig_with(settings: SessionSettings, refresher: Option<Arc<FakeRefresher>>) -> Rig {
+pub(super) fn rig_with(settings: SessionSettings, refresher: Option<Arc<FakeRefresher>>) -> Rig {
     let clock = FixedClock::default();
     let auth = FakeAuth::new(clock.clone());
     let user = UserId::generate();
@@ -55,7 +55,7 @@ fn rig_with(settings: SessionSettings, refresher: Option<Arc<FakeRefresher>>) ->
     }
 }
 
-fn rig() -> Rig {
+pub(super) fn rig() -> Rig {
     rig_with(SessionSettings::default(), None)
 }
 
@@ -74,7 +74,7 @@ fn cookie_headers(start: &SessionStart) -> HeaderMap {
     headers
 }
 
-fn read(_rig: &Rig, start: &SessionStart) -> CookieSession {
+pub(super) fn read(_rig: &Rig, start: &SessionStart) -> CookieSession {
     SessionManager::read(&cookie_headers(start))
         .expect("a cookie")
         .expect("a session")

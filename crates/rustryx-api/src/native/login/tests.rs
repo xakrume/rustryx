@@ -1,4 +1,7 @@
+use std::net::SocketAddr;
+
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use http::{Method, StatusCode};
 use rustryx_core::audit::AuditKind;
 
@@ -475,4 +478,138 @@ async fn a_failing_revocation_still_clears_the_cookies() {
     let reply = browser.post("/api/v1/auth/logout", None).await;
     assert_eq!(reply.status, StatusCode::OK, "the user asked to leave");
     assert!(browser.cookie(SESSION_COOKIE).is_none());
+}
+
+// ---- the HTTPS rule ---------------------------------------------------------------------
+
+/// A password login from `peer`, with the given headers, as a browser form would send it.
+fn login_from(peer: [u8; 4], headers: &[(&str, &str)]) -> http::Request<Body> {
+    let mut builder = request(Method::POST, "/api/v1/auth/login")
+        .header("origin", ORIGIN)
+        .header("content-type", "application/json");
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
+    let body = serde_json::json!({"username": "alice", "password": "correct horse"});
+    let mut request = builder.body(Body::from(body.to_string())).expect("request");
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from((peer, 4000))));
+    request
+}
+
+async fn guarded_env() -> crate::session_support::Env {
+    let mut builder = EnvBuilder::new();
+    builder.settings = Box::new(|settings| {
+        settings.require_https = true;
+        settings.trusted_proxies = vec!["10.0.0.0/8".parse().expect("cidr")];
+    });
+    builder.build().await
+}
+
+#[tokio::test]
+async fn must_not_accept_a_password_login_over_plain_http() {
+    let env = guarded_env().await;
+    // Straight from a client: no proxy vouches for TLS.
+    let direct = call(&env.router, login_from([203, 0, 113, 9], &[])).await;
+    assert_eq!(direct.status, StatusCode::FORBIDDEN, "{}", direct.text());
+    assert_eq!(direct.json()["error"]["code"], "https_required");
+    assert!(set_cookies(&direct).is_empty(), "no session starts");
+    assert_eq!(
+        env.auth.authentications(),
+        0,
+        "the password never reached the chain"
+    );
+    // A bad or missing Origin must still be https_required, not csrf_rejected: the HTTPS
+    // refusal is before the Origin check, so this request cannot probe passwords either.
+    for origin in [Some("https://evil.example.test"), None] {
+        let mut builder =
+            request(Method::POST, "/api/v1/auth/login").header("content-type", "application/json");
+        if let Some(origin) = origin {
+            builder = builder.header("origin", origin);
+        }
+        let body = serde_json::json!({"username": "alice", "password": "correct horse"});
+        let mut http_request = builder.body(Body::from(body.to_string())).expect("request");
+        http_request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([203, 0, 113, 9], 4000))));
+        let refused = call(&env.router, http_request).await;
+        assert_eq!(
+            (refused.status, refused.json()["error"]["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("https_required")),
+            "plain HTTP is refused before the Origin check ({origin:?}): {}",
+            refused.text()
+        );
+    }
+    assert_eq!(
+        env.auth.authentications(),
+        0,
+        "a foreign Origin on plain HTTP still never reaches the chain"
+    );
+    let metrics = env.state.metrics().expect("metrics").render();
+    assert!(
+        metrics.contains("auth_attempts_total"),
+        "the refusal is counted like the Basic one: {metrics}"
+    );
+}
+
+#[tokio::test]
+async fn must_not_believe_a_client_that_claims_https_itself_or_a_proxy_that_says_http() {
+    let env = guarded_env().await;
+    let claimed = call(
+        &env.router,
+        login_from([203, 0, 113, 9], &[("x-forwarded-proto", "https")]),
+    )
+    .await;
+    assert_eq!(
+        claimed.status,
+        StatusCode::FORBIDDEN,
+        "an untrusted peer's header is ignored"
+    );
+    let proxied_http = call(
+        &env.router,
+        login_from([10, 1, 2, 3], &[("x-forwarded-proto", "http")]),
+    )
+    .await;
+    assert_eq!(proxied_http.status, StatusCode::FORBIDDEN);
+    let silent_proxy = call(&env.router, login_from([10, 1, 2, 3], &[])).await;
+    assert_eq!(
+        silent_proxy.status,
+        StatusCode::FORBIDDEN,
+        "a proxy that does not say https is not evidence of it"
+    );
+    assert_eq!(env.auth.authentications(), 0);
+}
+
+#[tokio::test]
+async fn a_password_login_through_a_trusted_proxy_that_says_https_signs_in() {
+    let env = guarded_env().await;
+    let reply = call(
+        &env.router,
+        login_from([10, 1, 2, 3], &[("x-forwarded-proto", "https")]),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert!(
+        !set_cookies(&reply).is_empty(),
+        "the session cookies are set"
+    );
+    assert_eq!(env.auth.authentications(), 1);
+    // The RFC 7239 spelling counts too.
+    let rfc = call(
+        &env.router,
+        login_from(
+            [10, 1, 2, 3],
+            &[("forwarded", "for=198.51.100.7;proto=https")],
+        ),
+    )
+    .await;
+    assert_eq!(rfc.status, StatusCode::OK, "{}", rfc.text());
+}
+
+#[tokio::test]
+async fn the_guard_is_off_when_the_deployment_turns_it_off() {
+    let env = EnvBuilder::new().build().await; // the harness default: require_https false
+    let reply = call(&env.router, login_from([203, 0, 113, 9], &[])).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
 }

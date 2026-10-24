@@ -59,6 +59,8 @@ pub(crate) struct FakeAuth {
     pub(crate) fail_issue: Mutex<bool>,
     pub(crate) fail_revoke: Mutex<bool>,
     pub(crate) chain_unavailable: Mutex<bool>,
+    /// Calls of `authenticate`, to show that a refused request never reached the chain.
+    authentications: AtomicU64,
 }
 
 impl FakeAuth {
@@ -72,7 +74,13 @@ impl FakeAuth {
             fail_issue: Mutex::new(false),
             fail_revoke: Mutex::new(false),
             chain_unavailable: Mutex::new(false),
+            authentications: AtomicU64::new(0),
         })
+    }
+
+    /// How many times the chain was asked to authenticate anything.
+    pub(crate) fn authentications(&self) -> u64 {
+        self.authentications.load(Ordering::SeqCst)
     }
 
     pub(crate) fn add(&self, username: &str, account: Account) {
@@ -190,6 +198,7 @@ impl Authenticator for FakeAuth {
         credentials: &Credentials,
         _context: &AuthContext,
     ) -> Result<Option<Principal>, AuthError> {
+        self.authentications.fetch_add(1, Ordering::SeqCst);
         if Self::flag(&self.chain_unavailable) {
             return Err(AuthError::ProviderUnavailable("database".into()));
         }

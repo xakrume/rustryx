@@ -25,6 +25,11 @@
 //!   after two minutes asks the SSO refresher for a new one; without a refresher the snapshot
 //!   cannot be renewed and the session ends when it is five minutes old.
 //!
+//! - **Replaced tokens end.** A reissue revokes the token it replaced, after a short grace
+//!   (`SessionSettings::revoke_grace`, 30 seconds by default) so that requests already in flight
+//!   with the old cookie are not refused; see [`revocation`]. A logout ends the current token at
+//!   once and, with it, any predecessor still waiting out its grace.
+//!
 //! The session token is never read here without the chain verifying it: [`claims::peek`] feeds
 //! checks that come before the chain (idle, CSRF binding) and values for the reissue, and the
 //! request is refused or downgraded to anonymous when the chain disagrees.
@@ -45,10 +50,12 @@ use crate::ports::{
     GroupSnapshot, IssuedSession, SessionIssuer, SessionRequest, SsoRefreshRequest,
     SsoSessionRefresher,
 };
+use revocation::{Revocations, Stale};
 
 pub(crate) mod claims;
 mod cookies;
 mod csrf;
+mod revocation;
 
 pub use csrf::{CsrfKey, CsrfKeyError};
 
@@ -72,6 +79,10 @@ pub const MAX_ABSOLUTE_TIMEOUT: Duration = Duration::from_hours(8);
 pub const GROUP_REFRESH_AFTER: Duration = Duration::from_mins(2);
 /// The chain refuses an SSO snapshot older than this.
 pub const MAX_GROUP_AGE: Duration = Duration::from_mins(5);
+/// How long a token stays valid after a reissue replaced it (requests already in flight).
+pub const DEFAULT_REVOKE_GRACE: Duration = Duration::from_secs(30);
+/// The grace may not exceed this: a long grace would keep a stolen copy alive.
+pub const MAX_REVOKE_GRACE: Duration = Duration::from_mins(5);
 
 /// The two limits. Values above the requirement are clamped to it, so a configuration that
 /// slipped past validation cannot give a session more than the maximum.
@@ -82,6 +93,8 @@ pub struct SessionSettings {
     pub idle_timeout: Duration,
     /// Absolute lifetime.
     pub absolute_timeout: Duration,
+    /// How long the token a reissue replaced stays valid. See [`revocation`].
+    pub revoke_grace: Duration,
 }
 
 impl SessionSettings {
@@ -93,7 +106,16 @@ impl SessionSettings {
         Self {
             idle_timeout: idle_timeout.min(MAX_IDLE_TIMEOUT).min(absolute_timeout),
             absolute_timeout,
+            revoke_grace: DEFAULT_REVOKE_GRACE,
         }
+    }
+
+    /// The same settings with another grace for replaced tokens, at most [`MAX_REVOKE_GRACE`].
+    /// Zero revokes the old token as soon as the new one is issued.
+    #[must_use]
+    pub fn with_revoke_grace(mut self, grace: Duration) -> Self {
+        self.revoke_grace = grace.min(MAX_REVOKE_GRACE);
+        self
     }
 }
 
@@ -153,6 +175,7 @@ pub struct SessionManager {
     clock: Arc<dyn Clock>,
     csrf: CsrfKey,
     refresher: Option<Arc<dyn SsoSessionRefresher>>,
+    revocations: Revocations,
 }
 
 impl std::fmt::Debug for SessionManager {
@@ -195,6 +218,7 @@ impl SessionManager {
     ) -> Self {
         Self {
             settings,
+            revocations: Revocations::new(Arc::clone(&issuer), settings.revoke_grace),
             issuer,
             clock,
             csrf,
@@ -344,7 +368,20 @@ impl SessionManager {
             ));
         }
         let carrier = carrier.or_else(|| session.sso_carrier.clone());
-        Ok(self.package(issued, claims.user_id, groups, carrier.as_deref(), false))
+        let start = self.package(issued, claims.user_id, groups, carrier.as_deref(), false);
+        // Only now, with the new token in hand: a reissue that failed above leaves the old
+        // token exactly as it was.
+        self.revocations
+            .retire(
+                Stale {
+                    user_id: claims.user_id,
+                    tid: claims.tid.clone(),
+                    until: claims.expires_at,
+                },
+                &start.claims.tid,
+            )
+            .await;
+        Ok(start)
     }
 
     /// The group snapshot for a reissue, and a rotated carrier when the adapter made one.
@@ -469,16 +506,36 @@ impl SessionManager {
         ]
     }
 
-    /// Ends one session so that its token is refused even if someone copied it.
+    /// Ends one session so that its token is refused even if someone copied it. The token it
+    /// replaced a moment ago, if it is still waiting out its grace, ends with it.
     ///
     /// # Errors
-    /// The revocation store failed.
+    /// The revocation of the current token failed (the predecessors are revoked regardless, and a
+    /// failure there is only logged).
     pub(crate) async fn revoke(&self, claims: &SessionClaims) -> Result<(), AuthError> {
-        self.issuer
+        let current = self
+            .issuer
             .revoke(claims.user_id, &claims.tid, claims.expires_at)
-            .await
+            .await;
+        self.revocations.revoke_predecessors_of(&claims.tid).await;
+        current
+    }
+
+    /// Runs the revocations that are waiting out their grace now and waits for them, at most
+    /// `deadline`. Call it at shutdown, after the listener stopped and before the database
+    /// closes, so that no replaced token outlives the process. Returns how many did not finish.
+    pub async fn drain(&self, deadline: Duration) -> usize {
+        self.revocations.drain(deadline).await
+    }
+
+    /// Revocations waiting or running.
+    #[cfg(test)]
+    pub(crate) fn pending_revocations(&self) -> usize {
+        self.revocations.pending()
     }
 }
 
+#[cfg(test)]
+mod grace_tests;
 #[cfg(test)]
 mod tests;

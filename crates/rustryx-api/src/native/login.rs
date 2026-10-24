@@ -18,6 +18,7 @@ use crate::auth::{ActiveSession, append_cookies, record_attempt, record_attempt_
 use crate::client_ip::ClientIp;
 use crate::error::ApiError;
 use crate::extract::ApiJson;
+use crate::https::is_https;
 use crate::request_id::RequestId;
 use crate::session::SessionManager;
 
@@ -67,16 +68,30 @@ pub(super) fn user_ref(principal: &Principal) -> Option<UserRef> {
 
 /// `POST /api/v1/auth/login`.
 ///
-/// The `Origin` check comes first and is the CSRF defence of a form that has no session yet to
-/// carry a token. The credentials then go through the same chain as everything else (so the
+/// The `Origin` check is the CSRF defence of a form that has no session yet to carry a token. The credentials then go through the same chain as everything else (so the
 /// login guard of `rustryx-auth` counts failures per account and per address), as a Basic
 /// credential: this endpoint never accepts anything else as a password, an API token least of
 /// all.
+///
+/// The HTTPS rule of HTTP Basic applies here too, and first: a password in a JSON body over plain
+/// HTTP is as readable on the wire as one in an `Authorization` header, and this endpoint is the
+/// one a browser form uses. The refusal comes before the Origin check and before any
+/// authenticator is called, so it cannot be used to guess passwords either.
 pub(super) async fn login(
     State(api): State<AuthApi>,
     parts: Parts,
     ApiJson(body): ApiJson<LoginRequest>,
 ) -> Result<Response, ApiError> {
+    let settings = api.app.settings();
+    if settings.require_https && !is_https(&parts, &settings.trusted_proxies) {
+        tracing::info!("password login refused on a request that is not HTTPS");
+        record_attempt(
+            api.app.metrics(),
+            None,
+            Some(&AuthError::InvalidCredentials),
+        );
+        return Err(ApiError::https_required());
+    }
     if !api.app.origins().permits(&parts.headers) {
         tracing::info!("login refused: the Origin is not the service origin");
         return Err(ApiError::csrf_rejected());
