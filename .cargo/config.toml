@@ -1,0 +1,5 @@
+# Cap the parallel compiler jobs of one cargo invocation. Several agents or terminals building
+# at once multiplied this by their count and drove the load of a 10 core machine to about 90,
+# which ended in a crash. Override per command with CARGO_BUILD_JOBS when the machine is idle.
+[build]
+jobs = 5
