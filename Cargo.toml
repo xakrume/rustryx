@@ -45,6 +45,7 @@ rustryx-format-pub = { path = "crates/rustryx-format-pub" }
 rustryx-api = { path = "crates/rustryx-api" }
 rustryx-tasks = { path = "crates/rustryx-tasks" }
 rustryx-testkit = { path = "crates/rustryx-testkit" }
+rustryx-testserver = { path = "crates/rustryx-testserver" }
 
 aes-gcm = "0.11"
 argon2 = "0.6"
@@ -115,9 +116,21 @@ tracing-opentelemetry = "0.34"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "fmt", "std", "smallvec"] }
 rustix = { version = "1", default-features = false, features = ["std", "fs"] }
 hmac = "0.13"
+quick-xml = "0.41"
+blake2 = "0.11"
+miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+tar = { version = "0.4", default-features = false }
+multer = "3"
+serde-saphyr = { version = "2", default-features = false, features = ["serialize", "deserialize"] }
 
 [profile.dev]
-debug = "line-tables-only"
+# No debug info and no incremental cache: a full workspace test build used to leave 42 GB in
+# target/ (debug info in every test binary plus the incremental cache) and filled the disk of
+# the development machine. Backtraces keep function names, only line tables are gone; build a
+# crate with `--config profile.dev.debug=1` when a debugger needs lines.
+debug = 0
+incremental = false
 
 [profile.dev.package."*"]
 opt-level = 1
