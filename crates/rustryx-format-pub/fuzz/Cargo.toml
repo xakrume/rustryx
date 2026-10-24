@@ -1,0 +1,40 @@
+[package]
+name = "rustryx-format-pub-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "cargo-fuzz targets of rustryx-format-pub (nightly toolchain, see docs/format-pub.md)"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+rustryx-format-core = { path = "../../rustryx-format-core" }
+rustryx-format-pub = { path = ".." }
+
+# The fuzz crate is its own workspace: it is built with a nightly toolchain and sanitizer flags
+# that the main workspace must never see.
+[workspace]
+
+[[bin]]
+name = "pubspec"
+path = "fuzz_targets/pubspec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gzip_tar"
+path = "fuzz_targets/gzip_tar.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "listing"
+path = "fuzz_targets/listing.rs"
+test = false
+doc = false
+bench = false
