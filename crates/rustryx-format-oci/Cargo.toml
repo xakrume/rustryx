@@ -6,10 +6,41 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "Rustryx: format-oci"
+description = "Rustryx: OCI Distribution engine (docker and oci labels, Helm OCI charts)"
 
 [lints]
 workspace = true
 
 [dependencies]
 rustryx-core.workspace = true
+rustryx-format-core.workspace = true
+async-trait.workspace = true
+axum-core.workspace = true
+base64.workspace = true
+bytes.workspace = true
+futures.workspace = true
+hex.workspace = true
+hmac.workspace = true
+http.workspace = true
+moka.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+rustryx-rbac.workspace = true
+rustryx-testkit.workspace = true
+rustryx-testserver.workspace = true
+proptest.workspace = true
+reqwest.workspace = true
+tempfile.workspace = true
+wiremock.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
