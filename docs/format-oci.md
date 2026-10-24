@@ -183,7 +183,7 @@ Repository traffic stays on the engine: `/v2/<repository>/<image>/...` and `/rep
 
 ## 7. Gaps
 
-* The handler is not wired in `rustryx-server`. Until it is, `/v2` stays the API crate's `UNSUPPORTED` answer (`docs/server.md`).
+* The handler is registered by `wiring::formats::registry`, and `/v2`, `/v2/token` and `/v2/_catalog` are mounted by `ArtifactModule` (`docs/server.md`).
 * Real `docker`, `skopeo` and `helm` runs are not part of this crate's tests. They belong behind `RUSTRYX_IT` later. Do not set that variable for these tests.
 * Tag and referrer listings scan assets. A table keyed by repository, image and tag would make them index lookups. That would be a core change.
 * A bearer token together with stored Basic credentials is not cached (section 2.5) until format-core can omit the stored `Authorization` on one call.

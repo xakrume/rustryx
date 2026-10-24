@@ -11,9 +11,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use http::request::Parts;
 use ipnet::IpNet;
 use rustryx_core::Secret;
+use rustryx_core::error::AuthError;
+use rustryx_core::identity::Principal;
 use rustryx_core::ports::{Authenticator, RbacChecker};
 use rustryx_observability::MetricsHandle;
 
@@ -27,6 +30,22 @@ use crate::session::SessionManager;
 /// that answers `Bearer realm="pub"` on pub routes, because which format a
 /// request belongs to is only known from the repository registry.
 pub type ChallengeSelector = Arc<dyn Fn(&Parts) -> Challenge + Send + Sync>;
+
+/// Accepts a bearer the authenticator chain does not recognise, on `/v2` only.
+///
+/// The OCI registry token is not an API token and not an internal session JWT. The chain
+/// answers `None` for it. This hook turns a token it can verify into a principal. A token it
+/// cannot verify is a refusal (`Err`), never an anonymous caller: the client did present a
+/// credential. The hook is not asked on any other path, so a registry token does not open
+/// `/api/v1`.
+#[async_trait]
+pub trait RegistryBearerTokens: Send + Sync {
+    /// Verifies `token` and returns the principal it names.
+    ///
+    /// # Errors
+    /// The token is not acceptable, or the account behind it cannot be read.
+    async fn accept(&self, token: &str) -> Result<Principal, AuthError>;
+}
 
 /// Who may read `/metrics`.
 #[derive(Clone)]
@@ -175,6 +194,8 @@ pub struct AppState {
     challenge: ChallengeSelector,
     sessions: Option<Arc<SessionManager>>,
     origins: Arc<OriginPolicy>,
+    /// Registry bearers on `/v2`. Absent means an unrecognised bearer stays a 401.
+    registry_bearer: Option<Arc<dyn RegistryBearerTokens>>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -212,6 +233,7 @@ impl AppState {
             settings: Arc::new(settings),
             challenge: Arc::new(|_| Challenge::default()),
             sessions: None,
+            registry_bearer: None,
         }
     }
 
@@ -279,6 +301,13 @@ impl AppState {
         self
     }
 
+    /// Installs the registry-token acceptor used on `/v2` when the chain does not claim a bearer.
+    #[must_use]
+    pub fn with_registry_bearer(mut self, bearer: Arc<dyn RegistryBearerTokens>) -> Self {
+        self.registry_bearer = Some(bearer);
+        self
+    }
+
     /// The authenticator chain, if wired.
     #[must_use]
     pub fn authenticator(&self) -> Option<&Arc<dyn Authenticator>> {
@@ -295,6 +324,12 @@ impl AppState {
     #[must_use]
     pub fn sessions(&self) -> Option<&Arc<SessionManager>> {
         self.sessions.as_ref()
+    }
+
+    /// The registry-token acceptor, if wired.
+    #[must_use]
+    pub fn registry_bearer(&self) -> Option<&Arc<dyn RegistryBearerTokens>> {
+        self.registry_bearer.as_ref()
     }
 
     /// Which `Origin` values count as this service (CSRF and the login form).

@@ -43,7 +43,8 @@ pub use config::{OciConfig, RepositoryOptions};
 pub use error::{OciError, OciErrorCode};
 pub use handler::OciHandler;
 pub use token::{
-    HmacTokenCodec, IssuedToken, OciTokenService, RegistryTokenClaims, TokenError, TokenIssuer,
-    TokenRequest, TokenRequestError, TokenServiceConfig, TokenVerifier, bearer_challenge,
-    challenge_scope, ping_challenge, ping_ok, token_response,
+    AccessGrant, Action, GrantResource, HmacTokenCodec, IssuedToken, OciTokenService,
+    RegistryTokenClaims, TokenError, TokenIssuer, TokenRequest, TokenRequestError,
+    TokenServiceConfig, TokenVerifier, bearer_challenge, challenge_scope, ping_challenge, ping_ok,
+    token_response,
 };

@@ -8,30 +8,30 @@
 //! all it does is find the repository, build the request head and copy the engine's labels onto
 //! the response.
 //!
-//! The engine has no format registered yet, so a request for an existing repository is answered
-//! by the engine itself with a 500 that names the missing handler (the honest answer: the
-//! repository exists and nothing can serve its format). Registering a format crate is one call
-//! on `FormatRegistry` in `wiring::formats`.
+//! Format handlers are registered in `wiring::formats`. `/v2` is the OCI distribution API:
+//! the ping, the token endpoint and the catalog are mounted here, and
+//! `/v2/<repository>/...` is the same engine call as `/repository/<repository>/v2/...`.
 
 use std::sync::Arc;
 
 use axum::Router;
-use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::response::{IntoResponse, Response};
-use axum::routing::any;
+use axum::routing::{any, get};
 use http::header::{AUTHORIZATION, USER_AGENT};
-use http::{HeaderMap, HeaderValue, StatusCode};
+use http::{HeaderMap, StatusCode};
 use rustryx_api::{
     ApiError, RequestClientIp, RequestPrincipal, RouteModule, RouteSet, current_request_id,
     record_repo,
 };
+use rustryx_core::identity::Principal;
 use rustryx_core::names::RepoName;
-use rustryx_core::ports::RepositoryRepo;
+use rustryx_core::ports::{Authenticator, RepositoryRepo};
 use rustryx_format_core::{
     CacheLabel, ClientInfo, FormatEngine, RequestClass as FormatClass, RequestHead,
     RequestLabels as FormatLabels,
 };
+use rustryx_format_oci::{CatalogService, OciTokenService};
 use rustryx_observability::{CacheStatus, RequestClass, RequestLabels};
 use url::Url;
 
@@ -39,8 +39,7 @@ use url::Url;
 /// route catalogue.
 const REASON: &str = "format engine: it classifies the request and authorizes it per repository, action and coordinate";
 
-/// The OCI distribution API is not served by this build (no OCI format is registered).
-const OCI_UNSUPPORTED: &str = r#"{"errors":[{"code":"UNSUPPORTED","message":"the OCI distribution API is not enabled on this node"}]}"#;
+mod oci;
 
 #[derive(Clone)]
 struct ArtifactState {
@@ -49,6 +48,12 @@ struct ArtifactState {
     base_url: Option<Url>,
     /// Scheme of the fallback base URL when none is configured (development).
     fallback_scheme: &'static str,
+    /// Signs and checks `/v2/token` bearers.
+    tokens: OciTokenService,
+    /// `GET /v2/_catalog`.
+    catalog: CatalogService,
+    /// Password grant of `POST /v2/token`. `None` in a process that has no authenticator.
+    authenticator: Option<Arc<dyn Authenticator>>,
 }
 
 /// The module that mounts the artifact routes.
@@ -66,6 +71,9 @@ impl ArtifactModule {
         repositories: Arc<dyn RepositoryRepo>,
         base_url: Option<Url>,
         require_https: bool,
+        tokens: OciTokenService,
+        catalog: CatalogService,
+        authenticator: Option<Arc<dyn Authenticator>>,
     ) -> Self {
         Self {
             state: ArtifactState {
@@ -73,6 +81,9 @@ impl ArtifactModule {
                 repositories,
                 base_url,
                 fallback_scheme: if require_https { "https" } else { "http" },
+                tokens,
+                catalog,
+                authenticator,
             },
         }
     }
@@ -88,9 +99,11 @@ impl RouteModule for ArtifactModule {
             .route("/repository/{name}", any(serve_repository))
             .route("/repository/{name}/", any(serve_repository))
             .route("/repository/{name}/{*path}", any(serve_repository))
-            .route("/v2", any(oci_unsupported))
-            .route("/v2/", any(oci_unsupported))
-            .route("/v2/{*path}", any(oci_unsupported))
+            .route("/v2", get(oci_ping))
+            .route("/v2/", get(oci_ping))
+            .route("/v2/token", get(oci_token).post(token_post))
+            .route("/v2/_catalog", get(oci_catalog))
+            .route("/v2/{*path}", any(oci_repository))
             .with_state(self.state.clone());
         routes.delegated(REASON, artifact_routes)
     }
@@ -198,13 +211,41 @@ async fn serve_repository(
     response
 }
 
-async fn oci_unsupported() -> Response {
-    let mut response = (StatusCode::NOT_FOUND, Body::from(OCI_UNSUPPORTED)).into_response();
-    response.headers_mut().insert(
-        http::header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    response
+async fn oci_ping(
+    State(state): State<ArtifactState>,
+    RequestPrincipal(principal): RequestPrincipal,
+    request: Request,
+) -> Response {
+    oci::ping(&state, request.headers(), &principal)
+}
+
+async fn oci_token(
+    State(state): State<ArtifactState>,
+    RequestPrincipal(principal): RequestPrincipal,
+    request: Request,
+) -> Response {
+    oci::token(&state, request, principal).await
+}
+
+async fn token_post(State(state): State<ArtifactState>, request: Request) -> Response {
+    oci::token(&state, request, Principal::anonymous()).await
+}
+
+async fn oci_catalog(
+    State(state): State<ArtifactState>,
+    RequestPrincipal(principal): RequestPrincipal,
+    request: Request,
+) -> Response {
+    oci::catalog(&state, request.headers(), &principal, request.uri().query()).await
+}
+
+async fn oci_repository(
+    State(state): State<ArtifactState>,
+    RequestPrincipal(principal): RequestPrincipal,
+    RequestClientIp(ip): RequestClientIp,
+    request: Request,
+) -> Response {
+    oci::repository(&state, request, principal, ip).await
 }
 
 #[cfg(test)]

@@ -18,6 +18,7 @@ mod codec;
 mod endpoint;
 mod service;
 
+pub use crate::parse::scope::Action;
 pub use claims::{
     AccessGrant, GrantResource, RegistryTokenClaims, TokenError, TokenIssuer, TokenVerifier,
 };

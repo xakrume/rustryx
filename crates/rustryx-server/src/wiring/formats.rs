@@ -4,9 +4,9 @@
 //! upstream client, so the SSRF policy of `upstream.*` is applied here once, to every URL and
 //! every redirect hop of every proxy repository.
 //!
-//! No format handler is registered: the registry is empty, and each format crate is added with
-//! one `FormatRegistry::register` call in [`registry`]. Until then the engine answers a request
-//! for an existing repository with its own 500 that says no handler is registered.
+//! Every format crate is registered in [`registry`]. One OCI handler serves both `docker` and
+//! `oci`. A request for a repository whose format is not in that list is still the engine's
+//! own 500.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,13 +14,23 @@ use std::time::Duration;
 use anyhow::{Context, anyhow};
 use rustryx_blob::BlobStoreRegistry;
 use rustryx_config::{AppConfig, UpstreamConfig};
-use rustryx_core::ports::{RbacChecker, UuidV7IdGen};
+use rustryx_core::ports::{Clock, ComponentRepo, RbacChecker, RepositoryRepo, UuidV7IdGen};
 use rustryx_format_core::context::{ContentEvents, Limits, NoopEvents, Ports};
+use rustryx_format_core::handler::FormatHandler;
 use rustryx_format_core::policy::NoopContentPolicy;
 use rustryx_format_core::proxy::executor::{ExecutorConfig, RetryPolicy};
 use rustryx_format_core::proxy::ssrf::{HostAllowlist, HostPattern, UpstreamUrlPolicy};
 use rustryx_format_core::proxy::upstream::ReqwestClientConfig;
 use rustryx_format_core::{DownloadBatcher, FormatEngine, FormatRegistry, RuleRoutingGate};
+use rustryx_format_helm::HelmHandler;
+use rustryx_format_maven::MavenHandler;
+use rustryx_format_npm::NpmHandler;
+use rustryx_format_oci::{
+    CatalogService, HmacTokenCodec, OciConfig, OciHandler, OciTokenService, TokenServiceConfig,
+};
+use rustryx_format_pub::{PubConfig, PubHandler};
+use rustryx_format_pypi::PypiHandler;
+use rustryx_format_raw::RawHandler;
 use tokio_util::sync::CancellationToken;
 
 use super::blobs::FormatStores;
@@ -34,10 +44,96 @@ pub struct Formats {
     pub shutdown: CancellationToken,
 }
 
-/// The registered format handlers. Empty until the format crates are wired.
-#[must_use]
-pub fn registry() -> FormatRegistry {
-    FormatRegistry::new()
+/// Issuer of registry bearers. Distinct from the internal session JWT issuer, so a registry
+/// token is not mistaken for a session and a session token is not mistaken for a registry token.
+pub const REGISTRY_ISSUER: &str = "rustryx-registry";
+/// Audience and `service` parameter of the distribution token endpoint.
+pub const REGISTRY_SERVICE: &str = "rustryx";
+
+/// The registered format handlers, one per [`RepoFormat`].
+///
+/// # Errors
+/// Two handlers claim the same format. That is a programming error in this function.
+pub fn registry() -> anyhow::Result<FormatRegistry> {
+    let mut registry = FormatRegistry::new();
+    for handler in handlers() {
+        registry
+            .register(handler)
+            .map_err(|error| anyhow!("format registry: {error}"))?;
+    }
+    Ok(registry)
+}
+
+fn handlers() -> Vec<Arc<dyn FormatHandler>> {
+    vec![
+        Arc::new(MavenHandler::new()),
+        Arc::new(NpmHandler::new()),
+        Arc::new(PypiHandler::new()),
+        Arc::new(OciHandler::new(OciConfig::default())),
+        Arc::new(HelmHandler::new()),
+        Arc::new(RawHandler::new()),
+        Arc::new(PubHandler::new(PubConfig::default())),
+    ]
+}
+
+/// The token service and the cross-repository catalog, sharing one RBAC handle.
+///
+/// # Errors
+/// The registry signing key cannot be built.
+pub fn open_distribution(
+    repositories: Arc<dyn RepositoryRepo>,
+    components: Arc<dyn ComponentRepo>,
+    rbac: Arc<dyn RbacChecker>,
+    clock: Arc<dyn Clock>,
+    cookie_key: &rustryx_core::Secret,
+) -> anyhow::Result<(OciTokenService, CatalogService)> {
+    let tokens = token_service(
+        Arc::clone(&repositories),
+        Arc::clone(&rbac),
+        clock,
+        cookie_key,
+    )?;
+    let catalog = CatalogService::new(repositories, components, rbac, OciConfig::default());
+    Ok((tokens, catalog))
+}
+
+/// The token service `/v2/token` signs with. The key is a hash of the cookie key, so it
+/// follows `auth.cookie_key` across restarts and is not the cookie key itself.
+///
+/// # Errors
+/// The derived key is shorter than the codec accepts. A SHA-256 digest is 32 bytes, so this
+/// is a bug in the derivation, not a configuration problem.
+pub fn token_service(
+    repositories: Arc<dyn RepositoryRepo>,
+    rbac: Arc<dyn RbacChecker>,
+    clock: Arc<dyn Clock>,
+    cookie_key: &rustryx_core::Secret,
+) -> anyhow::Result<OciTokenService> {
+    let config = TokenServiceConfig {
+        service: REGISTRY_SERVICE.to_owned(),
+        issuer: REGISTRY_ISSUER.to_owned(),
+        ..TokenServiceConfig::default()
+    };
+    let codec = Arc::new(
+        HmacTokenCodec::new(&registry_key(cookie_key), &config.issuer, &config.service)
+            .map_err(|error| anyhow!("registry token key: {error}"))?,
+    );
+    Ok(OciTokenService::new(
+        repositories,
+        rbac,
+        Arc::clone(&codec) as Arc<dyn rustryx_format_oci::TokenIssuer>,
+        codec,
+        clock,
+        config,
+    ))
+}
+
+fn registry_key(cookie_key: &rustryx_core::Secret) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(cookie_key.expose().as_bytes());
+    let mut key = [0_u8; 32];
+    key.copy_from_slice(&digest);
+    key
 }
 
 /// The SSRF policy of `upstream.*`.
@@ -144,7 +240,7 @@ pub fn build(
     };
     let shutdown = CancellationToken::new();
     let upstream = &config.upstream;
-    let engine = FormatEngine::builder(ports, registry())
+    let engine = FormatEngine::builder(ports, registry()?)
         .limits(limits(config))
         .url_policy(url_policy(upstream)?)
         .client_config(ReqwestClientConfig {
@@ -239,6 +335,17 @@ mod tests {
         assert_eq!(executor.metadata_timeout, Duration::from_secs(7));
         assert_eq!(executor.idle_timeout, Duration::from_secs(9));
         assert_eq!(executor.retry.max_attempts, 2);
+    }
+
+    #[test]
+    fn every_format_has_one_handler() {
+        use rustryx_core::model::RepoFormat;
+        let registry = registry().expect("handlers do not overlap");
+        let mut got = registry.formats();
+        let mut expect = RepoFormat::ALL.to_vec();
+        got.sort();
+        expect.sort();
+        assert_eq!(got, expect);
     }
 
     #[test]

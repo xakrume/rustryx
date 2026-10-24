@@ -89,4 +89,5 @@ pub use session::{
 };
 pub use state::{
     ApiSettings, AppState, ChallengeSelector, Lifecycle, MetricsAccess, RateLimitSettings,
+    RegistryBearerTokens,
 };

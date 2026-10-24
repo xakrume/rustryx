@@ -29,6 +29,7 @@ mod database;
 mod formats;
 mod identity;
 pub mod maintenance;
+mod registry_login;
 mod sso;
 mod store;
 
@@ -84,6 +85,8 @@ pub struct Components {
     pub rbac: Option<Arc<dyn RbacChecker>>,
     /// The cookie session of the web UI. `None` turns the cookie path off.
     pub sessions: Option<Arc<SessionManager>>,
+    /// Registry bearers on `/v2`. `None` leaves an unrecognised bearer as a 401.
+    pub registry_bearer: Option<Arc<dyn rustryx_api::RegistryBearerTokens>>,
     /// Route modules: the native API under `/api/v1`, `/repository/{name}/...`, `/v2/...`.
     pub modules: Vec<Arc<dyn RouteModule>>,
     /// Long-lived background tasks (invalidation listeners, identity provider discovery,
@@ -102,6 +105,7 @@ impl Components {
             authenticator: None,
             rbac: None,
             sessions: None,
+            registry_bearer: None,
             modules: Vec::new(),
             background: Vec::new(),
             finalizers: Vec::new(),
@@ -213,6 +217,17 @@ pub async fn assemble(config: &AppConfig, metrics: &MetricsHandle) -> anyhow::Re
     ));
 
     let blob_registry = blobs::registry(Arc::clone(&repos.blob_stores));
+    let (tokens, catalog) = formats::open_distribution(
+        Arc::clone(&repos.repositories),
+        Arc::clone(&repos.components),
+        Arc::clone(&rbac) as Arc<dyn RbacChecker>,
+        Arc::clone(&repos.clock),
+        &cookie_key,
+    )?;
+    let registry_bearer = Arc::new(registry_login::RegistryLogin::new(
+        tokens.clone(),
+        Arc::clone(&repos.users),
+    ));
     let formats = formats::build(
         config,
         &repos,
@@ -255,47 +270,74 @@ pub async fn assemble(config: &AppConfig, metrics: &MetricsHandle) -> anyhow::Re
     ];
     background.extend(identity.background.iter().cloned());
 
-    let modules: Vec<Arc<dyn RouteModule>> = vec![
-        native_auth_module(config, &identity, &repos),
-        Arc::new(ArtifactModule::new(
-            formats.engine.clone(),
-            Arc::clone(&repos.repositories),
-            base_url,
-            config.server.require_https,
-        )),
-    ];
+    let modules = route_modules(
+        config, &identity, &repos, &formats, base_url, tokens, catalog,
+    );
 
     let sessions = session_manager(config, &identity, &repos, &cookie_key, Arc::new(bus))?;
-    let draining_sessions = Arc::clone(&sessions);
-    let engine = formats.engine.clone();
-    let engine_stop = formats.shutdown.clone();
-    let registry = Arc::clone(&blob_registry);
-    let closing_pool = pool.clone();
-    let finalizers = vec![
-        // First, and before the pool closes: the replaced session tokens that are still waiting
-        // out their grace are revoked now, through the pool, instead of being lost with the
-        // process. A few statements, so they go ahead of the slower steps.
-        Finalizer::new("session_revocations", async move {
-            // The manager logs what it could not finish.
-            let _unfinished = draining_sessions.drain(SESSION_DRAIN_DEADLINE).await;
-        }),
-        Finalizer::new("format_engine", async move {
-            engine_stop.cancel();
-            engine.drain().await;
-        }),
-        Finalizer::new("blob_stores", async move { registry.shutdown().await }),
-        Finalizer::new("database_pool", async move { closing_pool.close().await }),
-    ];
+    let finalizers = shutdown_finalizers(
+        Arc::clone(&sessions),
+        formats.engine.clone(),
+        formats.shutdown.clone(),
+        Arc::clone(&blob_registry),
+        pool.clone(),
+    );
 
     Ok(Components {
         readiness: Arc::new(PgReadiness::new(pool, metrics.clone())),
         authenticator: Some(Arc::clone(&identity.service) as Arc<dyn Authenticator>),
         rbac: Some(rbac),
         sessions: Some(sessions),
+        registry_bearer: Some(registry_bearer),
         modules,
         background,
         finalizers,
     })
+}
+
+fn route_modules(
+    config: &AppConfig,
+    identity: &identity::Identity,
+    repos: &Repos,
+    formats: &formats::Formats,
+    base_url: Option<url::Url>,
+    tokens: rustryx_format_oci::OciTokenService,
+    catalog: rustryx_format_oci::CatalogService,
+) -> Vec<Arc<dyn RouteModule>> {
+    vec![
+        native_auth_module(config, identity, repos),
+        Arc::new(ArtifactModule::new(
+            formats.engine.clone(),
+            Arc::clone(&repos.repositories),
+            base_url,
+            config.server.require_https,
+            tokens,
+            catalog,
+            Some(Arc::clone(&identity.service) as Arc<dyn Authenticator>),
+        )),
+    ]
+}
+
+/// Shutdown steps, in order. Session revocations go first, while the pool is still open.
+fn shutdown_finalizers(
+    sessions: Arc<SessionManager>,
+    engine: rustryx_format_core::FormatEngine,
+    engine_stop: tokio_util::sync::CancellationToken,
+    registry: Arc<rustryx_blob::BlobStoreRegistry>,
+    pool: sqlx::PgPool,
+) -> Vec<Finalizer> {
+    vec![
+        Finalizer::new("session_revocations", async move {
+            // The manager logs what it could not finish.
+            let _unfinished = sessions.drain(SESSION_DRAIN_DEADLINE).await;
+        }),
+        Finalizer::new("format_engine", async move {
+            engine_stop.cancel();
+            engine.drain().await;
+        }),
+        Finalizer::new("blob_stores", async move { registry.shutdown().await }),
+        Finalizer::new("database_pool", async move { pool.close().await }),
+    ]
 }
 
 /// The RBAC caches follow the invalidation bus. The listener is started inside the task, so a
@@ -359,6 +401,9 @@ pub fn app_state(
     }
     if let Some(sessions) = &components.sessions {
         state = state.with_sessions(sessions.clone());
+    }
+    if let Some(bearer) = &components.registry_bearer {
+        state = state.with_registry_bearer(bearer.clone());
     }
     state
 }

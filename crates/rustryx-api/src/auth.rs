@@ -256,8 +256,14 @@ async fn resolve(state: &AppState, parts: &Parts) -> Result<Resolved, ApiError> 
             record_attempt(state.metrics(), Some(principal.auth_method), None);
             Ok(Resolved::named(principal))
         }
-        // No authenticator in the chain recognised the credentials.
+        // No authenticator in the chain recognised the credentials. On `/v2` a bearer may
+        // still be a registry token, which this chain does not speak. Anywhere else, and for
+        // a bearer the registry hook refuses, the client is not anonymous.
         Ok(None) => {
+            if let Some(principal) = registry_bearer(state, parts, &credentials).await? {
+                record_attempt(state.metrics(), Some(principal.auth_method), None);
+                return Ok(Resolved::named(principal));
+            }
             let error = AuthError::InvalidCredentials;
             record_attempt(state.metrics(), None, Some(&error));
             Err(error.into())
@@ -265,6 +271,38 @@ async fn resolve(state: &AppState, parts: &Parts) -> Result<Resolved, ApiError> 
         Err(failure) => {
             record_attempt_for(state.metrics(), failure.method, &failure.error);
             Err(failure.error.into())
+        }
+    }
+}
+
+/// `/v2` and `/v2/...`: the distribution API, where a registry bearer is a credential.
+fn is_distribution_api(parts: &Parts) -> bool {
+    let path = parts.uri.path();
+    path == "/v2" || path.starts_with("/v2/")
+}
+
+/// A bearer the chain left unclaimed, verified by the registry hook. `Ok(None)` when this
+/// request is not a distribution call, carries no bearer, or no hook is wired: the caller
+/// then refuses the credential as usual.
+async fn registry_bearer(
+    state: &AppState,
+    parts: &Parts,
+    credentials: &Credentials,
+) -> Result<Option<Principal>, ApiError> {
+    let Credentials::Bearer(secret) = credentials else {
+        return Ok(None);
+    };
+    if !is_distribution_api(parts) {
+        return Ok(None);
+    }
+    let Some(registry) = state.registry_bearer() else {
+        return Ok(None);
+    };
+    match registry.accept(secret.expose()).await {
+        Ok(principal) => Ok(Some(principal)),
+        Err(error) => {
+            record_attempt(state.metrics(), None, Some(&error));
+            Err(error.into())
         }
     }
 }

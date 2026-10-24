@@ -315,13 +315,13 @@ are in `src/wiring/`. `assemble` returns `Components`; `serve::run_server` runs 
 | Authorization | `Rbac` over the role and selector repositories | `auth.anonymous_enabled` is its global switch; an invalidation listener keeps its caches current. |
 | Blob stores | `BlobStoreRegistry` over the definitions in the database, adapted to the format engine's trait | The `blob.*` section only SEEDS the default store, once, after the schema exists. The row rules afterwards. Secrets are named by environment variable in the row, never stored. |
 | Format engine | `FormatEngine` with an EMPTY `FormatRegistry` | SSRF policy from `upstream.*`, routing rules through `RuleRoutingGate`, downloads counted by `DownloadBatcher` and flushed every `downloads.flush_interval_secs` and at shutdown. A request for an existing repository is answered by the engine with a 500 that says no handler is registered. Register a format in `wiring::formats::registry`. |
-| Routes | `NativeAuthModule` under `/api/v1`, `ArtifactModule` for `/repository/{name}/...` and `/v2/...` | `/v2` answers 404 in the OCI error format (`UNSUPPORTED`) until an OCI format is registered. |
+| Routes | `NativeAuthModule` under `/api/v1`, `ArtifactModule` for `/repository/{name}/...` and `/v2/...` | `/v2/` challenges until a credential or a registry bearer is presented. `/v2/token` issues that bearer. `/v2/<repository>/...` is the format engine. |
 | First start | `bootstrap` task | Waits for a servable schema, then creates the bootstrap administrator (only when no administrator exists) and the default blob store, once, and parks. |
 | Maintenance | `db_maintenance` task, one node at a time under a lock | Creates audit partitions ahead, purges expired revocations and stale login counters. It does NOT drop old audit partitions: that deletes evidence and needs an archive step first. |
 | Samplers | pool and runtime samplers, metrics upkeep | `process_*` and `tokio_*`. |
 
 Not wired: the other native API resources (repositories, users, roles, tokens, audit,
-settings), any package format, an SSO session refresher (below), a Redis lock backend,
+settings), an SSO session refresher (below), a Redis lock backend,
 the task framework (`rustryx-tasks` is empty), GC and the schedulers. Each is a module or a
 `BackgroundTask` added to `assemble`, and `Config sections` still applies: a crate that needs
 a key the schema lacks adds it to `rustryx-config` first (schema, key table,

@@ -1,16 +1,23 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
-use axum::body::to_bytes;
+use axum::body::{Body, to_bytes};
 use axum::extract::Request;
+use http::HeaderValue;
 use rustryx_api::{AppState, RouterBuilder};
 use rustryx_blob::{BlobStoreRegistry, MapSecretResolver};
+use rustryx_core::Secret;
 use rustryx_core::error::{AuthError, StoreError};
 use rustryx_core::identity::{AuthContext, Credentials, Principal};
 use rustryx_core::model::{RepoFormat, RepoType, Repository};
 use rustryx_core::ports::{Authenticator, RepositoryRepo, SystemClock};
 use rustryx_format_core::context::Ports;
 use rustryx_format_core::{FormatEngine, FormatRegistry};
+use rustryx_format_oci::{CatalogService, OciConfig, OciTokenService};
+use url::Url;
+
+use crate::wiring::formats;
+use crate::wiring::registry_login::RegistryLogin;
 use rustryx_rbac::{Rbac, RbacConfig};
 use rustryx_testkit::fixtures::repository;
 use rustryx_testkit::{MemAuditSink, MemStore};
@@ -19,8 +26,8 @@ use tower::ServiceExt;
 use super::*;
 use crate::wiring::blobs::FormatStores;
 
-/// Everybody is anonymous: these tests are about routing and request building, and the engine
-/// refuses before it authorizes anything because no format is registered.
+/// Claims nothing. A request with no credential stays anonymous. A bearer is left for the
+/// registry hook, and is a 401 when that hook is not installed or rejects it.
 struct Anonymous;
 
 #[async_trait]
@@ -30,7 +37,7 @@ impl Authenticator for Anonymous {
         _credentials: &Credentials,
         _context: &AuthContext,
     ) -> Result<Option<Principal>, AuthError> {
-        Ok(Some(Principal::anonymous()))
+        Ok(None)
     }
 }
 
@@ -75,6 +82,49 @@ impl RepositoryRepo for Counting {
     }
 }
 
+fn distribution(store: &MemStore) -> (OciTokenService, CatalogService) {
+    let rbac = Arc::new(Rbac::new(
+        Arc::new(store.clone()),
+        Arc::new(store.clone()),
+        &RbacConfig::default(),
+    ));
+    let tokens = formats::token_service(
+        Arc::new(store.clone()),
+        Arc::clone(&rbac) as Arc<dyn rustryx_core::ports::RbacChecker>,
+        Arc::new(SystemClock),
+        &Secret::new("test-cookie-key"),
+    )
+    .expect("token service");
+    let catalog = CatalogService::new(
+        Arc::new(store.clone()),
+        Arc::new(store.clone()),
+        rbac,
+        OciConfig::default(),
+    );
+    (tokens, catalog)
+}
+
+fn module(
+    engine: FormatEngine,
+    repos: Arc<dyn RepositoryRepo>,
+    store: &MemStore,
+    base_url: Option<Url>,
+    require_https: bool,
+) -> (ArtifactModule, Arc<RegistryLogin>) {
+    let (tokens, catalog) = distribution(store);
+    let login = Arc::new(RegistryLogin::new(tokens.clone(), Arc::new(store.clone())));
+    let module = ArtifactModule::new(
+        engine,
+        repos,
+        base_url,
+        require_https,
+        tokens,
+        catalog,
+        None,
+    );
+    (module, login)
+}
+
 fn engine(store: &MemStore) -> FormatEngine {
     let rbac = Arc::new(Rbac::new(
         Arc::new(store.clone()),
@@ -113,13 +163,16 @@ async fn harness(base_url: Option<&str>, fail_lookups: bool) -> Harness {
         lookups: AtomicUsize::new(0),
         fail: fail_lookups,
     });
-    let module = ArtifactModule::new(
+    let (module, login) = module(
         engine(&store),
         Arc::clone(&repos) as Arc<dyn RepositoryRepo>,
+        &store,
         base_url.map(|url| Url::parse(url).expect("url")),
         false,
     );
-    let state = AppState::unwired().with_authenticator(Arc::new(Anonymous));
+    let state = AppState::unwired()
+        .with_authenticator(Arc::new(Anonymous))
+        .with_registry_bearer(login);
     let router = RouterBuilder::new(state).module(Arc::new(module)).build();
     Harness { router, repos }
 }
@@ -129,6 +182,26 @@ async fn call(router: &axum::Router, method: &str, uri: &str) -> (StatusCode, St
         .method(method)
         .uri(uri)
         .body(Body::empty())
+        .expect("request");
+    let response = router.clone().oneshot(request).await.expect("response");
+    let status = response.status();
+    let body = to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("body");
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+async fn call_auth(
+    router: &axum::Router,
+    method: &str,
+    uri: &str,
+    authorization: &str,
+) -> (StatusCode, String) {
+    let request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("authorization", authorization)
+        .body(axum::body::Body::empty())
         .expect("request");
     let response = router.clone().oneshot(request).await.expect("response");
     let status = response.status();
@@ -244,14 +317,31 @@ async fn the_repository_root_and_its_trailing_slash_reach_the_same_handler() {
 }
 
 #[tokio::test]
-async fn the_oci_api_says_it_is_not_enabled_in_the_registry_error_format() {
-    let h = harness(None, false).await;
-    for uri in ["/v2", "/v2/", "/v2/library/app/manifests/latest"] {
+async fn the_distribution_ping_challenges_and_a_registry_token_satisfies_it() {
+    let h = harness(Some("https://repo.example"), false).await;
+    for uri in ["/v2", "/v2/"] {
         let (status, body) = call(&h.router, "GET", uri).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri} {body}");
         let json: serde_json::Value = serde_json::from_str(&body).expect("json");
-        assert_eq!(json["errors"][0]["code"], "UNSUPPORTED");
+        assert_eq!(json["errors"][0]["code"], "UNAUTHORIZED");
     }
+    let (status, body) = call(&h.router, "GET", "/v2/token?service=rustryx").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let token = serde_json::from_str::<serde_json::Value>(&body).expect("json")["token"]
+        .as_str()
+        .expect("token")
+        .to_owned();
+    let (status, body) = call_auth(&h.router, "GET", "/v2/", &format!("Bearer {token}")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, "{}");
+
+    let (status, body) = call(&h.router, "GET", "/v2/library/app/manifests/latest").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let json: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(json["errors"][0]["code"], "NAME_UNKNOWN");
+
+    let (status, _) = call_auth(&h.router, "GET", "/v2/", "Bearer not-a-token").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -260,7 +350,7 @@ async fn the_artifact_routes_are_declared_as_delegated_to_the_format_engine() {
     drop(h);
     let state = AppState::unwired().with_authenticator(Arc::new(Anonymous));
     let store = MemStore::with_builtin_roles();
-    let module = ArtifactModule::new(engine(&store), Arc::new(store.clone()), None, true);
+    let (module, _) = module(engine(&store), Arc::new(store.clone()), &store, None, true);
     let (_router, catalog) = RouterBuilder::new(state)
         .module(Arc::new(module))
         .build_with_catalog();
@@ -276,12 +366,14 @@ async fn the_artifact_routes_are_declared_as_delegated_to_the_format_engine() {
 fn the_base_url_is_the_configured_one_or_the_host_header() {
     let state = |base: Option<&str>, https: bool| {
         let store = MemStore::new();
-        ArtifactModule::new(
+        module(
             engine(&store),
             Arc::new(store.clone()),
+            &store,
             base.map(|url| Url::parse(url).unwrap()),
             https,
         )
+        .0
         .state
     };
     let mut headers = HeaderMap::new();
