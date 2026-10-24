@@ -163,7 +163,10 @@ RUSTRYX_A_B_C and a secret mounted as a file is RUSTRYX_A_B_C_FILE.
 {{- if $e.s3SecretKey }}{{- $out = append $out "RUSTRYX_BLOB_S3_SECRET_KEY" -}}{{- end -}}
 {{- if $e.oidcClientSecret }}{{- $out = append $out "RUSTRYX_AUTH_OIDC_CLIENT_SECRET" -}}{{- end -}}
 {{- if $e.ldapBindPassword }}{{- $out = append $out "RUSTRYX_AUTH_LDAP_BIND_PASSWORD" -}}{{- end -}}
+{{- if $e.databaseSealingKey }}{{- $out = append $out "RUSTRYX_DATABASE_SEALING_KEY" -}}{{- end -}}
+{{- if $e.databaseSealingPreviousKeys }}{{- $out = append $out "RUSTRYX_DATABASE_SEALING_PREVIOUS_KEYS" -}}{{- end -}}
 {{- if $e.internalJwtKey }}{{- $out = append $out "RUSTRYX_AUTH_INTERNAL_JWT_KEY" -}}{{- end -}}
+{{- if $e.internalJwtPreviousKeys }}{{- $out = append $out "RUSTRYX_AUTH_INTERNAL_JWT_PREVIOUS_KEYS" -}}{{- end -}}
 {{- if $e.cookieKey }}{{- $out = append $out "RUSTRYX_AUTH_COOKIE_KEY" -}}{{- end -}}
 {{- if $e.bootstrapAdminPassword }}{{- $out = append $out "RUSTRYX_AUTH_BOOTSTRAP_ADMIN_PASSWORD" -}}{{- end -}}
 {{- if $e.metricsToken }}{{- $out = append $out "RUSTRYX_OBSERVABILITY_METRICS_TOKEN" -}}{{- end -}}

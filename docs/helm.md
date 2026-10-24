@@ -86,7 +86,10 @@ and, in file mode, the `_FILE` variables.
 | `s3SecretKey` | `RUSTRYX_BLOB_S3_SECRET_KEY` | true | S3 storage without a workload identity |
 | `oidcClientSecret` | `RUSTRYX_AUTH_OIDC_CLIENT_SECRET` | false | `config.auth.oidc.enabled` |
 | `ldapBindPassword` | `RUSTRYX_AUTH_LDAP_BIND_PASSWORD` | false | `config.auth.ldap.enabled` |
+| `databaseSealingKey` | `RUSTRYX_DATABASE_SEALING_KEY` | true | production (64 hex characters, identical on every node; seals the secrets stored in the database, for example upstream passwords) |
+| `databaseSealingPreviousKeys` | `RUSTRYX_DATABASE_SEALING_PREVIOUS_KEYS` | false | rotating the sealing key (`id:hex` lines of retired keys) |
 | `internalJwtKey` | `RUSTRYX_AUTH_INTERNAL_JWT_KEY` | true | production (PEM Ed25519, identical on every node) |
+| `internalJwtPreviousKeys` | `RUSTRYX_AUTH_INTERNAL_JWT_PREVIOUS_KEYS` | false | rotating the signing key (`kid: <id>` lines each followed by a PEM block) |
 | `cookieKey` | `RUSTRYX_AUTH_COOKIE_KEY` | true | production (base64 of 32 random bytes, identical on every node) |
 | `bootstrapAdminPassword` | `RUSTRYX_AUTH_BOOTSTRAP_ADMIN_PASSWORD` | true | production, while the database has no administrator yet; at least 12 characters, no known weak value |
 | `metricsToken` | `RUSTRYX_OBSERVABILITY_METRICS_TOKEN` | true | `/metrics` is enabled and not public; at least 16 characters in production |
@@ -358,8 +361,9 @@ Three decisions worth knowing:
   makes every pod NotReady by design; a normal Service would drop them, the targets would vanish and `up == 0`
   would never fire.
 * The ServiceMonitor sets `jobLabel: app.kubernetes.io/name`, so `job="rustryx"` whatever the release is called,
-  and `honorLabels: false`, so the `job` label of the background job metrics becomes `exported_job` instead of
-  overwriting the scrape job. The rules select `exported_job` for job names.
+  and `honorLabels: false`, so a series that carried a `job` label of its own would become `exported_job` instead of
+  overwriting the scrape job. The background job metrics avoid the clash by naming the job in the label `task`, and
+  the rules select `task` for job names.
 * Rules and panels select `job="rustryx"` on every series: the metric names are generic.
 
 ### Single listener and the ops port
@@ -387,7 +391,7 @@ but calls them). Each has a unit test.
 | production with fewer than two replicas without `allowSingleReplica` | OPS-31 |
 | `autoscaling.minReplicas` below `replicaCount`, `maxReplicas` below `minReplicas` | OPS-32 |
 | PDB with both fields, none, a `minAvailable` not below the replica floor, or `maxUnavailable: 0` | a PDB that blocks every drain |
-| `secrets.entries.databaseUrl` off; production without `internalJwtKey`, `cookieKey`, `bootstrapAdminPassword` | the application would not start |
+| `secrets.entries.databaseUrl` off; production without `internalJwtKey`, `cookieKey`, `bootstrapAdminPassword`, `databaseSealingKey` | the application would not start |
 | `/metrics` not public and no `metricsToken` | the application would not start |
 | `lock.backend: redis` without `lockRedisUrl` | the application would not start |
 | OIDC or LDAP enabled without the required settings or the secret entry | OPS-51 |

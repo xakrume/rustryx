@@ -28,8 +28,9 @@ spec:
       path: /metrics
       interval: {{ $sm.interval }}
       scrapeTimeout: {{ $sm.scrapeTimeout }}
-      # false on purpose: the background job metrics carry a `job` label of their own, which must
-      # become `exported_job` instead of overwriting the scrape job (see rustryx-alerts.yaml).
+      # false on purpose: should a series ever carry a `job` label of its own, it must become
+      # `exported_job` instead of overwriting the scrape job. The background job metrics name the
+      # job in `task` for exactly that reason (see rustryx-alerts.yaml).
       honorLabels: false
       {{- /* The pods demand a Bearer token on /metrics unless metrics_public is on. The default token
              source is the very Secret the pods read, so the scraper and the app cannot disagree. */}}

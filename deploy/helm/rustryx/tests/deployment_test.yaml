@@ -197,6 +197,23 @@ tests:
           path: spec.template.spec.containers[0].env[?(@.name == "RUSTRYX_AUTH_BOOTSTRAP_ADMIN_PASSWORD_FILE")]
       - exists:
           path: spec.template.spec.containers[0].env[?(@.name == "RUSTRYX_AUTH_INTERNAL_JWT_KEY_FILE")]
+      - exists:
+          path: spec.template.spec.containers[0].env[?(@.name == "RUSTRYX_DATABASE_SEALING_KEY_FILE")]
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name == "RUSTRYX_DATABASE_SEALING_PREVIOUS_KEYS_FILE")]
+      - notExists:
+          path: spec.template.spec.containers[0].env[?(@.name == "RUSTRYX_AUTH_INTERNAL_JWT_PREVIOUS_KEYS_FILE")]
+
+  - it: renders the previous key files only when a rotation turns them on
+    set:
+      secrets.mode: file
+      secrets.entries.databaseSealingPreviousKeys: true
+      secrets.entries.internalJwtPreviousKeys: true
+    asserts:
+      - exists:
+          path: spec.template.spec.containers[0].env[?(@.name == "RUSTRYX_DATABASE_SEALING_PREVIOUS_KEYS_FILE")]
+      - exists:
+          path: spec.template.spec.containers[0].env[?(@.name == "RUSTRYX_AUTH_INTERNAL_JWT_PREVIOUS_KEYS_FILE")]
 
   - it: lets uploads finish on shutdown (native preStop sleep, derived grace period)
     asserts:

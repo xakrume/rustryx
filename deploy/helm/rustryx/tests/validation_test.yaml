@@ -264,7 +264,14 @@ tests:
       secrets.entries.internalJwtKey: false
     asserts:
       - failedTemplate:
-          errorPattern: internalJwtKey, cookieKey and bootstrapAdminPassword
+          errorPattern: internalJwtKey, cookieKey, bootstrapAdminPassword and databaseSealingKey
+
+  - it: must_not_start_production_without_the_database_sealing_key
+    set:
+      secrets.entries.databaseSealingKey: false
+    asserts:
+      - failedTemplate:
+          errorPattern: databaseSealingKey
 
   - it: allows development without those secrets
     set:
@@ -272,6 +279,7 @@ tests:
       secrets.entries.cookieKey: false
       secrets.entries.internalJwtKey: false
       secrets.entries.bootstrapAdminPassword: false
+      secrets.entries.databaseSealingKey: false
     asserts:
       - hasDocuments:
           count: 0

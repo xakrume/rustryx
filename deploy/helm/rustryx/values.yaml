@@ -414,7 +414,14 @@ secrets:
     #                          (turn both off when the pod gets credentials from a workload identity)
     #   oidcClientSecret       RUSTRYX_AUTH_OIDC_CLIENT_SECRET, when OIDC is on
     #   ldapBindPassword       RUSTRYX_AUTH_LDAP_BIND_PASSWORD, when LDAP is on
+    #   databaseSealingKey     RUSTRYX_DATABASE_SEALING_KEY, 64 hex characters (32 random bytes) that
+    #                          seal the secrets stored in the database (upstream passwords); identical
+    #                          on every node, required in production
+    #   databaseSealingPreviousKeys RUSTRYX_DATABASE_SEALING_PREVIOUS_KEYS, `id:hex` lines of retired
+    #                          sealing keys that must still open old values (rotation only)
     #   internalJwtKey         RUSTRYX_AUTH_INTERNAL_JWT_KEY, PEM Ed25519, identical on every node
+    #   internalJwtPreviousKeys RUSTRYX_AUTH_INTERNAL_JWT_PREVIOUS_KEYS, `kid: <id>` plus one PEM block
+    #                          per retired signing key that must still verify (rotation only)
     #   cookieKey              RUSTRYX_AUTH_COOKIE_KEY, base64 of 32 random bytes, identical everywhere
     #   bootstrapAdminPassword RUSTRYX_AUTH_BOOTSTRAP_ADMIN_PASSWORD, one-time break-glass password;
     #                          production refuses weak values (OPS-53) and the password is to be changed
@@ -426,7 +433,10 @@ secrets:
     s3SecretKey: true
     oidcClientSecret: false
     ldapBindPassword: false
+    databaseSealingKey: true
+    databaseSealingPreviousKeys: false
     internalJwtKey: true
+    internalJwtPreviousKeys: false
     cookieKey: true
     bootstrapAdminPassword: true
     metricsToken: true

@@ -97,25 +97,58 @@ fire; this section makes that visible.
 | Series | Type | Labels | Used by |
 |---|---|---|---|
 | `http_requests_total` | counter | route, method, status | availability SLI, request rate, 5xx share |
-| `http_request_duration_seconds` | histogram | route, method | latency panels, route latency (and the class SLIs, see A2) |
+| `http_request_duration_seconds` | histogram | route, method, class, cache | latency panels, route latency, the class SLIs (see A2) |
 | `http_requests_in_flight` | gauge | none | in-flight panel, HPA signal candidate |
 | `http_shed_total` | counter | reason | `RustryxLoadShedding` |
 | `upstream_requests_total` | counter | repo, status | upstream panels |
 | `upstream_request_duration_seconds` | histogram | repo | upstream p95 |
 | `upstream_errors_total` | counter | repo, kind | `RustryxUpstreamErrors`, `RustryxUpstreamCircuitOpen` |
+| `upstream_circuit_state` | gauge | repo | circuit breaker panel |
+| `proxy_cache_total` | counter | format, result | operations (cache hit ratio) |
+| `singleflight_total` | counter | role | operations (fill coalescing) |
+| `hosted_uploads_total` | counter | format, result | operations |
+| `hosted_upload_bytes_total` | counter | format | operations |
+| `group_member_skipped_total` | counter | reason | operations |
+| `blob_orphan_leak_total` | counter | none | operations; a growing value means blobs the GC must collect |
+| `blob_writer_abandoned_total` | counter | none | operations |
+| `hosted_allow_once_violation_total` | counter | none | tripwire: it must stay zero, no alert exists yet |
+| `proxy_client_detached_total` | counter | none | operations |
+| `policy_violations_total` | counter | format, reason | operations |
+| `download_counter_pending`, `download_counter_flush_total`, `download_counter_dropped_total` | gauge, counter, counter | result on the flush counter | operations (download statistics) |
 | `db_pool_size` | gauge | none | pool panel |
 | `db_pool_idle` | gauge | none | `RustryxDbPoolWait` |
 | `db_pool_in_use` | gauge | none | pool panel |
 | `db_pool_wait_seconds` | histogram | none | pool wait p95 |
 | `db_pool_wait_total` | counter | none | `RustryxDbPoolWait` |
 | `auth_attempts_total` | counter | method, result | `RustryxAuthFailSpike`, auth panel |
-| `background_job_runs_total` | counter | job, result | `RustryxJobFailed`, jobs panel |
-| `background_job_last_success_timestamp_seconds` | gauge | job | `RustryxJobStale`, jobs panel |
+| `background_job_runs_total` | counter | task, result | `RustryxJobFailed`, jobs panel |
+| `background_job_last_success_timestamp_seconds` | gauge | task | `RustryxJobStale`, jobs panel |
+| `background_job_running` | gauge | task | `RustryxJobRunningTooLong`, jobs panel |
 | `distlock_lost_total` | counter | key_class | `RustryxLockLost` |
+| `blob_store_ops_total` | counter | store, op, result | `RustryxBlobStoreErrors`, blob panels (emitted by `rustryx-blob`; `result` is `ok`, `not_found`, `rejected`, `overloaded`, `aborted` or `error`, only `error` pages) |
+| `blob_store_bytes_total` | counter | store, direction | throughput panel (`rustryx-blob`) |
+| `blob_store_free_bytes` | gauge | store | `RustryxDiskLow`, `RustryxDiskCritical` (local store, `rustryx-blob`) |
+| `blob_store_total_bytes` | gauge | store | disk alerts (`rustryx-blob`) |
+| `rbac_decisions_total` | counter | kind, result | authorization panel candidate: kind `content`, `app`, `project` or `admin`, result `allow`, `deny` or `error` (`rustryx-rbac`) |
+| `rbac_cache_events_total` | counter | cache, event | authorizer cache effectiveness (`rustryx-rbac`) |
+| `rbac_invalidations_total` | counter | event | invalidation traffic seen by this node (`rustryx-rbac`) |
+| `distlock_acquire_total` | counter | key_class, result | lock panel |
+| `db_up` | gauge | none | `RustryxDbUnavailable`: 1 while the last readiness `SELECT 1` succeeded, 0 otherwise |
+| `redis_up` | gauge | none | `RustryxRedisUnavailable` (SRE-20). Set only when a Redis is configured; this build has no Redis client yet, so the series is absent and the alert stays silent |
+| `tokio_busy_ratio` | gauge | none | `RustryxTokioSaturated`: share of worker time spent running tasks, sampled every 10 s |
+| `tokio_global_queue_depth` | gauge | none | runtime panel |
+| `tokio_workers` | gauge | none | runtime panel |
+| `tokio_alive_tasks` | gauge | none | runtime panel |
+| `oidc_requests_total` | counter | op, result | `RustryxOidcRefreshFailures` (op `discovery` or `jwks`, result `ok`, `error` or `timeout`; emitted by `rustryx-auth`) |
+| `oidc_jwks_age_seconds` | gauge | none | `RustryxOidcJwksStale` (emitted while `OidcProvider::spawn_background` runs) |
+| `ldap_requests_total` | counter | result | `RustryxLdapErrors` (result `ok`, `error` or `timeout`) |
+| `auth_breakglass_logins_total` | counter | none | `RustryxBreakGlassLogin`: counted by `rustryx-auth` when the configured bootstrap administrator signs in (`AuthServiceConfig::breakglass_username`) |
 
-Standard process series (`process_cpu_seconds_total`, `process_resident_memory_bytes`,
-`process_open_fds`, `process_max_fds`) and the scrape series `up` are not listed above because they are not
-produced by `names.rs`.
+The process series are exported on Linux (read from `/proc/self`; a developer laptop has none):
+`process_cpu_seconds_total` (a gauge of float seconds, because the `metrics` counter is an integer and whole
+seconds are too coarse for a rate over a few minutes), `process_resident_memory_bytes`,
+`process_virtual_memory_bytes`, `process_open_fds`, `process_max_fds` and `process_start_time_seconds`. The
+scrape series `up` is the scraper's, not the application's.
 
 ### Not yet exported by the code
 
@@ -126,32 +159,17 @@ stay silent and the panels stay empty. When the code starts exporting one, move 
 
 | Series | Type | Labels | Needed by |
 |---|---|---|---|
-| `db_up` | gauge | none | `RustryxDbUnavailable`: 1 while the last readiness `SELECT 1` succeeded, 0 otherwise (the twin of `redis_up`) |
-| `redis_up` | gauge | none | `RustryxRedisUnavailable` (SRE-20) |
 | `redis_requests_total` | counter | result | Redis panel |
-| `blob_store_ops_total` | counter | store, op, result | `RustryxBlobStoreErrors`, blob panels |
-| `blob_store_bytes_total` | counter | store, direction | throughput panel |
-| `blob_store_free_bytes` | gauge | store | `RustryxDiskLow`, `RustryxDiskCritical` (local store) |
-| `blob_store_total_bytes` | gauge | store | disk alerts (SRE-13 uses it, SRE-08 omits it) |
-| `background_job_running` | gauge | job | `RustryxJobRunningTooLong`, jobs panel |
-| `distlock_acquire_total` | counter | key_class, result | lock panel |
-| `ldap_requests_total` | counter | result | `RustryxLdapErrors` |
-| `oidc_requests_total` | counter | op, result | `RustryxOidcRefreshFailures` |
-| `oidc_jwks_age_seconds` | gauge | none | `RustryxOidcJwksStale` |
-| `tokio_busy_ratio` | gauge | none | `RustryxTokioSaturated` |
-| `tokio_global_queue_depth` | gauge | none | runtime panel |
-| `tokio_blocking_queue_depth` | gauge | none | runtime panel |
-| `upstream_circuit_state` | gauge | repo | circuit breaker panel |
-| `auth_breakglass_logins_total` | counter | none | `RustryxBreakGlassLogin` (SRE-29 asks for an alert on every break-glass login; `auth_attempts_total` cannot tell the break-glass account from other local users) |
+| `tokio_blocking_queue_depth` | gauge | none | runtime panel. The runtime reports it only when the whole build is compiled with `--cfg tokio_unstable`, which is not worth one panel; a permit based gauge from the blocking gates would be the alternative |
 
 ## Assumptions the assets make
 
 | ID | Assumption | If it is wrong |
 |---|---|---|
 | A1 | The scrape job is named `rustryx` (ServiceMonitor `jobLabel: app.kubernetes.io/name`). | Every rule matches nothing. `RustryxTargetsAbsent` fires after 5 minutes, which is the visible symptom. |
-| A2 | `http_request_duration_seconds` carries two extra labels beyond SRE-08: `class` (`metadata`, `download`, `upload`, `api`, `other`) and `cache` (`hit`, `miss`, `none`). | The two class SLI recording rules return nothing, so `RustryxMetadataLatencyP95` and `RustryxDownloadTtfbP95` cannot fire. Availability, burn-rate and route panels are not affected. Alternative: derive the class from the route template once the API crate defines templates that separate the classes. |
-| A3 | `background_job_last_success_timestamp_seconds{job}` is initialised to the process start time for every job. | A job that never ran has no series and never goes stale. |
-| A4 | The background job metrics label the job name `job`. | Prometheus renames it to `exported_job` on scrape (the rules select `exported_job`). If the code uses another label name, rename it in the rules, the staleness table and the dashboard. |
+| A2 | `http_request_duration_seconds` carries two extra labels beyond SRE-08: `class` (`metadata`, `download`, `upload`, `api`, `other`) and `cache` (`hit`, `miss`, `stale`, `bypass`, `none`). The HTTP layer sets them: the class from the route template and the method unless the format layer labelled the request (a `RequestLabels` response extension or the `RequestLabelSlot` request extension of `rustryx-observability`), the cache `none` unless the format layer says otherwise. The composition root copies the labels of `rustryx-format-core` (`RequestLabels::of`) onto the response of every `/repository` request; `hit` means "served from local storage without waiting for an upstream" and includes a read of a hosted asset, which is the case the time-to-first-byte objective is about. | A request that never reaches the format engine (an unknown repository, a refused credential) keeps the route default: an artifact `GET` counts as `download` and `cache` is `none`. Availability, burn-rate and route panels are not affected. |
+| A3 | `background_job_last_success_timestamp_seconds{task}` is initialised to the process start time for every task (`MetricsHandle::job` does it when the task registers). | A task that never ran has no series and never goes stale. |
+| A4 | The background job metrics label the job name `task`. | A label named `job` would collide with the scrape label and Prometheus would rename it to `exported_job`. The rules, the staleness table and the dashboard select `task`; a series from another exporter that still says `job` is not matched by them. |
 | A5 | Series carry `namespace` and `pod` from the scrape (ServiceMonitor target labels). | Aggregations by `namespace` collapse into one group; alerts still fire. |
 | A6 | `route` of probe and metrics requests is exactly `/healthz`, `/readyz`, `/metrics`. | Probes count in the availability SLI. |
 | A7 | One namespace holds one Rustryx release, or the releases share an SLO. | Alerts aggregate by namespace, not by release. |

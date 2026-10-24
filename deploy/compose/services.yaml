@@ -214,8 +214,10 @@ services:
       RUSTRYX_SERVER_LISTEN_ADDR: 0.0.0.0:8081
       RUSTRYX_SERVER_BASE_URL: http://localhost:8081
       RUSTRYX_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      RUSTRYX_LOCK_BACKEND: redis
-      RUSTRYX_LOCK_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      # The redis lock backend is not implemented yet and the node refuses to start with it.
+      RUSTRYX_LOCK_BACKEND: postgres
+      # Compose serves plain HTTP on localhost: Basic credentials are refused over HTTP otherwise.
+      RUSTRYX_SERVER_REQUIRE_HTTPS: "false"
       RUSTRYX_BLOB_KIND: s3
       RUSTRYX_BLOB_S3_ENDPOINT: http://minio:9000
       RUSTRYX_BLOB_S3_BUCKET: ${S3_BUCKET}

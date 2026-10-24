@@ -155,14 +155,14 @@ tests:
               description: "SELECT 1 fails on every node. All pods are NotReady by design and are not restarted. Nothing but already cached data can be served."
               runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxdbunavailable
 
-  # Job staleness uses the per-job threshold table and the exported_job label (the exposed `job`
-  # label is renamed on scrape). blob_gc is stale after two days, audit_rotation is not.
+  # Job staleness uses the per-job threshold table and the `task` label (not `job`, which Prometheus
+  # would rename to `exported_job`). blob_gc is stale after two days, audit_rotation is not.
   - name: job_stale_uses_per_job_threshold
     interval: 1m
     input_series:
-      - series: 'background_job_last_success_timestamp_seconds{job="rustryx",namespace="ryx",exported_job="blob_gc"}'
+      - series: 'background_job_last_success_timestamp_seconds{job="rustryx",namespace="ryx",task="blob_gc"}'
         values: "0x4400"
-      - series: 'background_job_last_success_timestamp_seconds{job="rustryx",namespace="ryx",exported_job="audit_rotation"}'
+      - series: 'background_job_last_success_timestamp_seconds{job="rustryx",namespace="ryx",task="audit_rotation"}'
         values: "0x4400"
     alert_rule_test:
       - eval_time: 72h
@@ -171,7 +171,7 @@ tests:
           - exp_labels:
               severity: high
               namespace: ryx
-              exported_job: blob_gc
+              task: blob_gc
             exp_annotations:
               summary: "Background job blob_gc has not succeeded within its allowed interval"
               description: "Last success was 3d 0h 0m 0s ago."
@@ -182,7 +182,7 @@ tests:
   - name: single_job_failure_alerts
     interval: 1m
     input_series:
-      - series: 'background_job_runs_total{job="rustryx",namespace="ryx",exported_job="cleanup",result="error"}'
+      - series: 'background_job_runs_total{job="rustryx",namespace="ryx",task="cleanup",result="error"}'
         values: "0 0 0 0 0 1 1 1 1 1 1 1"
     alert_rule_test:
       - eval_time: 8m
@@ -191,7 +191,7 @@ tests:
           - exp_labels:
               severity: medium
               namespace: ryx
-              exported_job: cleanup
+              task: cleanup
             exp_annotations:
               summary: "Background job cleanup failed"
               description: "1 failed runs in the last hour. A failed run leaves state that the next run picks up (jobs are idempotent)."

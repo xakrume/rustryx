@@ -1710,8 +1710,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "time() - max by (exported_job) (background_job_last_success_timestamp_seconds{job=\"rustryx\",namespace=~\"$namespace\"})",
-          "legendFormat": "{{exported_job}}",
+          "expr": "time() - max by (task) (background_job_last_success_timestamp_seconds{job=\"rustryx\",namespace=~\"$namespace\"})",
+          "legendFormat": "{{task}}",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -1765,8 +1765,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (exported_job, result) (increase(background_job_runs_total{job=\"rustryx\",namespace=~\"$namespace\"}[$__interval]))",
-          "legendFormat": "{{exported_job}} {{result}}",
+          "expr": "sum by (task, result) (increase(background_job_runs_total{job=\"rustryx\",namespace=~\"$namespace\"}[$__interval]))",
+          "legendFormat": "{{task}} {{result}}",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -1821,8 +1821,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (exported_job) (background_job_running{job=\"rustryx\",namespace=~\"$namespace\"})",
-          "legendFormat": "{{exported_job}}",
+          "expr": "max by (task) (background_job_running{job=\"rustryx\",namespace=~\"$namespace\"})",
+          "legendFormat": "{{task}}",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"

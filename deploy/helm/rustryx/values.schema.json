@@ -990,7 +990,16 @@
             "ldapBindPassword": {
               "type": "boolean"
             },
+            "databaseSealingKey": {
+              "type": "boolean"
+            },
+            "databaseSealingPreviousKeys": {
+              "type": "boolean"
+            },
             "internalJwtKey": {
+              "type": "boolean"
+            },
+            "internalJwtPreviousKeys": {
               "type": "boolean"
             },
             "cookieKey": {

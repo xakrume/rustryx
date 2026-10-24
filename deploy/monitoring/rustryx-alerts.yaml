@@ -11,10 +11,11 @@
 #     the assumptions about labels and not-yet-exported series are in docs/slo.md.
 #     `up{job="rustryx"}` relies on the scrape job being named `rustryx`; the chart's ServiceMonitor
 #     guarantees it with jobLabel app.kubernetes.io/name.
-#   * The `job` label of the background job metrics collides with the scrape target label `job`.
-#     Prometheus and vmagent rename the exposed one to `exported_job` unless honor_labels is on,
-#     so these rules select `exported_job` for the job name and job="rustryx" for the scrape job. A rule
-#     written against `job="blob_gc"` would match nothing and stay green forever.
+#   * The background job metrics name the job in the label `task`. It is not called `job`
+#     because that would collide with the scrape target label `job`: Prometheus and vmagent rename
+#     the exposed one to `task` unless honor_labels is on, and a rule written against
+#     `job="blob_gc"` would match nothing and stay green forever. These rules select
+#     `task` for the job name and job="rustryx" for the scrape job.
 #   * Rare events (auth failures, circuit breaker, lock loss, job failure) use increase(), never
 #     rate() (SRE-10): a rate of 0.0003 per second cannot be read or alerted on sensibly.
 #   * Every alert carries severity (critical, high, medium), summary and runbook_url. The anchor of
@@ -135,9 +136,9 @@ groups:
       # Per-job staleness threshold in seconds (SRE-13: "threshold set per job").
       - record: rustryx:job_stale_threshold:seconds
         expr: |
-          label_replace(vector(2 * 86400), "exported_job", "blob_gc", "", "")
-          or label_replace(vector(2 * 86400), "exported_job", "cleanup", "", "")
-          or label_replace(vector(35 * 86400), "exported_job", "audit_rotation", "", "")
+          label_replace(vector(2 * 86400), "task", "blob_gc", "", "")
+          or label_replace(vector(2 * 86400), "task", "cleanup", "", "")
+          or label_replace(vector(35 * 86400), "task", "audit_rotation", "", "")
 
   - name: rustryx.alerts
     rules:
@@ -298,31 +299,31 @@ groups:
       # that never ran has no series and never goes stale.
       - alert: RustryxJobStale
         expr: |
-          (time() - max by (namespace, exported_job) (background_job_last_success_timestamp_seconds{job="rustryx"}))
-          > on (exported_job) group_left ()
+          (time() - max by (namespace, task) (background_job_last_success_timestamp_seconds{job="rustryx"}))
+          > on (task) group_left ()
           rustryx:job_stale_threshold:seconds
         for: 15m
         labels:
           severity: high
         annotations:
-          summary: "Background job {{ $labels.exported_job }} has not succeeded within its allowed interval"
+          summary: "Background job {{ $labels.task }} has not succeeded within its allowed interval"
           description: "Last success was {{ $value | humanizeDuration }} ago."
           runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxjobstale
       - alert: RustryxJobFailed
-        expr: sum by (namespace, exported_job) (increase(background_job_runs_total{job="rustryx",result="error"}[1h])) > 0
+        expr: sum by (namespace, task) (increase(background_job_runs_total{job="rustryx",result="error"}[1h])) > 0
         labels:
           severity: medium
         annotations:
-          summary: "Background job {{ $labels.exported_job }} failed"
+          summary: "Background job {{ $labels.task }} failed"
           description: "{{ $value }} failed runs in the last hour. A failed run leaves state that the next run picks up (jobs are idempotent)."
           runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxjobfailed
       - alert: RustryxJobRunningTooLong
-        expr: max by (namespace, exported_job) (background_job_running{job="rustryx"}) == 1
+        expr: max by (namespace, task) (background_job_running{job="rustryx"}) == 1
         for: 6h
         labels:
           severity: medium
         annotations:
-          summary: "Background job {{ $labels.exported_job }} has been running for more than six hours"
+          summary: "Background job {{ $labels.task }} has been running for more than six hours"
           description: "A job that never finishes holds its distributed lock. If the holder is hung, release the lock (see runbook)."
           runbook_url: https://github.com/rustryx/rustryx/blob/main/docs/runbook.md#rustryxjobrunningtoolong
       - alert: RustryxLockLost

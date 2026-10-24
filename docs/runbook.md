@@ -161,17 +161,29 @@ then restart. The migration Job reads the same Secret on the next upgrade.
 | Redis URL (`RUSTRYX_LOCK_REDIS_URL`) | Update the Secret, roll. Singleton jobs pause while pods hold different URLs only if the new URL points at a different Redis; never run two backends. | brief pause of singleton jobs |
 | Bootstrap admin password (`RUSTRYX_AUTH_BOOTSTRAP_ADMIN_PASSWORD`) | Used only to create the break-glass account on an empty database. Change the account's password in the application, then remove the entry from the Secret (`secrets.entries.bootstrapAdminPassword=false`). Rotate the password stored for emergencies on the agreed schedule. | none |
 | Cookie key (`RUSTRYX_AUTH_COOKIE_KEY`) | Generate `openssl rand -base64 32`, update the Secret, roll. | the sealed `state` and `nonce` cookie of a login in progress becomes invalid: that user retries. Existing sessions are not stored in this cookie. |
-| Internal JWT key (`RUSTRYX_AUTH_INTERNAL_JWT_KEY`) | See below. | every UI session is invalidated |
+| Internal JWT key (`RUSTRYX_AUTH_INTERNAL_JWT_KEY`, `..._KEY_ID`, `RUSTRYX_AUTH_INTERNAL_JWT_PREVIOUS_KEYS`) | A ring, see below. | none with the ring; every UI session ends without it |
+| Database sealing key (`RUSTRYX_DATABASE_SEALING_KEY`, `..._KEY_ID`, `RUSTRYX_DATABASE_SEALING_PREVIOUS_KEYS`) | A ring, see below. | none with the ring; without it every stored upstream credential becomes unreadable |
 
 **Internal JWT key.** The key is a PEM Ed25519 private key that signs the internal JWTs given to the UI after
-login. It must be identical on every node. The configuration schema carries exactly one key today. Rotating it
-means: generate a new key, update the Secret, roll the pods. Pods that already restarted sign with the new key
-and reject tokens signed with the old one, so during the rollout a UI request can land on a pod that disagrees
-with the one that issued the token and gets 401; users log in again. `ryx_*` API tokens and Keycloak bearer
-tokens do not use this key and are unaffected. The architecture describes key ids and a ring with overlap
-(the new key signs, the old key still verifies) for rotation without a forced re-login. That ring is not in the
-configuration schema yet; use it as soon as it is, by adding the new key first and removing the old one after
-the longest session lifetime (8 hours absolute). Until then, rotate in a quiet window.
+login. It must be identical on every node, and it is a ring: `RUSTRYX_AUTH_INTERNAL_JWT_KEY` signs, and
+`RUSTRYX_AUTH_INTERNAL_JWT_PREVIOUS_KEYS` lists retired keys that still verify (`kid: <id>` lines, each followed
+by one PEM block, public or private, at most 8). Rotate without a forced re-login: generate the new key, put it
+in `RUSTRYX_AUTH_INTERNAL_JWT_KEY` under a NEW `RUSTRYX_AUTH_INTERNAL_JWT_KEY_ID`, move the old key and its id
+into the previous list, enable `secrets.entries.internalJwtPreviousKeys`, roll the pods. A UI request that lands
+on a pod that has not restarted yet still verifies, because that pod knows the old key as current and the
+restarted pods know it as previous; tokens signed by the new key are refused by a pod that has not restarted
+yet, so a user may get a single 401 during the roll and signs in again. After the longest session lifetime (8
+hours absolute) remove the old entry. `ryx_*` API tokens and Keycloak bearer tokens do not use this key and are
+unaffected. A new key id may not reuse the id of a previous key.
+
+**Database sealing key.** `RUSTRYX_DATABASE_SEALING_KEY` (64 hex characters, `openssl rand -hex 32`) seals the
+secrets that the application stores in the database, such as the password of an upstream registry; each sealed
+value carries the id of the key that sealed it (`RUSTRYX_DATABASE_SEALING_KEY_ID`). Rotation is the same ring:
+new key as current under a new id, the old one in `RUSTRYX_DATABASE_SEALING_PREVIOUS_KEYS` (`id:hex`, one per
+line), enable `secrets.entries.databaseSealingPreviousKeys`, roll. New values are sealed with the new key and old
+ones still open with the previous one. Keep a previous key listed until every value sealed with it has been
+sealed again; a key that is gone cannot open the values it sealed. The key is required in production and must
+be the same on every node: nodes with different keys cannot read each other's rows.
 
 **JWKS issues** (Keycloak keys). The service refreshes the Keycloak key set at most once per 30 seconds per
 issuer, and only for an unknown `kid`; a key that disappears from the latest successful fetch is no longer
@@ -191,7 +203,7 @@ by age, version count and non-use, with a dry run before a real run, and never t
 Both are singleton jobs that run under a distributed lock, so only one node executes a run at a time.
 
 * Schedule and limits: `config.gc.*` (see config.md). The chart does not own them.
-* Watch: `background_job_last_success_timestamp_seconds{exported_job="blob_gc"}`, `background_job_runs_total`,
+* Watch: `background_job_last_success_timestamp_seconds{task="blob_gc"}`, `background_job_runs_total`,
   the logs of the node holding the lock.
 * A run that fails leaves state the next run picks up; jobs are idempotent. Alerts: `RustryxJobFailed`,
   `RustryxJobStale`.
@@ -487,7 +499,7 @@ the process is alive but the job is not working.
 
 **Diagnose.**
 ```promql
-time() - max by (exported_job) (background_job_last_success_timestamp_seconds{job="rustryx"})
+time() - max by (task) (background_job_last_success_timestamp_seconds{job="rustryx"})
 ```
 Is a lock held by a dead node (wait for the TTL, or see Lock backend notes)? Is the lock backend down (Redis)? Is
 the job failing every time (RustryxJobFailed) or running forever (RustryxJobRunningTooLong)? Are the logs of the

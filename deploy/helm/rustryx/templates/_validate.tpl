@@ -86,8 +86,8 @@ hold even with `--skip-schema-validation`.
 {{- if not $e.databaseUrl -}}
 {{- fail "secrets.entries.databaseUrl must be true: the node cannot start without database credentials (RUSTRYX_DATABASE_URL)" -}}
 {{- end -}}
-{{- if and $prod (not (and $e.internalJwtKey $e.cookieKey $e.bootstrapAdminPassword)) -}}
-{{- fail "config.environment=production requires secrets.entries internalJwtKey, cookieKey and bootstrapAdminPassword: the application refuses to start without them" -}}
+{{- if and $prod (not (and $e.internalJwtKey $e.cookieKey $e.bootstrapAdminPassword $e.databaseSealingKey)) -}}
+{{- fail "config.environment=production requires secrets.entries internalJwtKey, cookieKey, bootstrapAdminPassword and databaseSealingKey: the application refuses to start without them" -}}
 {{- end -}}
 {{- $metricsOn := or (not (hasKey $obs "metrics_enabled")) $obs.metrics_enabled -}}
 {{- if and $metricsOn (not $obs.metrics_public) (not $e.metricsToken) -}}
