@@ -5222,3 +5222,5 @@ With five engineers on the parallel tracks (C, B, D, E and a shared F and H engi
 | 11 | May replication copy from a source that the pull gate would block? | the design refuses | refused |
 | 12 | Is it acceptable to deliver Trivy, osv-scanner, cosign and notation as separate binaries from an init container (licences to be confirmed against the README 8.6 allowlist)? | DSO-22 for Trivy, the same model extended to three more tools | yes, after the licence check |
 | 13 | Retention of lifecycle run records (180 days) and promotion records (365 days): do compliance rules ask for more? | they are the deletion record of DSO-34 | 180 and 365 days |
+
+Confirmed by the product owner on 2026-10-24: all thirteen defaults in this table are accepted.
