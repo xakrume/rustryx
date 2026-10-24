@@ -1,0 +1,52 @@
+[package]
+name = "rustryx-format-maven-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "MIT"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+rustryx-format-maven = { path = ".." }
+
+# Not a member of the repository workspace: `cargo fuzz` builds with nightly sanitizer flags and
+# its own lock file, and the workspace build must not pick this crate up.
+[workspace]
+
+[[bin]]
+name = "metadata_parse"
+path = "fuzz_targets/metadata_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "layout_parse"
+path = "fuzz_targets/layout_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "version_order"
+path = "fuzz_targets/version_order.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "merge"
+path = "fuzz_targets/merge.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "checksum_file"
+path = "fuzz_targets/checksum_file.rs"
+test = false
+doc = false
+bench = false

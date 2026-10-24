@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata modelVersion="1.1.0">
+  <groupId>org.acme</groupId>
+  <artifactId>lib</artifactId>
+  <version>1.0-SNAPSHOT</version>
+  <versioning>
+    <snapshot><timestamp>20240102.030405</timestamp><buildNumber>3</buildNumber></snapshot>
+    <lastUpdated>20240102030405</lastUpdated>
+    <snapshotVersions>
+      <snapshotVersion><classifier>sources</classifier><extension>jar</extension><value>1.0-20240102.030405-3</value><updated>20240102030405</updated></snapshotVersion>
+      <snapshotVersion><extension>pom</extension><value>1.0-20240102.030405-3</value></snapshotVersion>
+    </snapshotVersions>
+  </versioning>
+</metadata>

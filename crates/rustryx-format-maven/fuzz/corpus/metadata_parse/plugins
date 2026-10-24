@@ -1,0 +1,4 @@
+<metadata><plugins>
+  <plugin><name>Maven Clean Plugin</name><prefix>clean</prefix><artifactId>maven-clean-plugin</artifactId></plugin>
+  <plugin><name>A &amp; B</name><prefix>ab</prefix><artifactId>ab-maven-plugin</artifactId></plugin>
+</plugins></metadata>
