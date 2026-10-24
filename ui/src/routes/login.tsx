@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from '@tanstack/react-router'
 import { sessionQuery } from '@/features/auth/api'
-import { LoginPage, type LoginSearch } from '@/features/auth/login-page'
+import { LoginPage, type LoginSearch } from '@/features/login/login-page'
 import { sanitizeReturnTo } from '@/features/auth/return-to'
 
 const text = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined)

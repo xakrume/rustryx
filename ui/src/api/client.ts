@@ -18,6 +18,9 @@ const NO_REDIRECT_ON_401 = new Set([
   '/api/v1/auth/login',
   '/api/v1/auth/logout',
   '/api/v1/auth/providers',
+  // A wrong CURRENT password counts like a failed login (api-conventions, 11.5): the form shows
+  // it at the field. It must not look like an expired session and throw the person to sign in.
+  '/api/v1/me/password',
 ])
 
 const CSRF_PATH = '/api/v1/auth/csrf'

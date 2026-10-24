@@ -1,4 +1,12 @@
-import { ChevronRight, File, Folder, FolderOpen, Loader2, TriangleAlert } from 'lucide-react'
+import {
+  ChevronRight,
+  Ellipsis,
+  File,
+  Folder,
+  FolderOpen,
+  Loader2,
+  TriangleAlert,
+} from 'lucide-react'
 import {
   useCallback,
   useEffect,
@@ -26,6 +34,16 @@ export interface TreeProps {
   roots: readonly TreeNodeData[]
   /** Fetch the children of a folder. Called once per expand; a failure is retried by expanding again. */
   loadChildren: (node: TreeNodeData, signal: AbortSignal) => Promise<readonly TreeNodeData[]>
+  /**
+   * Fetch the next page of a folder. Called with the folder's `more` row; the nodes it returns
+   * take the place of that row. Needed only when `loadChildren` can return a `more` row.
+   */
+  loadMore?: (node: TreeNodeData, signal: AbortSignal) => Promise<readonly TreeNodeData[]>
+  /**
+   * Folder ids from the top down that are expanded once, as soon as each is visible: this reveals
+   * a deep selection that came from the address bar. A user who collapses one is not overruled.
+   */
+  revealIds?: readonly string[]
   selectedId?: string | null
   /** Called on click, Enter and Space. Folders also toggle. */
   onSelect?: (node: TreeNodeData) => void
@@ -38,6 +56,8 @@ interface State {
   expanded: ReadonlySet<string>
   children: ReadonlyMap<string, ChildState>
   focusedId: string | null
+  /** Progress of the `more` rows, by row id. */
+  more: ReadonlyMap<string, 'loading' | 'error'>
 }
 
 type Action =
@@ -45,6 +65,8 @@ type Action =
   | { type: 'collapse'; id: string }
   | { type: 'child'; id: string; state: ChildState }
   | { type: 'focus'; id: string }
+  | { type: 'more-status'; id: string; status: 'loading' | 'error' | null }
+  | { type: 'append'; folderId: string; moreId: string; items: readonly TreeNodeData[] }
 
 /** Every transition builds new Set and Map instances: React state is never mutated. */
 function reducer(state: State, action: Action): State {
@@ -60,6 +82,27 @@ function reducer(state: State, action: Action): State {
       return { ...state, children: new Map(state.children).set(action.id, action.state) }
     case 'focus':
       return state.focusedId === action.id ? state : { ...state, focusedId: action.id }
+    case 'more-status': {
+      const more = new Map(state.more)
+      if (action.status === null) more.delete(action.id)
+      else more.set(action.id, action.status)
+      return { ...state, more }
+    }
+    case 'append': {
+      const current = state.children.get(action.folderId)
+      if (current?.status !== 'loaded') return state
+      // The `more` row is replaced by the next page, which may end with a new `more` row.
+      const items = current.items.flatMap((node) =>
+        node.id === action.moreId ? action.items : [node],
+      )
+      const more = new Map(state.more)
+      more.delete(action.moreId)
+      return {
+        ...state,
+        more,
+        children: new Map(state.children).set(action.folderId, { status: 'loaded', items }),
+      }
+    }
   }
 }
 
@@ -80,6 +123,8 @@ export function Tree({
   label,
   roots,
   loadChildren,
+  loadMore,
+  revealIds,
   selectedId = null,
   onSelect,
   renderLabel,
@@ -89,18 +134,25 @@ export function Tree({
     expanded: new Set<string>(),
     children: new Map<string, ChildState>(),
     focusedId: null,
+    more: new Map<string, 'loading' | 'error'>(),
   })
   const rows = useMemo(
     () => visibleRows(roots, state.expanded, state.children),
     [roots, state.expanded, state.children],
   )
+  const stateRef = useRef(state)
+  stateRef.current = state
   const itemRefs = useRef(new Map<string, HTMLLIElement>())
+  const revealed = useRef(new Set<string>())
   const aborters = useRef(new Map<string, AbortController>())
   const typeAhead = useRef({ buffer: '', timer: null as ReturnType<typeof setTimeout> | null })
 
   useEffect(
     () => () => {
       aborters.current.forEach((controller) => controller.abort())
+      // An unmount abandons every running load. Forgetting the controllers lets the effect below
+      // restart a load that React StrictMode (development) cancelled by remounting this one.
+      aborters.current.clear()
       if (typeAhead.current.timer !== null) clearTimeout(typeAhead.current.timer)
     },
     [],
@@ -149,15 +201,44 @@ export function Tree({
     [load],
   )
 
+  const loadMoreRow = useCallback(
+    (row: VisibleRow) => {
+      const folderId = row.parentId
+      if (loadMore === undefined || folderId === null) return
+      if (stateRef.current.more.get(row.node.id) === 'loading') return
+      aborters.current.get(row.node.id)?.abort()
+      const controller = new AbortController()
+      aborters.current.set(row.node.id, controller)
+      dispatch({ type: 'more-status', id: row.node.id, status: 'loading' })
+      loadMore(row.node, controller.signal).then(
+        (items) => {
+          if (!controller.signal.aborted) {
+            dispatch({ type: 'append', folderId, moreId: row.node.id, items })
+          }
+        },
+        () => {
+          if (!controller.signal.aborted) {
+            dispatch({ type: 'more-status', id: row.node.id, status: 'error' })
+          }
+        },
+      )
+    },
+    [loadMore],
+  )
+
   const activate = useCallback(
     (row: VisibleRow) => {
+      if (row.node.more) {
+        loadMoreRow(row)
+        return
+      }
       onSelect?.(row.node)
       if (row.node.hasChildren) {
         if (row.expanded) dispatch({ type: 'collapse', id: row.node.id })
         else expand(row)
       }
     },
-    [expand, onSelect],
+    [expand, loadMoreRow, onSelect],
   )
 
   function onKeyDown(event: KeyboardEvent<HTMLUListElement>): void {
@@ -221,17 +302,44 @@ export function Tree({
     }
   }
 
-  const busy = rows.find((r) => r.child?.status === 'loading')
+  // A folder that shows "loading" but has no live request lost it to a remount: ask again.
+  useEffect(() => {
+    for (const row of rows) {
+      if (row.expanded && row.child?.status === 'loading' && !aborters.current.has(row.node.id)) {
+        load(row.node)
+      }
+    }
+  }, [rows, load])
+
+  // Reveal a deep selection one level per pass: a folder can only be expanded once its parent's
+  // children are loaded and visible, and each load changes `rows`, which runs this again.
+  useEffect(() => {
+    if (revealIds === undefined) return
+    for (const id of revealIds) {
+      if (revealed.current.has(id)) continue
+      const row = rows.find((r) => r.node.id === id)
+      if (row === undefined) return
+      revealed.current.add(id)
+      if (row.node.hasChildren && !row.expanded) expand(row)
+      return
+    }
+    if (selectedId !== null) itemRefs.current.get(selectedId)?.scrollIntoView({ block: 'nearest' })
+  }, [revealIds, rows, expand, selectedId])
+
+  const busy = rows.find(
+    (r) => r.child?.status === 'loading' || state.more.get(r.node.id) === 'loading',
+  )
   const failed = rows.find((r) => r.child?.status === 'error')
 
   return (
     <div className={className}>
       <ul role="tree" aria-label={label} className="m-0 list-none p-0" onKeyDown={onKeyDown}>
         {rows.map((row) => {
-          const isSelected = row.node.id === selectedId
+          const isSelected = row.node.id === selectedId && !row.node.more
           const isLoading = row.child?.status === 'loading'
           const hasError = row.child?.status === 'error'
           const isEmpty = row.child?.status === 'loaded' && row.child.items.length === 0
+          const moreStatus = row.node.more ? state.more.get(row.node.id) : undefined
           const FolderIcon = row.expanded ? FolderOpen : Folder
           return (
             // Keyboard activation (Enter, Space, arrows) is handled once on the tree (onKeyDown of
@@ -249,7 +357,7 @@ export function Tree({
               aria-setsize={row.setSize}
               aria-expanded={row.node.hasChildren ? row.expanded : undefined}
               aria-selected={isSelected}
-              aria-busy={isLoading || undefined}
+              aria-busy={isLoading || moreStatus === 'loading' || undefined}
               tabIndex={row.node.id === tabStopId ? 0 : -1}
               onFocus={(event) => {
                 if (event.target === event.currentTarget)
@@ -278,7 +386,9 @@ export function Tree({
                 renderLabel(row.node, { expanded: row.expanded })
               ) : (
                 <>
-                  {row.node.hasChildren ? (
+                  {row.node.more ? (
+                    <Ellipsis className="size-4 shrink-0" aria-hidden="true" />
+                  ) : row.node.hasChildren ? (
                     <FolderIcon className="size-4 shrink-0" aria-hidden="true" />
                   ) : (
                     <File className="size-4 shrink-0" aria-hidden="true" />
@@ -286,8 +396,14 @@ export function Tree({
                   <span className="truncate">{row.node.label}</span>
                 </>
               )}
-              {isLoading ? (
+              {isLoading || moreStatus === 'loading' ? (
                 <Loader2 className="ml-auto size-4 animate-spin-slow" aria-hidden="true" />
+              ) : null}
+              {moreStatus === 'error' ? (
+                <span className="ml-auto flex items-center gap-1 text-xs text-destructive-text">
+                  <TriangleAlert className="size-3.5" aria-hidden="true" />
+                  {t('tree.moreFailed')}
+                </span>
               ) : null}
               {hasError ? (
                 <span className="ml-auto flex items-center gap-1 text-xs text-destructive-text">

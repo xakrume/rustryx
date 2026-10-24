@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { PlaceholderPage } from '@/features/placeholder/placeholder-page'
+import { ProfilePage } from '@/features/profile/profile-page'
 
 export const Route = createFileRoute('/_app/me/')({
-  component: () => <PlaceholderPage titleKey="nav.items.profile" route="/me" milestone="M1" />,
+  staticData: { crumb: 'nav.items.profile' },
+  component: ProfilePage,
 })

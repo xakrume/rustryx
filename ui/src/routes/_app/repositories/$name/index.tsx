@@ -1,12 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { PlaceholderPage } from '@/features/placeholder/placeholder-page'
+import { RepositoryOverviewPage } from '@/features/repositories/overview-page'
 
 export const Route = createFileRoute('/_app/repositories/$name/')({
-  component: () => (
-    <PlaceholderPage
-      titleKey="pages.repositoryOverview"
-      route="/repositories/:name"
-      milestone="M1"
-    />
-  ),
+  component: RepositoryOverviewPage,
 })

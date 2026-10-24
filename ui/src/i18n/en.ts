@@ -1,3 +1,7 @@
+import { contentMessages } from '@/features/repositories/content-messages'
+import { adminMessages } from '@/features/system/admin-messages'
+import { identityMessages } from '@/features/roles/identity-messages'
+
 /**
  * English message catalog. Every user visible string of the shell and the shared components
  * lives here (docs/ui-design-brief.md rule 10), so a Russian catalog can follow as a second
@@ -330,6 +334,7 @@ export const en = {
     retryLoad: 'Retry loading {name}',
     empty: 'Empty',
     emptyFolder: '{name} is empty',
+    moreFailed: 'Could not load more',
   },
   charts: {
     showTable: 'Show data table',
@@ -400,6 +405,9 @@ export const en = {
     done: 'Done',
     todo: 'To do',
   },
+  ...adminMessages,
+  ...contentMessages,
+  ...identityMessages,
 } as const
 
 export type Messages = typeof en

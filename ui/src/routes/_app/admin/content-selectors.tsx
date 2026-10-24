@@ -1,13 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { PlaceholderPage } from '@/features/placeholder/placeholder-page'
+import { pickText } from '@/features/roles/search-params'
+import { SelectorsPage } from '@/features/selectors/selectors-page'
 
 export const Route = createFileRoute('/_app/admin/content-selectors')({
   staticData: { crumb: 'nav.items.contentSelectors', access: { area: 'selectors' } },
-  component: () => (
-    <PlaceholderPage
-      titleKey="nav.items.contentSelectors"
-      route="/admin/content-selectors"
-      milestone="M1"
-    />
-  ),
+  validateSearch: (search: Record<string, unknown>) =>
+    pickText(search, ['q', 'edit', 'new'] as const),
+  component: SelectorsPage,
 })

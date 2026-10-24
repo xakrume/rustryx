@@ -1,6 +1,8 @@
 import { defineConfig, devices } from '@playwright/test'
 
-const PORT = 4173
+// Page agents that work side by side pick their own port and build output through these two
+// variables (E2E_PORT, E2E_SERVER_COMMAND); without them the defaults below are used.
+const PORT = Number(process.env.E2E_PORT ?? 4173)
 
 /**
  * The end to end tests run against the PRODUCTION style build in mock mode (`build:mock`)
@@ -22,7 +24,7 @@ export default defineConfig({
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
-    command: 'npm run build:mock && npm run preview:mock',
+    command: process.env.E2E_SERVER_COMMAND ?? 'npm run build:mock && npm run preview:mock',
     url: `http://localhost:${PORT}`,
     reuseExistingServer: !process.env.CI,
     timeout: 240_000,

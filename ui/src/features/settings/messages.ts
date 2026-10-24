@@ -1,0 +1,53 @@
+/** Strings of the system settings page. */
+export const systemSettingsMessages = {
+  title: 'Settings',
+  description:
+    'System wide settings. Values that come from the configuration file or the environment are shown but cannot be changed here.',
+  tabsLabel: 'Settings sections',
+  loadFailed: 'The settings could not be loaded',
+  sections: {
+    general: 'General',
+    security: 'Security',
+    storage: 'Storage',
+    email: 'Email',
+    'http-proxy': 'HTTP proxy',
+    projects: 'Projects',
+  },
+  source: {
+    config: 'Configuration',
+    runtime: 'Changed here',
+    default: 'Default',
+    configNote: 'Set by the configuration file or the environment. Change it there and restart.',
+  },
+  readOnly: 'Read only',
+  values: {
+    on: 'On',
+    off: 'Off',
+    empty: 'Not set',
+    configured: 'Configured',
+    notConfigured: 'Not configured',
+  },
+  secretNote: 'Secrets are never shown. This only says whether one is set.',
+  noEditable: 'Nothing in this section can be changed at runtime in this version.',
+  lastChanged: 'Last changed by {user}',
+  neverChanged: 'Never changed here',
+  save: 'Save changes',
+  saving: 'Saving',
+  discard: 'Discard changes',
+  saved: 'Settings saved',
+  noChanges: 'Nothing changed.',
+  range: 'Enter a whole number between {min} and {max}.',
+  rangeMin: 'Enter a whole number of {min} or more.',
+  rangeMax: 'Enter a whole number of {max} or less.',
+  whole: 'Enter a whole number.',
+  requiredValue: 'Enter a value.',
+  readOnlyMode: {
+    confirmTitle: 'Turn on read only mode?',
+    confirmBody:
+      'Uploads, deletes and changes to settings are refused with the error read_only_mode until someone turns it off. Reading and downloading keep working.',
+    confirm: 'Turn on read only mode',
+    cancel: 'Keep it off',
+    audited: 'This change is written to the audit log.',
+  },
+  conflictResource: 'settings section {section}',
+} as const

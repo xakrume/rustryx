@@ -1,9 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { PlaceholderPage } from '@/features/placeholder/placeholder-page'
+import { pickText } from '@/features/roles/search-params'
+import { AdminTokensPage } from '@/features/tokens/admin-tokens-page'
 
 export const Route = createFileRoute('/_app/admin/tokens')({
   staticData: { crumb: 'nav.items.apiTokens', access: { area: 'tokens' } },
-  component: () => (
-    <PlaceholderPage titleKey="nav.items.apiTokens" route="/admin/tokens" milestone="M1" />
-  ),
+  validateSearch: (search: Record<string, unknown>) =>
+    pickText(search, ['state', 'kind', 'never_used', 'expiring', 'owner_id', 'owner'] as const),
+  component: AdminTokensPage,
 })

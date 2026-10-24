@@ -1,7 +1,7 @@
 import '@/lib/zod-setup'
 import { useQuery } from '@tanstack/react-query'
-import { useRouter } from '@tanstack/react-router'
-import { Eye, EyeOff, LogIn } from 'lucide-react'
+import { Link, useRouter } from '@tanstack/react-router'
+import { Eye, EyeOff, LogIn, Package, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
 import { z } from 'zod'
 import { CopyButton } from '@/components/copy-button'
@@ -12,12 +12,14 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { useCountdown } from '@/hooks/use-countdown'
+import { ThemeMenu } from '@/features/shell/theme-menu'
 import { usePageTitle } from '@/hooks/use-page-title'
 import { t } from '@/i18n'
 import { formatDuration } from '@/lib/format'
-import { providersQuery, useLogin } from './api'
+import { providersQuery, useLogin } from '@/features/auth/api'
+import { sanitizeReturnTo } from '@/features/auth/return-to'
+import { systemInfoQuery } from './api'
 import { describeCallbackError, describeLoginFailure, type LoginFailure } from './login-errors'
-import { sanitizeReturnTo } from './return-to'
 
 export interface LoginSearch {
   return_to?: string
@@ -82,11 +84,17 @@ export function LoginPage({ search }: { search: LoginSearch }) {
     <main
       id="main-content"
       tabIndex={-1}
-      className="flex min-h-dvh items-center justify-center bg-background p-4 outline-none"
+      className="relative flex min-h-dvh flex-col items-center justify-center gap-4 bg-background p-4 outline-none"
     >
+      <div className="absolute top-3 right-3">
+        <ThemeMenu />
+      </div>
       <Card className="w-full max-w-sm">
         <CardHeader className="pb-4">
-          <p className="font-mono text-sm font-semibold text-accent">{t('common.appName')}</p>
+          <p className="flex items-center gap-2 font-mono text-sm font-semibold text-accent">
+            <Package className="size-4" aria-hidden="true" />
+            {t('common.appName')}
+          </p>
           <h1
             data-page-title=""
             tabIndex={-1}
@@ -121,11 +129,18 @@ export function LoginPage({ search }: { search: LoginSearch }) {
 
           {failure && (failure.retryAt === null || locked) ? (
             <Alert variant="destructive">
-              <p>
-                {failure.retryAt !== null
-                  ? t('auth.login.errors.lockedOut', { time: formatDuration(secondsLocked) })
-                  : failure.message}
-              </p>
+              {failure.retryAt !== null ? (
+                <>
+                  {/* The countdown changes every second: it is shown, not announced. One static
+                      sentence is what a screen reader hears when the lock-out starts. */}
+                  <p aria-hidden="true">
+                    {t('auth.login.errors.lockedOut', { time: formatDuration(secondsLocked) })}
+                  </p>
+                  <p className="sr-only">{t('login.lockedAnnouncement')}</p>
+                </>
+              ) : (
+                <p>{failure.message}</p>
+              )}
               {failure.requestId && failure.retryAt === null ? (
                 <p className="mt-1 flex flex-wrap items-center gap-1 text-xs">
                   {failure.code ? <span className="font-mono">{failure.code}</span> : null}
@@ -218,7 +233,29 @@ export function LoginPage({ search }: { search: LoginSearch }) {
           ) : null}
         </CardContent>
       </Card>
+      <LoginFooter />
     </main>
+  )
+}
+
+/**
+ * Version and a link to the About page, from the public system info. It is a nicety: when the
+ * call fails the footer shows only the link, and the page above it is unaffected. An operator
+ * banner (a plain text notice set by an administrator) is shown as it arrives, never as markup.
+ */
+function LoginFooter() {
+  const info = useQuery(systemInfoQuery)
+  return (
+    <footer className="w-full max-w-sm space-y-2 text-center text-xs text-muted-foreground">
+      {info.data?.banner ? <Alert>{info.data.banner}</Alert> : null}
+      <p>
+        {info.data ? t('login.version', { version: info.data.version }) : t('common.appName')}
+        {' · '}
+        <Link to="/about" className="text-link underline underline-offset-2">
+          {t('login.about')}
+        </Link>
+      </p>
+    </footer>
   )
 }
 
@@ -232,29 +269,49 @@ function PasswordField({
   form: ReturnType<typeof useZodForm<z.input<typeof schema>, z.output<typeof schema>>>
 }) {
   const error = form.formState.errors.password?.message
+  const [capsLock, setCapsLock] = useState(false)
+  const register = form.register('password')
   return (
-    <FormField label={t('auth.login.password')} required error={error}>
-      {(control) => (
-        <div className="relative">
-          <Input
-            {...control}
-            type={show ? 'text' : 'password'}
-            autoComplete="current-password"
-            className="pr-10"
-            {...form.register('password')}
-          />
-          <Button
-            variant="ghost"
-            size="icon"
-            className="absolute top-0 right-0"
-            aria-label={show ? t('auth.login.hidePassword') : t('auth.login.showPassword')}
-            aria-pressed={show}
-            onClick={onToggle}
-          >
-            {show ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
-          </Button>
-        </div>
-      )}
-    </FormField>
+    <div className="space-y-1">
+      <FormField label={t('auth.login.password')} required error={error}>
+        {(control) => (
+          <div className="relative">
+            <Input
+              {...control}
+              type={show ? 'text' : 'password'}
+              autoComplete="current-password"
+              className="pr-10"
+              {...register}
+              // Caps Lock is read from the key events themselves (the only way a page can know),
+              // so the hint appears while the user types, which is when it helps.
+              onKeyDown={(e) => setCapsLock(e.getModifierState('CapsLock'))}
+              onKeyUp={(e) => setCapsLock(e.getModifierState('CapsLock'))}
+              onBlur={(e) => {
+                setCapsLock(false)
+                void register.onBlur(e)
+              }}
+            />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="absolute top-0 right-0"
+              aria-label={show ? t('auth.login.hidePassword') : t('auth.login.showPassword')}
+              aria-pressed={show}
+              onClick={onToggle}
+            >
+              {show ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+            </Button>
+          </div>
+        )}
+      </FormField>
+      <p aria-live="polite" className="flex min-h-4 items-center gap-1 text-xs text-warning-text">
+        {capsLock ? (
+          <>
+            <TriangleAlert className="size-3.5" aria-hidden="true" />
+            {t('login.capsLock')}
+          </>
+        ) : null}
+      </p>
+    </div>
   )
 }

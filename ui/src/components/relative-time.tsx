@@ -21,6 +21,9 @@ export function RelativeTime({ value, focusable = false, className, ...props }: 
   const date = parseDate(value)
   if (date === null) return <span className={className}>-</span>
   const absolute = formatDateTime(date)
+  // The shared ticker knows only the start of the current minute, so an instant from the last
+  // seconds lies "ahead" of it. A moment that has already happened is never shown as "in 40 seconds".
+  const reference = date.getTime() > now.getTime() && date.getTime() <= Date.now() ? date : now
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -32,7 +35,7 @@ export function RelativeTime({ value, focusable = false, className, ...props }: 
           className={cn('whitespace-nowrap', className)}
           {...props}
         >
-          {formatRelative(date, now)}
+          {formatRelative(date, reference)}
           <span className="sr-only"> ({absolute})</span>
         </time>
       </TooltipTrigger>

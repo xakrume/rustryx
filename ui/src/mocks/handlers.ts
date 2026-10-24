@@ -112,6 +112,7 @@ const dataHandlers: HttpHandler[] = [
     const format = url.searchParams.get('format')
     const type = url.searchParams.get('repo_type')
     const online = url.searchParams.get('online')
+    const anonymous = url.searchParams.get('allow_anonymous')
     const sort = url.searchParams.get('sort') ?? 'name'
     const withStats = (url.searchParams.get('include') ?? '').split(',').includes('stats')
     const requested = Number(url.searchParams.get('limit') ?? 100)
@@ -129,7 +130,8 @@ const dataHandlers: HttpHandler[] = [
         (q === undefined || r.name.toLowerCase().includes(q)) &&
         (format === null || r.format === format) &&
         (type === null || r.repo_type === type) &&
-        (online === null || String(r.online) === online),
+        (online === null || String(r.online) === online) &&
+        (anonymous === null || String(r.allow_anonymous) === anonymous),
     )
     const descending = sort.startsWith('-')
     const key = sort.replace(/^-/, '')

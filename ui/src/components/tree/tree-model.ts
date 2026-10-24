@@ -10,6 +10,12 @@ export interface TreeNodeData {
   hasChildren: boolean
   /** Free slot for the page: kind, size, a Lucide icon name. The tree never reads it. */
   data?: unknown
+  /**
+   * A "load more" row at the end of a folder that has further pages. Activating it calls the
+   * tree's `loadMore` and the returned rows replace it in the folder (the last of them may be a
+   * new `more` row). It is not selectable and never reported to `onSelect`.
+   */
+  more?: boolean
 }
 
 export type ChildState =

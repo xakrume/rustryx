@@ -1,9 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { PlaceholderPage } from '@/features/placeholder/placeholder-page'
+import { CreateRepositoryPage } from '@/features/repositories/create-wizard'
 
 export const Route = createFileRoute('/_app/repositories/new')({
   staticData: { crumb: 'pages.createRepository', access: { can: 'create_repository' } },
-  component: () => (
-    <PlaceholderPage titleKey="pages.createRepository" route="/repositories/new" milestone="M1" />
-  ),
+  component: CreateRepositoryPage,
 })

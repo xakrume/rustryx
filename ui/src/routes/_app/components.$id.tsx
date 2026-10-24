@@ -1,9 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { PlaceholderPage } from '@/features/placeholder/placeholder-page'
+import { ComponentDetailPage } from '@/features/components/component-detail-page'
 
 export const Route = createFileRoute('/_app/components/$id')({
   staticData: { crumb: 'pages.componentDetail' },
-  component: () => (
-    <PlaceholderPage titleKey="pages.componentDetail" route="/components/:id" milestone="M1" />
-  ),
+  component: ComponentDetailPage,
 })

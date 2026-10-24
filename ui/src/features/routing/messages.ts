@@ -1,0 +1,117 @@
+/** Strings of the routing rule pages. */
+export const routingMessages = {
+  title: 'Routing rules',
+  description:
+    'Rules that decide which paths a proxy repository may fetch from upstream. They are checked before the cache lookup, so a new block rule applies to cached content at once.',
+  tableLabel: 'Routing rules',
+  create: 'Create rule',
+  createTitle: 'Create a routing rule',
+  editTitle: 'Edit routing rule {name}',
+  backToList: 'Back to rules',
+  filters: {
+    name: 'Name starts with',
+    namePlaceholder: 'block, internal',
+  },
+  columns: {
+    name: 'Name',
+    mode: 'Mode',
+    patterns: 'Patterns',
+    repositories: 'Assigned to',
+    updated: 'Updated',
+    actions: 'Actions',
+  },
+  empty: {
+    title: 'No routing rules yet',
+    description:
+      'A rule blocks or allows paths of proxy repositories. Create one, then assign it in the settings of a repository.',
+  },
+  mode: {
+    block: 'Block',
+    allow: 'Allow only',
+    blockLabel: 'Block matching paths',
+    blockHelp: 'A path that matches any pattern is refused. Everything else passes.',
+    allowLabel: 'Allow only matching paths',
+    allowHelp: 'Only a path that matches a pattern passes. Everything else is refused.',
+    legend: 'Mode',
+  },
+  morePatterns: '+{count} more',
+  noRepositories: 'No repository',
+  actions: {
+    edit: 'Edit {name}',
+    delete: 'Delete {name}',
+    deleteBlocked: {
+      one: 'Delete {name} (blocked: used by {count} repository)',
+      other: 'Delete {name} (blocked: used by {count} repositories)',
+    },
+  },
+  fields: {
+    name: 'Name',
+    nameHelper: 'Shown in repository settings.',
+    description: 'Description',
+  },
+  patterns: {
+    legend: 'Path patterns',
+    help: 'Regular expressions matched against the whole path as the format normalizes it, with a leading slash. The engine runs in linear time: no backreferences, no lookaround.',
+    row: 'Pattern {index}',
+    add: 'Add pattern',
+    remove: 'Remove pattern {index}',
+    checking: 'Checking the patterns',
+    valid: 'All patterns are valid.',
+    errorAt: 'Position {offset}: {message}',
+    errorPlain: '{message}',
+    required: 'Enter a pattern, or remove this row.',
+    atLeastOne: 'Add at least one pattern.',
+    placeholder: '^/internal/.*',
+  },
+  attachments: {
+    title: 'Assigned repositories',
+    none: 'No repository uses this rule yet. Assign it in the settings of a proxy repository.',
+    note: 'Assign or remove a rule in the settings of each repository.',
+  },
+  test: {
+    title: 'Test paths',
+    description:
+      'Try paths against the rule as it is in the form, before you save it. One path per line.',
+    paths: 'Paths to test',
+    pathsHelper: 'For example /com/example/lib/1.0/lib-1.0.jar',
+    run: 'Test paths',
+    running: 'Testing',
+    results: 'Results',
+    resultsLabel: 'Test results',
+    columns: {
+      path: 'Path',
+      outcome: 'Outcome',
+      pattern: 'Matched pattern',
+      reason: 'Why',
+    },
+    allowed: 'Allowed',
+    blocked: 'Blocked',
+    noPattern: 'No pattern matched',
+    needPatterns: 'Add a valid pattern first.',
+    needPaths: 'Enter at least one path.',
+    tooMany: 'Test at most {max} paths at a time.',
+  },
+  delete: {
+    blockedTitle: 'This rule is in use',
+    blocked: {
+      one: '{count} repository uses this rule, so it cannot be deleted. Remove it from there first: {names}',
+      other:
+        '{count} repositories use this rule, so it cannot be deleted. Remove it from them first: {names}',
+    },
+    free: 'No repository uses this rule, so it can be deleted.',
+    description: 'The rule is removed. No repository uses it.',
+    done: 'Rule {name} deleted',
+    section: 'Delete',
+  },
+  toast: {
+    created: 'Rule {name} created',
+    saved: 'Rule {name} saved',
+  },
+  save: 'Save rule',
+  saving: 'Saving',
+  discard: 'Discard changes',
+  errors: {
+    nameRequired: 'Enter a name.',
+    nameLength: 'Use at most 128 characters.',
+  },
+} as const

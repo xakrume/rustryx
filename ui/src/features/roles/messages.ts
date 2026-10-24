@@ -1,0 +1,96 @@
+export const rolesMessages = {
+  roles: {
+    description:
+      'Roles group privileges and can contain other roles. Users and identity provider groups receive roles.',
+    create: 'Create role',
+    tableLabel: 'Roles',
+    filters: {
+      search: 'Name starts with',
+      builtin: 'Kind',
+      builtinOnly: 'Built-in',
+      customOnly: 'Custom',
+    },
+    columns: {
+      name: 'Name',
+      description: 'Description',
+      privileges: 'Privileges',
+      nested: 'Nested roles',
+      users: 'Users',
+      groups: 'Mappings',
+      actions: 'Actions',
+    },
+    privilegeCount: {
+      one: '{count} privilege',
+      other: '{count} privileges',
+    },
+    noneDirect: 'No direct privileges',
+    noNested: 'None',
+    empty: {
+      title: 'No roles yet',
+      body: 'Built-in roles are created with the system. Create a role to group privileges for a team.',
+    },
+    actions: {
+      edit: 'Edit role {name}',
+      view: 'View role {name}',
+      delete: 'Delete role {name}',
+      deleteBuiltin: 'Delete role {name} (built-in roles cannot be deleted)',
+    },
+    editor: {
+      createTitle: 'Create role',
+      editTitle: 'Edit role {name}',
+      viewTitle: 'Role {name}',
+      createDescription: 'A role holds privileges and can nest other roles.',
+      editDescription: 'Changes reach every node within a minute.',
+      builtinNotice:
+        'This is a built-in role. It is created with the system, so it can be read here but not changed or deleted.',
+      name: 'Name',
+      nameRequired: 'Enter a name of 1 to 128 characters.',
+      nameTooLong: 'The name is at most 128 characters.',
+      descriptionLabel: 'Description',
+      privileges: 'Privileges',
+      privilegesWhat: 'privileges',
+      privilegesHelper: 'Privileges only allow. A user holding two roles gets both sets.',
+      nested: 'Nested roles',
+      nestedWhat: 'roles',
+      nestedHelper: 'A nested role adds all of its privileges, and those of the roles inside it.',
+      cycle: 'Would create a cycle: {path}',
+      cycleError:
+        'These nested roles would form a cycle: a role cannot contain itself, directly or through other roles.',
+      effective: 'Effective privileges',
+      effectiveHelper: 'Everything this role allows, including privileges of nested roles.',
+      effectiveNone: 'This role allows nothing yet.',
+      usedBy: 'In use: {users} and {groups}.',
+      users: {
+        one: '{count} user',
+        other: '{count} users',
+      },
+      groups: {
+        one: '{count} group mapping',
+        other: '{count} group mappings',
+      },
+      save: 'Save role',
+      saveCreate: 'Create role',
+      saved: 'Role {name} saved',
+      created: 'Role {name} created',
+      saveFailed: 'The role could not be saved',
+      close: 'Close',
+      loadFailed: 'The role could not be loaded',
+    },
+    delete: {
+      kind: 'role',
+      confirm: 'Delete role',
+      inUse:
+        'This role is in use: {users} and {groups} hold it. Deleting it removes those assignments and removes the role from other roles. This cannot be undone.',
+      deleted: 'Role {name} deleted',
+      usersDependent: {
+        one: '{count} user holds it directly',
+        other: '{count} users hold it directly',
+      },
+      groupsDependent: {
+        one: '{count} group mapping grants it',
+        other: '{count} group mappings grant it',
+      },
+      failed: 'Role {name} could not be deleted',
+    },
+  },
+} as const

@@ -1,13 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { PlaceholderPage } from '@/features/placeholder/placeholder-page'
+import { ImagePage } from '@/features/repositories/image-page'
+import { text } from '@/features/repositories/search-params'
 
 export const Route = createFileRoute('/_app/repositories/$name/images/$image')({
+  validateSearch: (search: Record<string, unknown>): { q?: string; sort?: string } => ({
+    q: text(search.q),
+    sort: text(search.sort),
+  }),
   staticData: { crumb: ({ params }) => params.image ?? '' },
-  component: () => (
-    <PlaceholderPage
-      titleKey="pages.image"
-      route="/repositories/:name/images/:image"
-      milestone="M1"
-    />
-  ),
+  component: ImagePage,
 })

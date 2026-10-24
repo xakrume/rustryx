@@ -1,7 +1,8 @@
-import { createFileRoute, Outlet } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
+import { RepositoryLayout } from '@/features/repositories/repository-layout'
 
-// Layout route: gives its subtree one breadcrumb. Pages below add their own.
+// Layout route: the repository's heading, facts and tabs; the tab pages render below it.
 export const Route = createFileRoute('/_app/repositories/$name')({
   staticData: { crumb: ({ params }) => params.name ?? '' },
-  component: Outlet,
+  component: RepositoryLayout,
 })

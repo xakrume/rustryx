@@ -1,7 +1,9 @@
-import { screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { expectNoA11yViolations, renderApp } from '@/test/utils'
+import '@/features/roles/test-timeouts'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -132,5 +134,74 @@ describe('login page', () => {
       'aria-pressed',
       'true',
     )
+  })
+
+  it('shows the version and a link to the About page, and an operator banner as plain text', async () => {
+    renderApp('/login', {
+      overrides: [
+        http.get('/api/v1/system/info', () =>
+          HttpResponse.json({
+            name: 'rustryx',
+            version: '1.2.3',
+            license: 'MIT',
+            build: { commit: null, built_at: null, profile: null },
+            supply_chain: { sbom_url: null, signature_hint: null },
+            third_party_licenses_url: null,
+            banner: 'Maintenance on Sunday <b>02:00</b>',
+          }),
+        ),
+      ],
+    })
+    expect(await screen.findByText(/Rustryx 1\.2\.3/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'About' })).toHaveAttribute('href', '/about')
+    // The banner is text, never markup.
+    expect(screen.getByText('Maintenance on Sunday <b>02:00</b>')).toBeInTheDocument()
+  })
+
+  it('keeps the footer quiet when the system information cannot be read', async () => {
+    renderApp('/login', {
+      overrides: [
+        http.get('/api/v1/system/info', () =>
+          HttpResponse.json({ error: { code: 'internal_error', message: 'x' } }, { status: 500 }),
+        ),
+      ],
+    })
+    const footer = await screen.findByRole('contentinfo')
+    await waitFor(() =>
+      expect(within(footer).getByRole('link', { name: 'About' })).toBeInTheDocument(),
+    )
+    expect(within(footer).queryByText(/internal_error/)).not.toBeInTheDocument()
+    expect(screen.getByLabelText(/^Username/)).toBeEnabled()
+  })
+
+  it('warns while Caps Lock is on in the password field, and stops warning when the field is left', async () => {
+    renderApp('/login')
+    const password = await screen.findByLabelText(/^Password/)
+    fireEvent.keyDown(password, { key: 'a', modifierCapsLock: true })
+    expect(await screen.findByText('Caps Lock is on')).toBeInTheDocument()
+    fireEvent.keyUp(password, { key: 'CapsLock', modifierCapsLock: false })
+    await waitFor(() => expect(screen.queryByText('Caps Lock is on')).not.toBeInTheDocument())
+    fireEvent.keyDown(password, { key: 'a', modifierCapsLock: true })
+    expect(await screen.findByText('Caps Lock is on')).toBeInTheDocument()
+    fireEvent.blur(password)
+    await waitFor(() => expect(screen.queryByText('Caps Lock is on')).not.toBeInTheDocument())
+  })
+
+  it('must_not_announce_the_lock_out_countdown_every_second', async () => {
+    renderApp('/login')
+    await fillAndSubmit('locked', 'x')
+    const ticking = await screen.findByText(/Too many failed attempts\. Try again in \d+ s\./)
+    // The ticking text is hidden from assistive technology; one static sentence is announced.
+    expect(ticking).toHaveAttribute('aria-hidden', 'true')
+    expect(
+      screen.getByText('Too many failed attempts. Sign in is paused for a short time.'),
+    ).toHaveClass('sr-only')
+  })
+
+  it('offers the theme choice on the page, which has no shell', async () => {
+    const user = userEvent.setup()
+    renderApp('/login')
+    await user.click(await screen.findByRole('button', { name: /^Theme:/ }))
+    expect(await screen.findByRole('menuitemradio', { name: 'Dark' })).toBeInTheDocument()
   })
 })

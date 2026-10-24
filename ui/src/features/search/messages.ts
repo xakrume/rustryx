@@ -1,0 +1,67 @@
+/** Strings of the search page. */
+export const searchMessages = {
+  search: {
+    description: 'Find components and files in every repository you can browse.',
+    formLabel: 'Search criteria',
+    kindLabel: 'Search for',
+    kind: { components: 'Components', assets: 'Files' },
+    keyword: 'Keyword',
+    keywordHelp:
+      'Matches group, name and version. A trailing * matches a prefix; quotes match a phrase.',
+    keywordPlaceholder: 'guava, api*, "core api"',
+    format: 'Format',
+    repository: 'Repository',
+    group: 'Group or namespace',
+    name: 'Name',
+    version: 'Version',
+    checksum: 'Checksum',
+    checksumHelp: 'SHA-256, SHA-1 or MD5, matched exactly.',
+    checksumInvalid: 'A checksum is 32, 40 or 64 hexadecimal characters.',
+    maven: {
+      note: 'Maven coordinates. A trailing * is a prefix on each field.',
+      group: 'Group ID',
+      name: 'Artifact ID',
+      version: 'Version',
+    },
+    image: {
+      note: 'Image name, tag and digest. The digest is the hex only, without a sha256: prefix.',
+      namespace: 'Namespace',
+      name: 'Image name',
+      tag: 'Tag',
+      digest: 'Digest',
+      digestHelp: 'SHA-256, SHA-1 or MD5 hex, matched exactly. Do not include sha256:.',
+    },
+    path: 'Path',
+    pathHelp: 'Exact, or ending in *.',
+    sort: 'Sort by',
+    sorts: {
+      relevance: 'Relevance',
+      '-created_at': 'Newest first',
+      name: 'Name, A to Z',
+      '-name': 'Name, Z to A',
+      path: 'Path, A to Z',
+      '-path': 'Path, Z to A',
+    },
+    reset: 'Reset',
+    activeCriteria: 'Search criteria in use',
+    removeCriterion: 'Remove criterion {label}',
+    startTitle: 'Search your repositories',
+    startBody:
+      'Enter a keyword or any criterion above. Try one of these, or use a checksum to find the file it belongs to.',
+    noResultsTitle: 'No results',
+    noResultsBody:
+      'Nothing matches these criteria. Try fewer criteria, a trailing * for a prefix, or check the spelling. Only repositories you can browse are searched.',
+    problemTitle: 'The search was not accepted',
+    tooShort: 'Use at least {min} characters before the *.',
+    tooShortBody:
+      'A wildcard needs at least {min} characters before the *, because shorter prefixes match too much to search quickly.',
+    truncated:
+      'Only the first 1000 hits of this search can be reached. Add a criterion to narrow it down.',
+    details: 'Details',
+    detailsOf: 'Show details of {name}',
+    detailBody: 'What the browse pane shows, and how to use this repository from your tools.',
+    openComponent: 'Open the component page',
+    resultsComponents: 'Component results',
+    resultsAssets: 'File results',
+  },
+} as const

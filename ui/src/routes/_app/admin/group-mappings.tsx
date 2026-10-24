@@ -1,13 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { PlaceholderPage } from '@/features/placeholder/placeholder-page'
+import { MappingsPage } from '@/features/idp-mappings/mappings-page'
+import { pickText } from '@/features/roles/search-params'
 
 export const Route = createFileRoute('/_app/admin/group-mappings')({
   staticData: { crumb: 'nav.items.groupMappings', access: { area: 'mappings' } },
-  component: () => (
-    <PlaceholderPage
-      titleKey="nav.items.groupMappings"
-      route="/admin/group-mappings"
-      milestone="M1"
-    />
-  ),
+  validateSearch: (search: Record<string, unknown>) =>
+    pickText(search, ['provider', 'edit', 'new'] as const),
+  component: MappingsPage,
 })

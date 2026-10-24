@@ -1,8 +1,20 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { PlaceholderPage } from '@/features/placeholder/placeholder-page'
+import { BlobStoresPage } from '@/features/blob-stores/blob-stores-page'
+import { text } from '@/features/system/search-params'
 
+// Optional keys keep every plain link to this page valid: nothing is required in the address.
+interface BlobStoresSearch {
+  q?: string
+  kind?: string
+  view?: string
+}
+
+// Filters and the create view live in the address bar: `?q=&kind=&view=create`.
 export const Route = createFileRoute('/_app/admin/blob-stores/')({
-  component: () => (
-    <PlaceholderPage titleKey="nav.items.blobStores" route="/admin/blob-stores" milestone="M1" />
-  ),
+  validateSearch: (search: Record<string, unknown>): BlobStoresSearch => ({
+    q: text(search.q),
+    kind: text(search.kind),
+    view: text(search.view),
+  }),
+  component: BlobStoresPage,
 })
