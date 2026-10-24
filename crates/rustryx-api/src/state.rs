@@ -14,12 +14,13 @@ use std::time::Duration;
 use http::request::Parts;
 use ipnet::IpNet;
 use rustryx_core::Secret;
-use rustryx_core::identity::{Action, Principal};
-use rustryx_core::ports::{Authenticator, Decision, RbacChecker, ResourceRef};
+use rustryx_core::ports::{Authenticator, RbacChecker};
 use rustryx_observability::MetricsHandle;
 
-use crate::error::{ApiError, Challenge};
+use crate::error::Challenge;
+use crate::https::OriginPolicy;
 use crate::readiness::{NotWiredProbe, ReadinessCache, ReadinessProbe};
+use crate::session::SessionManager;
 
 /// Chooses the `WWW-Authenticate` challenge for a request that failed to
 /// authenticate. The default is Basic; the composition root installs a selector
@@ -89,6 +90,13 @@ pub struct ApiSettings {
     pub readiness_cache_ttl: Duration,
     /// Deadline of the readiness probe.
     pub readiness_deadline: Duration,
+    /// Refuse HTTP Basic credentials unless the request is HTTPS (directly impossible here,
+    /// since TLS ends in front of the node: via a trusted proxy header). On by default; a
+    /// development node on plain HTTP turns it off.
+    pub require_https: bool,
+    /// The public base URL (`server.base_url`). Its origin is the one a cookie session request
+    /// may come from (CSRF) and the one the login form may be posted from.
+    pub service_origin: Option<String>,
 }
 
 impl Default for ApiSettings {
@@ -107,6 +115,8 @@ impl Default for ApiSettings {
             rate_limit: None,
             readiness_cache_ttl: Duration::from_secs(2),
             readiness_deadline: Duration::from_secs(1),
+            require_https: true,
+            service_origin: None,
         }
     }
 }
@@ -163,6 +173,8 @@ pub struct AppState {
     lifecycle: Lifecycle,
     settings: Arc<ApiSettings>,
     challenge: ChallengeSelector,
+    sessions: Option<Arc<SessionManager>>,
+    origins: Arc<OriginPolicy>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -171,6 +183,7 @@ impl std::fmt::Debug for AppState {
             .field("authenticator", &self.authenticator.is_some())
             .field("rbac", &self.rbac.is_some())
             .field("metrics", &self.metrics.is_some())
+            .field("sessions", &self.sessions.is_some())
             .field("lifecycle", &self.lifecycle)
             .field("settings", &self.settings)
             .finish_non_exhaustive()
@@ -192,8 +205,13 @@ impl AppState {
             )),
             metrics: None,
             lifecycle: Lifecycle::new(),
+            origins: Arc::new(OriginPolicy::new(
+                settings.service_origin.as_deref(),
+                &settings.cors_allowed_origins,
+            )),
             settings: Arc::new(settings),
             challenge: Arc::new(|_| Challenge::default()),
+            sessions: None,
         }
     }
 
@@ -239,7 +257,18 @@ impl AppState {
             settings.readiness_cache_ttl,
             settings.readiness_deadline,
         ));
+        self.origins = Arc::new(OriginPolicy::new(
+            settings.service_origin.as_deref(),
+            &settings.cors_allowed_origins,
+        ));
         self.settings = Arc::new(settings);
+        self
+    }
+
+    /// Installs the cookie session manager. Without one a session cookie means nothing.
+    #[must_use]
+    pub fn with_sessions(mut self, sessions: Arc<SessionManager>) -> Self {
+        self.sessions = Some(sessions);
         self
     }
 
@@ -260,6 +289,18 @@ impl AppState {
     #[must_use]
     pub fn rbac(&self) -> Option<&Arc<dyn RbacChecker>> {
         self.rbac.as_ref()
+    }
+
+    /// The cookie session manager, if wired.
+    #[must_use]
+    pub fn sessions(&self) -> Option<&Arc<SessionManager>> {
+        self.sessions.as_ref()
+    }
+
+    /// Which `Origin` values count as this service (CSRF and the login form).
+    #[must_use]
+    pub fn origins(&self) -> &OriginPolicy {
+        &self.origins
     }
 
     /// The metrics handle, if wired.
@@ -286,39 +327,6 @@ impl AppState {
 
     pub(crate) fn challenge_for(&self, parts: &Parts) -> Challenge {
         (self.challenge)(parts)
-    }
-
-    /// Authorizes `action` on `resource` for `principal`, failing closed.
-    ///
-    /// - no authorization checker wired: 503 (never "allow");
-    /// - an anonymous caller while the global anonymous switch is off: 401;
-    /// - the checker says deny: 401 for an anonymous caller (so a client asks for
-    ///   credentials), 403 for an authenticated one;
-    /// - the checker failed: its error, mapped like any other.
-    ///
-    /// The per-repository anonymous flag and hiding a repository behind a 404 are
-    /// the caller's business; this is the deny-by-default floor under them.
-    ///
-    /// # Errors
-    /// An [`ApiError`] for every outcome other than "allowed".
-    pub async fn authorize(
-        &self,
-        principal: &Principal,
-        action: Action,
-        resource: &ResourceRef,
-    ) -> Result<(), ApiError> {
-        let Some(rbac) = self.rbac.as_ref() else {
-            return Err(ApiError::unavailable("authorization_unavailable")
-                .with_source("no authorization checker is wired".into()));
-        };
-        if principal.is_anonymous() && !self.settings.anonymous_enabled {
-            return Err(ApiError::unauthenticated());
-        }
-        match rbac.check(principal, action, resource).await? {
-            Decision::Allow => Ok(()),
-            Decision::Deny if principal.is_anonymous() => Err(ApiError::unauthenticated()),
-            Decision::Deny => Err(ApiError::forbidden()),
-        }
     }
 }
 

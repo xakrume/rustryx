@@ -39,6 +39,27 @@ pub(super) fn server(config: &AppConfig, report: &mut Report) {
     for raw in &server.cors_allowed_origins {
         cors_origin(config, raw, report);
     }
+    require_https(config, report);
+}
+
+/// Basic credentials are refused over plain HTTP unless the request is HTTPS directly or
+/// through a trusted proxy header. Both ways of getting it wrong are announced: switching the
+/// guard off in production, and leaving it on with nobody who could vouch for HTTPS.
+fn require_https(config: &AppConfig, report: &mut Report) {
+    let server = &config.server;
+    if !server.require_https {
+        if config.is_production() {
+            report.warn(
+                "server.require_https",
+                "is off in production: HTTP Basic credentials are accepted over plain HTTP",
+            );
+        }
+    } else if server.trusted_proxies.is_empty() {
+        report.warn(
+            "server.require_https",
+            "is on but server.trusted_proxies is empty, so no request can count as HTTPS and HTTP Basic credentials are always refused (list the ingress, or turn the guard off for local work)",
+        );
+    }
 }
 
 fn base_url(config: &AppConfig, raw: &str, report: &mut Report) {
@@ -111,7 +132,7 @@ pub(super) fn upstream(config: &AppConfig, report: &mut Report) {
     schemes(config, report);
     host_lists(config, report);
     for net in &up.allow_private_cidrs {
-        private_cidr(net, report);
+        private_cidr("upstream.allow_private_cidrs", net, report);
     }
 }
 
@@ -168,7 +189,7 @@ fn host_lists(config: &AppConfig, report: &mut Report) {
 
 /// Host name or IP literal: no scheme, port, path, wildcard or whitespace. A colon
 /// is accepted only inside an IPv6 literal, never as a port separator.
-fn is_plain_host(value: &str) -> bool {
+pub(super) fn is_plain_host(value: &str) -> bool {
     let bare = value.trim_start_matches('[').trim_end_matches(']');
     if bare.contains(':') {
         return bare.parse::<Ipv6Addr>().is_ok();
@@ -185,8 +206,7 @@ fn is_plain_host(value: &str) -> bool {
 /// endpoint. The allowlist exists for internal mirrors; if it could cover those
 /// addresses, anyone who can create a proxy repository could read instance
 /// credentials through it.
-fn private_cidr(net: &IpNet, report: &mut Report) {
-    let key = "upstream.allow_private_cidrs";
+pub(super) fn private_cidr(key: &str, net: &IpNet, report: &mut Report) {
     let forbidden: [IpAddr; 4] = [
         IpAddr::V4(Ipv4Addr::LOCALHOST),
         IpAddr::V6(Ipv6Addr::LOCALHOST),

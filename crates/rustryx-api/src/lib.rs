@@ -15,8 +15,15 @@
 //! - security headers, panic recovery (the node survives a panicking handler) and
 //!   metrics labelled by route template.
 //!
-//! What it does not do: authorization of content (the handlers call
-//! [`AppState::authorize`]) and any compat or format handler.
+//! - deny by default as structure: a route is declared with a [`Requires`], an `Authorized`
+//!   proof can only come from `AppState::authorize*`, and a handler that answers without having
+//!   asked is overruled (see `authz.rs`);
+//! - the cookie session of the web UI with CSRF and `Origin` checks, and the native
+//!   authentication endpoints under `/api/v1/auth` and `/api/v1/me` ([`NativeAuthModule`]).
+//!
+//! What it does not do: authorization decisions (the handlers call `AppState::authorize*`), the
+//! other native API resources (separate modules mounted through [`RouteModule`], see
+//! `docs/server.md` for the template) and any compat or format handler.
 
 // Tests may unwrap, expect and panic: a panic is the failure signal there.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -28,33 +35,58 @@
 compile_error!("rustryx-api requires panic = \"unwind\": panic recovery depends on it");
 
 mod auth;
+mod authz;
 mod client_ip;
 mod error;
 mod extract;
 mod health;
+mod https;
 mod layers;
+mod native;
+mod ports;
 mod rate_limit;
 mod readiness;
 mod request_id;
 mod router;
+mod routes;
+mod session;
 mod state;
 
+#[cfg(test)]
+mod session_support;
+#[cfg(test)]
+pub(crate) use test_support::resource as resource_for_tests;
 #[cfg(test)]
 mod test_support;
 
 pub use auth::{
     AuthenticatedPrincipal, RequestClientIp, RequestPrincipal, credentials_from_headers,
 };
+pub use authz::{
+    AdminGrant, AppGrant, AuthenticatedGrant, Authorized, InteractiveGrant, ProjectGrant,
+    RepoGrant, Requires,
+};
 pub use client_ip::{ClientIp, resolve_client_ip};
 pub use error::{ApiError, Challenge, DEFAULT_RETRY_AFTER};
 pub use extract::{ApiJson, ApiPath, ApiQuery};
+pub use https::OriginPolicy;
 pub use layers::record_repo;
+pub use native::{AuthApiDeps, AuthApiSettings, NativeAuthModule, TokenPolicy};
+pub use ports::{
+    GroupSnapshot, IssuedSession, OidcCallback, OidcCompletion, OidcLogin, OidcLoginPort,
+    OidcStart, SessionIssuer, SessionRequest, SsoRefreshRequest, SsoRefreshed, SsoSessionRefresher,
+};
 pub use rate_limit::{ClientKey, RateLimiter};
 pub use readiness::{
     Advisory, NotWiredProbe, Outcome, ProbeReport, ReadinessCache, ReadinessProbe, SchemaStatus,
 };
 pub use request_id::{REQUEST_ID_HEADER, RequestId, current_request_id};
 pub use router::{RouteModule, RouterBuilder, build_router};
+pub use routes::{RouteCatalog, RouteDecl, RouteSet};
+pub use session::{
+    CSRF_COOKIE, CSRF_HEADER, CsrfKey, CsrfKeyError, SESSION_COOKIE, SSO_COOKIE, SessionManager,
+    SessionSettings,
+};
 pub use state::{
     ApiSettings, AppState, ChallengeSelector, Lifecycle, MetricsAccess, RateLimitSettings,
 };

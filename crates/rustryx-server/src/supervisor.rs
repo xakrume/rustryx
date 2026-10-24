@@ -1,7 +1,7 @@
 //! Supervision of long-lived background tasks.
 //!
-//! Every background task of the process (metrics upkeep today, schedulers and
-//! garbage collection once wired) runs in one [`JoinSet`] under a shared
+//! Every background task of the process (invalidation listeners, identity provider discovery,
+//! maintenance, metric samplers) runs in one [`JoinSet`] under a shared
 //! [`CancellationToken`]. A task that panics or returns before shutdown is logged,
 //! counted and restarted with exponential back-off; a bare `tokio::spawn` whose
 //! handle nobody keeps would instead die silently, which is the failure the
@@ -14,7 +14,6 @@ use std::time::Duration;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use rustryx_observability::MetricsHandle;
-use rustryx_observability::names::BACKGROUND_JOB_RUNS_TOTAL;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -30,7 +29,7 @@ pub type TaskFactory = Arc<dyn Fn(CancellationToken) -> BoxFuture<'static, ()> +
 /// A named background task.
 #[derive(Clone)]
 pub struct BackgroundTask {
-    /// Name for logs and the `job` metric label (a fixed vocabulary, never user input).
+    /// Name for logs and the `task` metric label (a fixed vocabulary, never user input).
     pub name: &'static str,
     make: TaskFactory,
 }
@@ -136,21 +135,17 @@ async fn run_supervised(
         }
         let result = if run.is_ok() {
             tracing::error!(
-                job = task.name,
+                task = task.name,
                 "background task exited before shutdown, restarting"
             );
             "exit"
         } else {
-            tracing::error!(job = task.name, "background task panicked, restarting");
+            tracing::error!(task = task.name, "background task panicked, restarting");
             "panic"
         };
         if let Some(metrics) = &metrics {
-            metrics
-                .counter(
-                    BACKGROUND_JOB_RUNS_TOTAL,
-                    &[("job", task.name), ("result", result)],
-                )
-                .increment(1);
+            // The label is `task`: a series label named `job` collides with the scrape label.
+            metrics.record_task_restart(task.name, result);
         }
         tokio::select! {
             () = cancel.cancelled() => return,
@@ -206,7 +201,7 @@ mod tests {
         assert_eq!(runs.load(Ordering::SeqCst), 4);
         let text = metrics.render();
         assert!(
-            text.contains(r#"background_job_runs_total{job="flaky",result="panic"} 4"#),
+            text.contains(r#"background_job_runs_total{task="flaky",result="panic"} 4"#),
             "{text}"
         );
         let report = supervisor.shutdown(Duration::from_secs(1)).await;

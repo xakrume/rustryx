@@ -140,6 +140,9 @@ fn check_kind(spec: &KeySpec, value: &Value) -> Result<(), String> {
         | (Kind::Str | Kind::Secret, Value::String(_)) => true,
         (Kind::UInt, Value::Number(n)) => n.as_u64().is_some(),
         (Kind::StrList, Value::Sequence(items)) => items.iter().all(Value::is_string),
+        (Kind::UIntList, Value::Sequence(items)) => items
+            .iter()
+            .all(|item| matches!(item, Value::Number(n) if n.as_u64().is_some())),
         (Kind::Enum(variants), Value::String(s)) => variants.contains(&s.as_str()),
         _ => false,
     };
@@ -153,6 +156,7 @@ fn check_kind(spec: &KeySpec, value: &Value) -> Result<(), String> {
         Kind::Float => "expected a number".to_owned(),
         Kind::Str | Kind::Secret => "expected text (quote numeric-looking values)".to_owned(),
         Kind::StrList => "expected a list of text values".to_owned(),
+        Kind::UIntList => "expected a list of non-negative integers".to_owned(),
     })
 }
 

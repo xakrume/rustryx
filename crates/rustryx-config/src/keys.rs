@@ -29,6 +29,8 @@ pub enum Kind {
     Str,
     /// List of text values. In an environment variable: comma separated.
     StrList,
+    /// List of non-negative integers (ports). In an environment variable: comma separated.
+    UIntList,
     /// Text that is never printed and may come from a `*_FILE` variable.
     Secret,
     /// One of a fixed set of lowercase words.
@@ -138,6 +140,11 @@ pub const KEYS: &[KeySpec] = &[
         "Exact origins allowed by CORS. Empty sends no CORS headers. `*` is refused."
     ),
     key!(
+        "server.require_https",
+        Kind::Bool,
+        "Refuse HTTP Basic credentials unless the request arrived over HTTPS: the peer must be in `trusted_proxies` and send `X-Forwarded-Proto: https`."
+    ),
+    key!(
         "database.url",
         Kind::Secret,
         "PostgreSQL URL (`postgres://...`). Required."
@@ -166,6 +173,21 @@ pub const KEYS: &[KeySpec] = &[
         "database.statement_timeout_secs",
         Kind::UInt,
         "`statement_timeout` for API connections."
+    ),
+    key!(
+        "database.sealing_key",
+        Kind::Secret,
+        "AES-256 key as 64 hexadecimal characters sealing secrets stored in the database (upstream passwords). Required in production, same on every node."
+    ),
+    key!(
+        "database.sealing_key_id",
+        Kind::Str,
+        "Id written into every sealed value (1 to 32 characters of letters, digits, `_` and `-`)."
+    ),
+    key!(
+        "database.sealing_previous_keys",
+        Kind::Secret,
+        "Retired sealing keys that still open old values, as `id:hex` entries separated by commas, spaces or new lines (at most 8)."
     ),
     key!(
         "blob.store_name",
@@ -230,9 +252,24 @@ pub const KEYS: &[KeySpec] = &[
         "Account creation policy for identity-provider users."
     ),
     key!(
+        "auth.jit_allowlist",
+        Kind::StrList,
+        "Usernames that may get an account when `jit_mode` is `allowlist` (exact, case sensitive)."
+    ),
+    key!(
         "auth.internal_jwt_key",
         Kind::Secret,
         "PEM Ed25519 private key signing internal JWTs. Required in production, same on every node."
+    ),
+    key!(
+        "auth.internal_jwt_key_id",
+        Kind::Str,
+        "`kid` of the current internal JWT signing key (1 to 64 characters of letters, digits, `.`, `_` and `-`)."
+    ),
+    key!(
+        "auth.internal_jwt_previous_keys",
+        Kind::Secret,
+        "Retired JWT keys that still verify tokens: `kid: <id>` lines each followed by one PEM block, public keys preferred (at most 8)."
     ),
     key!(
         "auth.cookie_key",
@@ -267,7 +304,7 @@ pub const KEYS: &[KeySpec] = &[
     key!(
         "auth.oidc.issuer",
         Kind::Str,
-        "Issuer URL, compared byte for byte with `iss`. https in production."
+        "Issuer URL, compared byte for byte with `iss`. Always https."
     ),
     key!(
         "auth.oidc.public_issuer_url",
@@ -308,6 +345,11 @@ pub const KEYS: &[KeySpec] = &[
         "auth.oidc.clock_skew_secs",
         Kind::UInt,
         "Clock skew for `exp`, `nbf`, `iat`, at most 60."
+    ),
+    key!(
+        "auth.oidc.authorized_parties",
+        Kind::StrList,
+        "Accepted `azp` values besides `client_id` (for example `rustryx-cli`). Empty means only `client_id`."
     ),
     key!("auth.ldap.enabled", Kind::Bool, "Turn LDAP login on."),
     key!(
@@ -569,6 +611,166 @@ pub const KEYS: &[KeySpec] = &[
         "observability.metrics_token",
         Kind::Secret,
         "Bearer token for `/metrics`. Required unless `metrics_public`; at least 16 characters in production."
+    ),
+    key!(
+        "tasks.max_concurrent_runs",
+        Kind::UInt,
+        "Task runs one node executes at once (1 to 64)."
+    ),
+    key!(
+        "tasks.scheduler_tick_secs",
+        Kind::UInt,
+        "Seconds between looks at the schedule for due tasks (1 to 300)."
+    ),
+    key!(
+        "tasks.run_retention_days",
+        Kind::UInt,
+        "Days a finished task run stays in the history (1 to 3650)."
+    ),
+    key!(
+        "tasks.log_retention_days",
+        Kind::UInt,
+        "Days the log of a run is kept, at most `tasks.run_retention_days`."
+    ),
+    key!(
+        "outbox.retention_days",
+        Kind::UInt,
+        "Days events stay in the outbox before their partition is dropped (1 to 3650)."
+    ),
+    key!(
+        "outbox.poll_interval_ms",
+        Kind::UInt,
+        "Milliseconds between polls of the outbox by a consumer (50 to 60000)."
+    ),
+    key!(
+        "downloads.flush_interval_secs",
+        Kind::UInt,
+        "Seconds between flushes of the download counters to PostgreSQL (1 to 3600)."
+    ),
+    key!(
+        "downloads.retention_days",
+        Kind::UInt,
+        "Days of daily download counters kept (35 to 3650)."
+    ),
+    key!(
+        "egress.registries.allowed_schemes",
+        Kind::StrList,
+        "Schemes for: registry endpoints and replication. Must include `https`."
+    ),
+    key!(
+        "egress.registries.allow_insecure_http_hosts",
+        Kind::StrList,
+        "Hosts reachable over plain `http` for: registry endpoints and replication."
+    ),
+    key!(
+        "egress.registries.allowed_hosts",
+        Kind::StrList,
+        "When not empty, only these hosts (exact or `*.example.com`) may be targets of: registry endpoints and replication."
+    ),
+    key!(
+        "egress.registries.allowed_ports",
+        Kind::UIntList,
+        "Destination ports for: registry endpoints and replication."
+    ),
+    key!(
+        "egress.registries.allow_private_cidrs",
+        Kind::StrList,
+        "Internal CIDRs allowed despite the SSRF filter for: registry endpoints and replication. Loopback and metadata addresses are refused."
+    ),
+    key!(
+        "egress.webhooks.allowed_schemes",
+        Kind::StrList,
+        "Schemes for: webhook deliveries. Must include `https`."
+    ),
+    key!(
+        "egress.webhooks.allow_insecure_http_hosts",
+        Kind::StrList,
+        "Hosts reachable over plain `http` for: webhook deliveries."
+    ),
+    key!(
+        "egress.webhooks.allowed_hosts",
+        Kind::StrList,
+        "When not empty, only these hosts (exact or `*.example.com`) may be targets of: webhook deliveries."
+    ),
+    key!(
+        "egress.webhooks.allowed_ports",
+        Kind::UIntList,
+        "Destination ports for: webhook deliveries."
+    ),
+    key!(
+        "egress.webhooks.allow_private_cidrs",
+        Kind::StrList,
+        "Internal CIDRs allowed despite the SSRF filter for: webhook deliveries. Loopback and metadata addresses are refused."
+    ),
+    key!(
+        "egress.scanners.allowed_schemes",
+        Kind::StrList,
+        "Schemes for: http scanner adapters and data set downloads. Must include `https`."
+    ),
+    key!(
+        "egress.scanners.allow_insecure_http_hosts",
+        Kind::StrList,
+        "Hosts reachable over plain `http` for: http scanner adapters and data set downloads."
+    ),
+    key!(
+        "egress.scanners.allowed_hosts",
+        Kind::StrList,
+        "When not empty, only these hosts (exact or `*.example.com`) may be targets of: http scanner adapters and data set downloads."
+    ),
+    key!(
+        "egress.scanners.allowed_ports",
+        Kind::UIntList,
+        "Destination ports for: http scanner adapters and data set downloads."
+    ),
+    key!(
+        "egress.scanners.allow_private_cidrs",
+        Kind::StrList,
+        "Internal CIDRs allowed despite the SSRF filter for: http scanner adapters and data set downloads. Loopback and metadata addresses are refused."
+    ),
+    key!(
+        "egress.probe.allowed_schemes",
+        Kind::StrList,
+        "Schemes for: the certificate fetch helper. Must include `https`."
+    ),
+    key!(
+        "egress.probe.allow_insecure_http_hosts",
+        Kind::StrList,
+        "Hosts reachable over plain `http` for: the certificate fetch helper."
+    ),
+    key!(
+        "egress.probe.allowed_hosts",
+        Kind::StrList,
+        "When not empty, only these hosts (exact or `*.example.com`) may be targets of: the certificate fetch helper."
+    ),
+    key!(
+        "egress.probe.allowed_ports",
+        Kind::UIntList,
+        "Destination ports for: the certificate fetch helper."
+    ),
+    key!(
+        "egress.probe.allow_private_cidrs",
+        Kind::StrList,
+        "Internal CIDRs allowed despite the SSRF filter for: the certificate fetch helper. Loopback and metadata addresses are refused."
+    ),
+    key!(
+        "egress.smtp.allowed_hosts",
+        Kind::StrList,
+        "When not empty, only these hosts may be the mail relay."
+    ),
+    key!(
+        "egress.smtp.allowed_ports",
+        Kind::UIntList,
+        "Mail relay ports (465 and 587 by default)."
+    ),
+    key!(
+        "egress.smtp.allow_private_cidrs",
+        Kind::StrList,
+        "Internal CIDRs allowed for an internal mail relay. Loopback and metadata addresses are refused."
+    ),
+    key!(
+        "egress.proxy.allowed_hosts",
+        Kind::StrList,
+        "Hosts an administrator may configure as the outbound proxy. Empty refuses the proxy setting."
     ),
 ];
 

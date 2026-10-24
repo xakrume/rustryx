@@ -21,21 +21,36 @@ path = "src/main.rs"
 
 [dependencies]
 rustryx-api.workspace = true
+rustryx-auth.workspace = true
+rustryx-blob.workspace = true
 rustryx-config.workspace = true
 rustryx-core.workspace = true
+rustryx-db.workspace = true
+rustryx-format-core.workspace = true
 rustryx-observability.workspace = true
+rustryx-rbac.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 clap.workspace = true
 futures.workspace = true
+http.workspace = true
 hyper-util.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+time.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tower.workspace = true
 tracing.workspace = true
+url.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
+reqwest.workspace = true
+rustryx-testkit.workspace = true
 tempfile.workspace = true
+testcontainers.workspace = true
+uuid.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

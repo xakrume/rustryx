@@ -438,3 +438,219 @@ fn api_error_is_an_error_with_a_source() {
     assert!(std::error::Error::source(&error).is_some());
     assert!(std::error::Error::source(&ApiError::forbidden()).is_none());
 }
+
+// ---- core revision 2 variants -------------------------------------------------------------
+
+use rustryx_core::error::{PolicyViolation, UpstreamError};
+use rustryx_core::ids::{ImmutabilityRuleId, LifecycleHoldId};
+use rustryx_core::model::WritePolicy;
+use rustryx_core::quota::{QuotaExceeded, QuotaScope};
+
+#[tokio::test]
+async fn store_invalid_is_a_400_and_a_page_token_has_its_own_code() {
+    let token = render(StoreError::Invalid("invalid page token".into())).await;
+    assert_eq!(
+        (token.status, token.error_code().as_str()),
+        (StatusCode::BAD_REQUEST, "invalid_page_token")
+    );
+    let other = render(StoreError::Invalid(
+        "number out of range: 99999999999 for column x".into(),
+    ))
+    .await;
+    assert_eq!(
+        (other.status, other.error_code().as_str()),
+        (StatusCode::BAD_REQUEST, "invalid_input")
+    );
+    assert!(
+        !other.text().contains("99999999999"),
+        "the store's text is for the log"
+    );
+}
+
+#[tokio::test]
+async fn new_blob_errors_have_their_own_answers_and_never_read_as_404() {
+    let full = render(BlobError::InsufficientStorage).await;
+    assert_eq!(
+        (full.status, full.error_code().as_str()),
+        (StatusCode::INSUFFICIENT_STORAGE, "insufficient_storage")
+    );
+    let busy = render(BlobError::Overloaded {
+        retry_after: Some(Duration::from_secs(7)),
+    })
+    .await;
+    assert_eq!(
+        (busy.status, busy.error_code().as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, "overloaded")
+    );
+    assert_eq!(busy.header("retry-after"), Some("7"));
+    let hint_less = render(BlobError::Overloaded { retry_after: None }).await;
+    assert_eq!(hint_less.header("retry-after"), Some("5"));
+    for error in [
+        BlobError::InvalidKey("parent segment"),
+        BlobError::Unsupported("presign"),
+        BlobError::WriterClosed,
+    ] {
+        let reply = render(error).await;
+        assert_eq!(
+            (reply.status, reply.error_code().as_str()),
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
+        );
+        assert!(!reply.text().contains("parent segment") && !reply.text().contains("presign"));
+    }
+}
+
+#[tokio::test]
+async fn access_denied_is_a_403_with_no_reason_for_the_client() {
+    let reply = render(AuthError::AccessDenied(
+        "no mapped group and no default role",
+    ))
+    .await;
+    assert_eq!(
+        (reply.status, reply.error_code().as_str()),
+        (StatusCode::FORBIDDEN, "forbidden")
+    );
+    assert!(!reply.text().contains("mapped"));
+}
+
+#[tokio::test]
+async fn upstream_failures_are_502_and_a_timeout_is_504() {
+    let timeout = render(DomainError::Upstream(UpstreamError::Timeout)).await;
+    assert_eq!(
+        (timeout.status, timeout.error_code().as_str()),
+        (StatusCode::GATEWAY_TIMEOUT, "upstream_timeout")
+    );
+    for error in [
+        UpstreamError::Connect,
+        UpstreamError::Tls,
+        UpstreamError::Status(503),
+        UpstreamError::TooLarge,
+        UpstreamError::Blocked("loopback"),
+        UpstreamError::Protocol,
+        UpstreamError::CircuitOpen,
+    ] {
+        let reply = render(DomainError::Upstream(error)).await;
+        assert_eq!(
+            (reply.status, reply.error_code().as_str()),
+            (StatusCode::BAD_GATEWAY, "upstream_error")
+        );
+        assert!(!reply.text().contains("loopback"));
+    }
+}
+
+#[tokio::test]
+async fn policy_violations_use_the_codes_of_the_contract() {
+    let quota = QuotaExceeded {
+        scope: QuotaScope::Project(rustryx_core::ids::ProjectId::generate()),
+        limit_bytes: 10,
+        used_bytes: 9,
+        requested_bytes: 5,
+    };
+    let cases = [
+        (
+            PolicyViolation::QuotaExceeded(quota),
+            StatusCode::INSUFFICIENT_STORAGE,
+            "quota_exceeded",
+        ),
+        (
+            PolicyViolation::ReadOnly,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "read_only_mode",
+        ),
+        (
+            PolicyViolation::Immutable {
+                rule: ImmutabilityRuleId::generate(),
+            },
+            StatusCode::CONFLICT,
+            "immutable_tag",
+        ),
+        (
+            PolicyViolation::WritePolicy(WritePolicy::AllowOnce),
+            StatusCode::CONFLICT,
+            "write_policy_violation",
+        ),
+        (
+            PolicyViolation::AlreadyExists,
+            StatusCode::CONFLICT,
+            "already_exists",
+        ),
+        (
+            PolicyViolation::Held {
+                hold: LifecycleHoldId::generate(),
+            },
+            StatusCode::CONFLICT,
+            "conflict",
+        ),
+        (
+            PolicyViolation::ApprovalRequired,
+            StatusCode::CONFLICT,
+            "conflict",
+        ),
+    ];
+    for (violation, status, code) in cases {
+        let reply = render(DomainError::Violation(violation)).await;
+        assert_eq!((reply.status, reply.error_code().as_str()), (status, code));
+    }
+    let read_only = render(DomainError::Violation(PolicyViolation::ReadOnly)).await;
+    assert!(
+        read_only.header("retry-after").is_some(),
+        "reads work, writes retry later"
+    );
+}
+
+/// A service message that reaches the client verbatim must not carry internals (gap 31). The
+/// messages the services of this workspace write are collected here; a new service adds its
+/// own to the list, and every entry is checked against the shapes that must never leak.
+#[test]
+fn must_not_pass_internals_through_the_public_messages_of_domain_errors() {
+    let service_messages = [
+        "repository 'maven-central' already exists",
+        "the repository name must be 2 to 63 characters",
+        "a group repository cannot contain itself",
+        "role nesting would form a cycle",
+        "the username is used by another identity source",
+    ];
+    let internals = [
+        "postgres://",
+        "select ",
+        "/var/",
+        "/etc/",
+        "10.",
+        "ldap://",
+        "password",
+        "panicked",
+        "stack",
+    ];
+    for message in service_messages {
+        for internal in &internals {
+            assert!(
+                !message.to_ascii_lowercase().contains(*internal),
+                "`{message}` looks like it carries `{internal}`"
+            );
+        }
+        for variant in [
+            DomainError::invalid(message),
+            DomainError::Conflict(message.to_owned()),
+            DomainError::AlreadyExists(message.to_owned()),
+        ] {
+            let rendered = ApiError::from(variant);
+            assert!(rendered.status().is_client_error());
+        }
+    }
+}
+
+#[test]
+fn a_message_a_service_writes_is_cleaned_and_bounded_before_it_reaches_a_client() {
+    let nasty = format!("bad\r\nname {}", "x".repeat(500));
+    let error = ApiError::from(DomainError::invalid(nasty));
+    let reply = futures::executor::block_on(render(error));
+    let message = reply.json()["error"]["message"]
+        .as_str()
+        .expect("message")
+        .to_owned();
+    assert!(!message.contains('\n') && !message.contains('\r'));
+    assert!(
+        message.chars().count() <= 243,
+        "{}",
+        message.chars().count()
+    );
+}

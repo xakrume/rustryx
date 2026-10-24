@@ -67,7 +67,7 @@ fn table_kinds_match_the_shape_of_the_defaults() {
             Kind::UInt => value.as_u64().is_some(),
             Kind::Float => value.is_number(),
             Kind::Str => value.is_string() || value.is_null(),
-            Kind::StrList => value.is_sequence(),
+            Kind::StrList | Kind::UIntList => value.is_sequence(),
             Kind::Secret => value.is_null(),
             Kind::Enum(variants) => value.as_str().is_some_and(|s| variants.contains(&s)),
         };
@@ -113,8 +113,12 @@ fn sample(spec: &crate::keys::KeySpec, default: &Value) -> (String, Value) {
             ((*other).to_owned(), Value::String((*other).to_owned()))
         }
         Kind::Secret => (CANARY.to_owned(), Value::String(REDACTED.to_owned())),
+        Kind::UIntList => (
+            "443, 8443".to_owned(),
+            Value::Sequence(vec![443_u64.into(), 8443_u64.into()]),
+        ),
         Kind::StrList => match spec.path {
-            "server.trusted_proxies" | "upstream.allow_private_cidrs" => (
+            path if path == "server.trusted_proxies" || path.ends_with("allow_private_cidrs") => (
                 "10.0.0.0/8,192.168.0.0/16".to_owned(),
                 Value::Sequence(vec!["10.0.0.0/8".into(), "192.168.0.0/16".into()]),
             ),
@@ -319,7 +323,7 @@ fn accessors_convert_units() {
     assert_eq!(c.auth.ldap.connect_timeout().as_secs(), 5);
     assert_eq!(c.auth.ldap.bind_timeout().as_secs(), 5);
     assert_eq!(c.auth.ldap.search_timeout().as_secs(), 5);
-    assert_eq!(c.auth.ldap.groups_cache_ttl().as_secs(), 300);
+    assert_eq!(c.auth.ldap.groups_cache_ttl().as_secs(), 60);
     assert_eq!(c.upstream.connect_timeout().as_secs(), 3);
     assert_eq!(c.upstream.metadata_timeout().as_secs(), 30);
     assert_eq!(c.upstream.idle_timeout().as_secs(), 60);
@@ -373,6 +377,10 @@ fn example_secrets() -> MapEnv {
             "RUSTRYX_OBSERVABILITY_METRICS_TOKEN",
             "0123456789abcdef0123",
         )
+        .with(
+            "RUSTRYX_DATABASE_SEALING_KEY",
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        )
 }
 
 #[test]
@@ -416,6 +424,7 @@ fn example_file_without_secrets_fails_with_every_missing_secret() {
         "auth.bootstrap_admin.password",
         "auth.internal_jwt_key",
         "auth.cookie_key",
+        "database.sealing_key",
         "observability.metrics_token",
     ] {
         assert!(issues.mentions(key), "{key}: {issues}");
@@ -441,4 +450,76 @@ fn must_not_commit_secret_values_in_the_example_file() {
 fn example_and_reference_contain_no_dash_characters() {
     let text = std::fs::read_to_string(example_path()).expect("read");
     assert!(!text.contains('\u{2014}') && !text.contains('\u{2013}'));
+}
+
+// ---- integer lists (ports) --------------------------------------------------------------
+
+#[test]
+fn port_lists_parse_from_the_environment_and_reject_non_numbers() {
+    let env = MapEnv::new().with("RUSTRYX_EGRESS_SMTP_ALLOWED_PORTS", " 25 , 2525,, ");
+    let config = load_without_rules(None, &env).expect("parses");
+    assert_eq!(config.egress.smtp.allowed_ports, [25, 2525]);
+
+    let env = MapEnv::new().with("RUSTRYX_EGRESS_SMTP_ALLOWED_PORTS", "587,smtp");
+    let Err(ConfigError::Invalid(issues)) = load_without_rules(None, &env) else {
+        panic!("a word is not a port");
+    };
+    assert!(issues.mentions("egress.smtp.allowed_ports"));
+    assert!(
+        issues
+            .to_string()
+            .contains("RUSTRYX_EGRESS_SMTP_ALLOWED_PORTS")
+    );
+}
+
+#[test]
+fn port_lists_in_a_file_must_be_integers_and_fit_a_port() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("c.yaml");
+    std::fs::write(&path, "egress:\n  smtp:\n    allowed_ports: [\"587\"]\n").expect("write");
+    let Err(ConfigError::Invalid(issues)) = load_without_rules(Some(&path), &MapEnv::new()) else {
+        panic!("text is not a port");
+    };
+    assert!(issues.mentions("egress.smtp.allowed_ports"));
+
+    // Integers pass the structural check; a value above 65535 is refused by the typed schema.
+    std::fs::write(&path, "egress:\n  smtp:\n    allowed_ports: [70000]\n").expect("write");
+    assert!(load_without_rules(Some(&path), &MapEnv::new()).is_err());
+    std::fs::write(&path, "egress:\n  smtp:\n    allowed_ports: [2525]\n").expect("write");
+    let config = load_without_rules(Some(&path), &MapEnv::new()).expect("parses");
+    assert_eq!(config.egress.smtp.allowed_ports, [2525]);
+}
+
+#[test]
+fn the_key_reference_renders_port_lists_as_numbers() {
+    let table = crate::reference::key_reference_markdown();
+    let row = table
+        .lines()
+        .find(|line| line.starts_with("| `egress.smtp.allowed_ports`"))
+        .expect("row");
+    assert!(row.contains("`[465, 587]`"), "{row}");
+    assert!(row.contains("list of integers"), "{row}");
+}
+
+#[test]
+fn every_new_secret_has_a_file_variant_and_stays_out_of_print_config() {
+    let config = {
+        let mut c = AppConfig::default();
+        c.database.sealing_key = Some(crate::ConfigSecret::new(CANARY));
+        c.database.sealing_previous_keys = Some(crate::ConfigSecret::new(CANARY));
+        c.auth.internal_jwt_previous_keys = Some(crate::ConfigSecret::new(CANARY));
+        c
+    };
+    let yaml = config.to_redacted_yaml().expect("yaml");
+    assert!(!yaml.contains(CANARY));
+    assert!(!format!("{config:?}").contains(CANARY));
+    for key in [
+        "database.sealing_key",
+        "database.sealing_previous_keys",
+        "auth.internal_jwt_previous_keys",
+    ] {
+        let spec = KEYS.iter().find(|k| k.path == key).expect("key");
+        assert!(spec.is_secret(), "{key}");
+        assert!(spec.env_file_name().is_some(), "{key}");
+    }
 }

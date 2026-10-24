@@ -24,6 +24,14 @@ pub struct DatabaseConfig {
     pub connect_timeout_secs: u64,
     /// `statement_timeout` applied to API connections.
     pub statement_timeout_secs: u64,
+    /// AES-256 key (64 hexadecimal characters) that seals secrets stored in the database
+    /// (upstream passwords of proxy repositories). Shared by all nodes.
+    pub sealing_key: Option<ConfigSecret>,
+    /// Id written into every sealed value so that the right key is found after a rotation.
+    pub sealing_key_id: String,
+    /// Retired sealing keys that still open old values, as `id:hex` entries separated by
+    /// commas, spaces or new lines.
+    pub sealing_previous_keys: Option<ConfigSecret>,
 }
 
 impl Default for DatabaseConfig {
@@ -35,6 +43,9 @@ impl Default for DatabaseConfig {
             acquire_timeout_secs: 5,
             connect_timeout_secs: 5,
             statement_timeout_secs: 30,
+            sealing_key: None,
+            sealing_key_id: "k1".to_owned(),
+            sealing_previous_keys: None,
         }
     }
 }

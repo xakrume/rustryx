@@ -22,26 +22,30 @@ pub(super) fn oidc(config: &AppConfig, report: &mut Report) {
             format!("must not be `{ROLE_NX_ADMIN}`: administrators come only from admin_groups"),
         );
     }
+    for party in &oidc.authorized_parties {
+        // `azp` is compared as a whole string; a blank entry or one with a separator inside
+        // can only be a mistake (a comma-joined list pasted into one entry).
+        if party.trim().is_empty() || party.contains(char::is_whitespace) || party.contains(',') {
+            report.err(
+                "auth.oidc.authorized_parties",
+                "entries must be client ids without whitespace or commas",
+            );
+        }
+    }
     if !oidc.enabled {
         return;
     }
 
-    issuer(
-        config,
-        "auth.oidc.issuer",
-        oidc.issuer.as_deref(),
-        true,
-        report,
-    );
+    issuer("auth.oidc.issuer", oidc.issuer.as_deref(), true, report);
     if oidc.public_issuer_url.is_some() {
         issuer(
-            config,
             "auth.oidc.public_issuer_url",
             oidc.public_issuer_url.as_deref(),
             false,
             report,
         );
     }
+    browser_login_redirect(config, report);
     report.require_text("auth.oidc.client_id", oidc.client_id.as_deref());
     // Only confidential clients are supported: a public client with a secret, the
     // password grant and the implicit flow are not accepted.
@@ -72,7 +76,32 @@ pub(super) fn oidc(config: &AppConfig, report: &mut Report) {
     }
 }
 
-fn issuer(config: &AppConfig, key: &str, raw: Option<&str>, required: bool, report: &mut Report) {
+/// The redirect URI of the browser login is `server.base_url` plus the callback path, and
+/// `rustryx-auth` accepts plain http for it only on a loopback host. A development base URL such
+/// as `http://repo.test:8081` would otherwise validate and then stop the node at startup.
+fn browser_login_redirect(config: &AppConfig, report: &mut Report) {
+    if config.auth.oidc.client_secret.is_none() {
+        // No client secret means no browser login, and no redirect URI.
+        return;
+    }
+    let Some(url) = config
+        .server
+        .base_url
+        .as_deref()
+        .and_then(|raw| url::Url::parse(raw).ok())
+    else {
+        return;
+    };
+    let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    if url.scheme() == "http" && !loopback {
+        report.err(
+            "server.base_url",
+            "must be https, or http on localhost, while auth.oidc has a client secret: it is the base of the browser login redirect URI",
+        );
+    }
+}
+
+fn issuer(key: &str, raw: Option<&str>, required: bool, report: &mut Report) {
     let text = if required {
         report.require_text(key, raw)
     } else {
@@ -84,16 +113,15 @@ fn issuer(config: &AppConfig, key: &str, raw: Option<&str>, required: bool, repo
     let Some(url) = report.url(key, &text) else {
         return;
     };
-    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
-        report.err(key, "must be an http(s) URL with a host");
+    // JWKS are fetched from the discovery document, and signing keys are accepted only from
+    // HTTPS endpoints with certificate verification. `rustryx-auth` refuses to build a provider
+    // from any other scheme in EVERY environment, so a development allowance here would be a
+    // configuration that validates and then stops the node at startup.
+    if url.scheme() != "https" || url.host_str().is_none() {
+        report.err(key, "must be an https URL with a host");
     }
     if url.query().is_some() || url.fragment().is_some() {
         report.err(key, "must not contain a query or fragment");
-    }
-    if config.is_production() && url.scheme() != "https" {
-        // JWKS are fetched from the discovery document; signing keys are accepted only
-        // from HTTPS endpoints with certificate verification.
-        report.err(key, "must use https in production");
     }
 }
 

@@ -5,6 +5,7 @@
 //! list at once. Messages name the key and the rule, never a configured value.
 
 mod auth;
+mod foundation;
 mod idp;
 mod network;
 mod runtime;
@@ -112,5 +113,6 @@ pub(crate) fn run(config: &AppConfig) -> Report {
     idp::ldap(config, &mut report);
     runtime::limits(config, &mut report);
     runtime::observability(config, &mut report);
+    foundation::foundation(config, &mut report);
     report
 }

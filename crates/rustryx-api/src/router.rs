@@ -40,29 +40,34 @@ use crate::rate_limit::{
     auth_failure_guard, rate_limit,
 };
 use crate::request_id::request_id_layer;
+use crate::routes::{RouteCatalog, RouteSet};
 use crate::state::AppState;
 
 /// A feature that contributes routes without editing this crate.
 ///
-/// The composition root creates one module per feature (`/service/rest/v1`,
-/// `/repository/{name}/...`, `/v2/...`) and passes them to
-/// [`RouterBuilder::module`]. A module owns its own state: it can call
-/// `Router::with_state(its_state)` on a sub-router, which yields a
-/// `Router<AppState>` ready to merge, so no field has to be added to [`AppState`].
+/// The composition root creates one module per feature (`/api/v1/...` resources,
+/// `/repository/{name}/...`, `/v2/...`) and passes them to [`RouterBuilder::module`]. A module
+/// owns its own state: a `Router<MyState>` becomes a `Router<AppState>` with `with_state`, so
+/// no field has to be added to [`AppState`].
+///
+/// A module receives a [`RouteSet`], not a raw router, and can add routes only with a declared
+/// [`Requires`](crate::Requires): there is no route without a requirement, and the route layer
+/// enforces it (see `authz.rs`). `RouteSet::app_state` hands a module the shared state when it
+/// builds its own.
 pub trait RouteModule: Send + Sync {
     /// Name used in logs when the router is assembled.
     fn name(&self) -> &'static str;
 
     /// Adds routes to the API group (JSON metadata and management endpoints):
     /// compressed, no-store by default, CORS applies, small body limit.
-    fn mount_api(&self, router: Router<AppState>) -> Router<AppState> {
-        router
+    fn mount_api(&self, routes: RouteSet) -> RouteSet {
+        routes
     }
 
     /// Adds routes to the artifacts group (package protocols and downloads): not
     /// compressed, large body limit, idle timeouts on both bodies.
-    fn mount_artifacts(&self, router: Router<AppState>) -> Router<AppState> {
-        router
+    fn mount_artifacts(&self, routes: RouteSet) -> RouteSet {
+        routes
     }
 }
 
@@ -91,14 +96,25 @@ impl RouterBuilder {
 
     /// Assembles the router.
     pub fn build(self) -> Router {
+        self.build_with_catalog().0
+    }
+
+    /// Assembles the router and lists every route that was declared, with its requirement.
+    pub fn build_with_catalog(self) -> (Router, RouteCatalog) {
         let Self { state, modules } = self;
-        let mut api = Router::new();
-        let mut artifacts = Router::new();
+        let mut api = RouteSet::new(state.clone());
+        let mut artifacts = RouteSet::new(state.clone());
         for module in &modules {
             tracing::debug!(module = module.name(), "mounting route module");
             api = module.mount_api(api);
             artifacts = module.mount_artifacts(artifacts);
         }
+        let (api, api_declared) = api.into_parts();
+        let (artifacts, artifact_declared) = artifacts.into_parts();
+        let catalog = RouteCatalog {
+            api: api_declared,
+            artifacts: artifact_declared,
+        };
         let in_flight = Arc::new(Semaphore::new(state.settings().max_in_flight));
         // One limiter for both groups: a client's budget is not doubled by spreading
         // requests over metadata and artifact routes.
@@ -145,11 +161,12 @@ impl RouterBuilder {
             .fallback(not_found);
         // Applied last so that they also wrap the fallbacks: a 404 for an unknown
         // path still gets a request id, security headers and a metrics sample.
-        router
+        let router = router
             .layer(CatchPanicLayer::custom(panic_response))
             .layer(from_fn(security_headers))
             .layer(from_fn_with_state(state, observe))
-            .layer(from_fn(request_id_layer))
+            .layer(from_fn(request_id_layer));
+        (router, catalog)
     }
 }
 

@@ -315,7 +315,10 @@ fn starts_while_keycloak_is_unreachable() {
         &["serve"],
         &dev_env(&[
             ("RUSTRYX_AUTH_OIDC_ENABLED", "true"),
-            ("RUSTRYX_AUTH_OIDC_ISSUER", "http://127.0.0.1:1/realms/none"),
+            (
+                "RUSTRYX_AUTH_OIDC_ISSUER",
+                "https://127.0.0.1:1/realms/none",
+            ),
             ("RUSTRYX_AUTH_OIDC_CLIENT_ID", "rustryx-ui"),
             ("RUSTRYX_AUTH_OIDC_CLIENT_SECRET", "client-secret"),
             ("RUSTRYX_SERVER_BASE_URL", "http://localhost:8081"),
@@ -436,11 +439,15 @@ fn print_config_accepts_a_file_and_the_environment_wins() {
 }
 
 #[test]
-fn migrate_says_clearly_that_it_is_not_wired() {
+fn migrate_fails_clearly_when_the_database_cannot_be_reached_and_never_prints_the_password() {
     let mut p = spawn(&["migrate"], &dev_env(&[]));
     assert_eq!(p.wait_exit(), 1);
     let output = p.all_output();
-    assert!(output.contains("not wired"), "{output}");
+    assert!(output.contains("migration failed"), "{output}");
+    assert!(
+        !output.contains("app:pw") && !output.contains(":pw@"),
+        "must not print the database password: {output}"
+    );
 }
 
 #[test]

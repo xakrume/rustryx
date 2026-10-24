@@ -20,7 +20,9 @@ use metrics_exporter_prometheus::{
 use tokio_util::sync::CancellationToken;
 
 use crate::ObservabilityError;
+use crate::jobs::JobMetrics;
 use crate::names::{self, MetricKind};
+use crate::request_labels::{RequestLabels, classify_default};
 
 /// Histogram buckets for every `*_seconds` metric: 5 ms to 60 s (SRE-08).
 pub const DURATION_BUCKETS: [f64; 13] = [
@@ -40,6 +42,9 @@ pub const UNMATCHED_ROUTE: &str = "unmatched";
 struct Shared {
     recorder: PrometheusRecorder,
     handle: PrometheusHandle,
+    /// Unix time at which this recorder (that is, the process, since it is built first
+    /// thing in `main`) came up.
+    started_unix: f64,
 }
 
 /// Cheap-to-clone access to one Prometheus recorder.
@@ -86,7 +91,11 @@ impl MetricsHandle {
             .build_recorder();
         let handle = recorder.handle();
         let this = Self {
-            shared: Arc::new(Shared { recorder, handle }),
+            shared: Arc::new(Shared {
+                recorder,
+                handle,
+                started_unix: Self::unix_now(),
+            }),
         };
         this.describe_standard();
         Ok(this)
@@ -172,10 +181,28 @@ impl MetricsHandle {
             .register_histogram(&Self::key(name, labels), &Self::metadata())
     }
 
-    /// Records one finished request. `route` must be a route template, never a path.
+    /// Records one finished request with the default labels (`class="other"`, `cache="none"`).
+    /// `route` must be a route template, never a path.
     pub fn record_http_request(&self, route: &str, method: &str, status: u16, elapsed: Duration) {
+        self.record_http_request_with(route, method, status, elapsed, RequestLabels::default());
+    }
+
+    /// Records one finished request. A label the handler did not set (`None`) falls back to
+    /// [`classify_default`] for the class and `none` for the cache.
+    pub fn record_http_request_with(
+        &self,
+        route: &str,
+        method: &str,
+        status: u16,
+        elapsed: Duration,
+        labels: RequestLabels,
+    ) {
         let method = normalize_method(method);
         let status = status.to_string();
+        let class = labels
+            .class
+            .unwrap_or_else(|| classify_default(route, method));
+        let cache = labels.cache.unwrap_or_default();
         self.counter(
             names::HTTP_REQUESTS_TOTAL,
             &[("route", route), ("method", method), ("status", &status)],
@@ -183,7 +210,12 @@ impl MetricsHandle {
         .increment(1);
         self.histogram(
             names::HTTP_REQUEST_DURATION_SECONDS,
-            &[("route", route), ("method", method)],
+            &[
+                ("route", route),
+                ("method", method),
+                ("class", class.as_str()),
+                ("cache", cache.as_str()),
+            ],
         )
         .record(elapsed.as_secs_f64());
     }
@@ -251,6 +283,64 @@ impl MetricsHandle {
         .increment(1);
     }
 
+    /// `db_up`: whether the last PostgreSQL readiness query succeeded.
+    pub fn set_db_up(&self, up: bool) {
+        self.gauge(names::DB_UP, &[])
+            .set(if up { 1.0 } else { 0.0 });
+    }
+
+    /// `redis_up`: whether the last Redis check succeeded. Never called without a Redis.
+    pub fn set_redis_up(&self, up: bool) {
+        self.gauge(names::REDIS_UP, &[])
+            .set(if up { 1.0 } else { 0.0 });
+    }
+
+    /// The series of one background task, registered at the process start time (see
+    /// [`JobMetrics`]). `task` is a fixed name from code, never user input.
+    #[must_use]
+    pub fn job(&self, task: &str) -> JobMetrics {
+        JobMetrics::new(self.clone(), task)
+    }
+
+    /// Counts a restart of a supervised daemon (`panic` or `exit`) as a failed run.
+    pub fn record_task_restart(&self, task: &str, how: &'static str) {
+        self.counter(
+            names::BACKGROUND_JOB_RUNS_TOTAL,
+            &[("task", task), ("result", how)],
+        )
+        .increment(1);
+    }
+
+    /// Counts one lock acquisition. `key_class` is a fixed vocabulary, `result` is
+    /// `acquired`, `busy` or `error`.
+    pub fn record_lock_acquire(&self, key_class: &str, result: &'static str) {
+        self.counter(
+            names::DISTLOCK_ACQUIRE_TOTAL,
+            &[("key_class", key_class), ("result", result)],
+        )
+        .increment(1);
+    }
+
+    /// Counts a lock lost while held.
+    pub fn record_lock_lost(&self, key_class: &str) {
+        self.counter(names::DISTLOCK_LOST_TOTAL, &[("key_class", key_class)])
+            .increment(1);
+    }
+
+    /// Unix time at which this recorder was built (the process start, for practical purposes).
+    #[must_use]
+    pub fn process_start_unix(&self) -> f64 {
+        self.shared.started_unix
+    }
+
+    /// The current Unix time in seconds.
+    #[must_use]
+    pub fn unix_now() -> f64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64())
+    }
+
     /// Sets the dropped-log-lines counter to an absolute value reported by the log writer.
     pub fn set_dropped_log_lines(&self, total: u64) {
         let counter = self.counter(names::LOG_LINES_DROPPED_TOTAL, &[]);
@@ -314,7 +404,12 @@ mod tests {
             text.contains(r#"http_requests_total{route="/healthz",method="GET",status="200"} 1"#),
             "{text}"
         );
-        assert!(text.contains("http_request_duration_seconds_bucket{route=\"/healthz\",method=\"GET\",le=\"0.005\"}"), "{text}");
+        assert!(
+            text.contains(
+                "http_request_duration_seconds_bucket{route=\"/healthz\",method=\"GET\",class=\"other\",cache=\"none\",le=\"0.005\"}"
+            ),
+            "{text}"
+        );
         assert!(
             text.contains("# HELP http_requests_total"),
             "descriptions are registered: {text}"

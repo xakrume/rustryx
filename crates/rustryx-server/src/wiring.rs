@@ -1,76 +1,335 @@
-//! The composition root: configuration to settings, and the list of components.
+//! The composition root: the configuration becomes settings and components.
 //!
-//! This is the one file the lead edits to integrate the other crates. [`assemble`]
-//! builds [`Components`] from the configuration; today it wires nothing that does
-//! not exist, so the node starts, answers `/healthz`, reports `/readyz` 503 (no
-//! database) and serves no repository routes. The checklist of what replaces
-//! what is in `docs/server.md`.
+//! [`assemble`] builds every component from the configuration and returns them as
+//! [`Components`]; `serve::run_server` runs them. The pieces live in the submodules:
+//!
+//! | module | what it wires |
+//! |---|---|
+//! | `database` | the lazily connected pool, the sealer for stored secrets, readiness, `rustryx migrate` |
+//! | `store` | the repositories as trait objects |
+//! | `bus` | one `LISTEN` connection shared by every in-process subscriber |
+//! | `identity` | passwords, the token service, login guard, group mapping, JIT, Keycloak, LDAP, the chain |
+//! | `sso` | the adapters between the HTTP layer's session ports and `rustryx-auth` |
+//! | `blobs` | the registry of open stores, its adapter for the format engine, the default store seed |
+//! | `formats` | the format engine and the SSRF policy of `upstream.*` |
+//! | `artifacts` | `/repository/{name}/...` and `/v2/...` |
+//! | `bootstrap` | the bootstrap administrator and the default store, once the schema is servable |
+//! | `maintenance` | audit partitions, revoked token and login counter purges |
+//!
+//! Constraints from the requirements that hold for everything here: the node starts without
+//! PostgreSQL, Keycloak, LDAP or S3 being reachable (the pool connects lazily, discovery runs in
+//! the background, LDAP binds on the first login), and it never migrates: `rustryx migrate` is a
+//! separate command and the readiness probe says when the schema is there.
+
+mod artifacts;
+mod blobs;
+pub mod bootstrap;
+mod bus;
+mod database;
+mod formats;
+mod identity;
+pub mod maintenance;
+mod sso;
+mod store;
+
+#[cfg(test)]
+mod chain_tests;
 
 use std::sync::Arc;
+use std::time::Duration;
 
+use anyhow::Context;
+use futures::future::BoxFuture;
 use rustryx_api::{
-    ApiSettings, AppState, Lifecycle, MetricsAccess, NotWiredProbe, RateLimitSettings,
-    ReadinessProbe, RouteModule,
+    ApiSettings, AppState, AuthApiDeps, AuthApiSettings, CsrfKey, Lifecycle, MetricsAccess,
+    NativeAuthModule, NotWiredProbe, OidcLoginPort, RateLimitSettings, ReadinessProbe, RouteModule,
+    SessionManager, SessionSettings,
 };
-use rustryx_config::{AppConfig, LogFormat, ObservabilityConfig, OtlpProtocol};
-use rustryx_core::ports::{Authenticator, RbacChecker};
+use rustryx_config::{AppConfig, LockBackendKind, LogFormat, ObservabilityConfig, OtlpProtocol};
+use rustryx_core::ports::{Authenticator, InvalidationBus, LockBackend, RbacChecker};
+use rustryx_db::{PgLockBackend, PgStore};
 use rustryx_observability::LogFormat as ObsLogFormat;
 use rustryx_observability::{
     MetricsHandle, ObservabilityOptions, OtlpOptions, OtlpProtocol as ExportProtocol,
+    run_runtime_sampler,
 };
+use rustryx_rbac::{Rbac, RbacConfig};
+use url::Url;
 
+use self::artifacts::ArtifactModule;
+use self::bootstrap::{AdminSeed, Bootstrap};
+use self::bus::SharedBus;
+use self::database::{PgMigrator, PgReadiness};
+use self::maintenance::Maintenance;
+use self::sso::JwtSessionIssuer;
+use self::store::Repos;
 use crate::listener::ConnectionOptions;
-use crate::migrate::{Migrator, NotWiredMigrator};
+use crate::migrate::Migrator;
+use crate::shutdown::Finalizer;
 use crate::supervisor::BackgroundTask;
+
+/// Interval of the runtime and process sampler.
+const RUNTIME_SAMPLE_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Everything the server runs with, produced by [`assemble`].
 pub struct Components {
     /// Readiness probe (database ping and schema version).
     pub readiness: Arc<dyn ReadinessProbe>,
-    /// Authenticator chain (local, token, OIDC bearer, LDAP). `None` means every
+    /// Authenticator chain (local, token, internal JWT, OIDC bearer, LDAP). `None` means every
     /// request that presents credentials is answered 503.
     pub authenticator: Option<Arc<dyn Authenticator>>,
     /// Authorization checker. `None` means [`AppState::authorize`] answers 503.
     pub rbac: Option<Arc<dyn RbacChecker>>,
-    /// Route modules: `/service/rest/v1`, `/repository/{name}/...`, `/v2/...`.
+    /// The cookie session of the web UI. `None` turns the cookie path off.
+    pub sessions: Option<Arc<SessionManager>>,
+    /// Route modules: the native API under `/api/v1`, `/repository/{name}/...`, `/v2/...`.
     pub modules: Vec<Arc<dyn RouteModule>>,
-    /// Long-lived background tasks (schedulers, garbage collection, cache
-    /// invalidation listener), run under the supervisor.
+    /// Long-lived background tasks (invalidation listeners, identity provider discovery,
+    /// maintenance, samplers), run under the supervisor.
     pub background: Vec<BackgroundTask>,
+    /// Steps of the final shutdown, in order (see `shutdown`).
+    pub finalizers: Vec<Finalizer>,
 }
 
 impl Components {
-    /// What exists today: nothing but a probe that reports "not ready".
+    /// A node with nothing wired but a probe that reports "not ready".
     #[must_use]
     pub fn not_wired() -> Self {
         Self {
             readiness: Arc::new(NotWiredProbe),
             authenticator: None,
             rbac: None,
+            sessions: None,
             modules: Vec::new(),
             background: Vec::new(),
+            finalizers: Vec::new(),
         }
     }
 }
 
-/// Builds the components from the configuration. Runs inside the async runtime,
-/// before the listener opens.
+/// The lock backend of `lock.backend`. Only PostgreSQL advisory locks exist: a Redis backend is
+/// refused instead of quietly replaced, because the port promises there is no automatic switch
+/// between backends (a node on another backend would not exclude its peers).
+fn lock_backend(config: &AppConfig) -> anyhow::Result<Arc<dyn LockBackend>> {
+    if config.lock.backend == LockBackendKind::Redis {
+        anyhow::bail!(
+            "lock.backend is redis, but this build has no Redis lock backend: set lock.backend \
+             to postgres"
+        );
+    }
+    let url = database::direct_url(config)?;
+    let backend = PgLockBackend::new(&url)
+        .map_err(|error| anyhow::anyhow!("cannot set up the lock backend: {error}"))?;
+    Ok(Arc::new(backend))
+}
+
+fn session_manager(
+    config: &AppConfig,
+    identity: &identity::Identity,
+    repos: &Repos,
+    cookie_key: &rustryx_core::Secret,
+    bus: Arc<dyn InvalidationBus>,
+) -> anyhow::Result<Arc<SessionManager>> {
+    let session = &config.auth.session;
+    let csrf = CsrfKey::from_cookie_key(cookie_key)
+        .map_err(|_| anyhow::anyhow!("auth.cookie_key cannot derive the CSRF key"))?;
+    Ok(Arc::new(SessionManager::new(
+        SessionSettings::new(
+            Duration::from_secs(session.idle_timeout_secs),
+            Duration::from_secs(session.absolute_timeout_secs),
+        ),
+        Arc::new(JwtSessionIssuer::new(
+            Arc::clone(&identity.jwt),
+            Arc::clone(&identity.service),
+            bus,
+        )),
+        Arc::clone(&repos.clock),
+        csrf,
+        // No SSO refresher exists: see the module docs of `sso`.
+        None,
+    )))
+}
+
+fn native_auth_module(
+    config: &AppConfig,
+    identity: &identity::Identity,
+    repos: &Repos,
+) -> Arc<dyn RouteModule> {
+    let mut deps = AuthApiDeps::new(
+        Arc::clone(&repos.users),
+        Arc::clone(&repos.roles),
+        Arc::clone(&repos.tokens),
+        Arc::clone(&repos.audit),
+        Arc::clone(&repos.clock),
+    );
+    deps.oidc = identity
+        .keycloak
+        .as_ref()
+        .map(|login| Arc::clone(login) as Arc<dyn OidcLoginPort>);
+    let mut settings = AuthApiSettings::default();
+    settings.ldap_enabled = identity.ldap_enabled;
+    settings.base_url_configured = config.server.base_url.is_some();
+    deps.settings = settings;
+    Arc::new(NativeAuthModule::new(deps))
+}
+
+fn admin_seed(config: &AppConfig) -> Option<AdminSeed> {
+    let admin = &config.auth.bootstrap_admin;
+    admin.password.as_ref().map(|password| AdminSeed {
+        username: admin.username.clone(),
+        password: password.to_secret(),
+    })
+}
+
+/// Builds the components from the configuration. Runs inside the async runtime, before the
+/// listener opens.
 ///
-/// Replace the body as crates become available. Constraints from the requirements:
-/// start without Keycloak, LDAP, Redis or S3 being reachable (retry in the
-/// background, never fail here), and never run migrations.
+/// Nothing here waits for a dependency: the pool is lazy, Keycloak discovery and the LDAP
+/// connection happen later, and no migration runs. What can fail is configuration that cannot
+/// work (a malformed key, an invalid provider setting, an unsupported lock backend).
 ///
 /// # Errors
 /// A component that is mandatory for serving could not be built.
-#[allow(clippy::unused_async)] // The real assembly connects to PostgreSQL; the signature is the contract.
-pub async fn assemble(_config: &AppConfig, _metrics: &MetricsHandle) -> anyhow::Result<Components> {
-    Ok(Components::not_wired())
+pub async fn assemble(config: &AppConfig, metrics: &MetricsHandle) -> anyhow::Result<Components> {
+    let pool = database::connect_lazy(config)?;
+    let store = PgStore::new(pool.clone(), database::sealer(config)?);
+    let repos = Repos::from_store(&store);
+    let locks = lock_backend(config)?;
+    let bus = SharedBus::new(Arc::new(
+        store.invalidation_bus(database::direct_url(config)?),
+    ));
+
+    let cookie_key = identity::cookie_key(config);
+    let identity = identity::build(config, &repos, &cookie_key).await?;
+    let rbac = Arc::new(Rbac::new(
+        Arc::clone(&repos.roles),
+        Arc::clone(&repos.selectors),
+        &RbacConfig {
+            anonymous_enabled: config.auth.anonymous_enabled,
+            ..RbacConfig::default()
+        },
+    ));
+
+    let blob_registry = blobs::registry(Arc::clone(&repos.blob_stores));
+    let formats = formats::build(
+        config,
+        &repos,
+        Arc::clone(&rbac) as Arc<dyn RbacChecker>,
+        Arc::clone(&blob_registry),
+    )?;
+    let base_url = config
+        .server
+        .base_url
+        .as_deref()
+        .map(Url::parse)
+        .transpose()
+        .context("server.base_url is not a valid URL")?;
+
+    let mut background = vec![
+        bus.pump_task(),
+        rbac_listener(&rbac, &bus),
+        auth_invalidation(&identity, &bus),
+        blobs::invalidation_task(Arc::clone(&blob_registry), Arc::new(bus.clone())),
+        database::pool_sampler(pool.clone(), metrics.clone()),
+        runtime_sampler(metrics),
+        Maintenance {
+            pool: pool.clone(),
+            revoked: Arc::clone(&repos.revoked_tokens),
+            locks,
+            lock_ttl: config.lock.ttl(),
+            metrics: metrics.clone(),
+        }
+        .task(),
+        Bootstrap {
+            pool: pool.clone(),
+            passwords: Arc::clone(&identity.passwords),
+            admin: admin_seed(config),
+            blob: config.blob.clone(),
+            definitions: Arc::clone(&repos.blob_stores),
+            registry: Arc::clone(&blob_registry),
+            clock: Arc::clone(&repos.clock),
+        }
+        .task(),
+    ];
+    background.extend(identity.background.iter().cloned());
+
+    let modules: Vec<Arc<dyn RouteModule>> = vec![
+        native_auth_module(config, &identity, &repos),
+        Arc::new(ArtifactModule::new(
+            formats.engine.clone(),
+            Arc::clone(&repos.repositories),
+            base_url,
+            config.server.require_https,
+        )),
+    ];
+
+    let engine = formats.engine.clone();
+    let engine_stop = formats.shutdown.clone();
+    let registry = Arc::clone(&blob_registry);
+    let closing_pool = pool.clone();
+    let finalizers = vec![
+        Finalizer::new("format_engine", async move {
+            engine_stop.cancel();
+            engine.drain().await;
+        }),
+        Finalizer::new("blob_stores", async move { registry.shutdown().await }),
+        Finalizer::new("database_pool", async move { closing_pool.close().await }),
+    ];
+
+    Ok(Components {
+        readiness: Arc::new(PgReadiness::new(pool, metrics.clone())),
+        authenticator: Some(Arc::clone(&identity.service) as Arc<dyn Authenticator>),
+        rbac: Some(rbac),
+        sessions: Some(session_manager(
+            config,
+            &identity,
+            &repos,
+            &cookie_key,
+            Arc::new(bus),
+        )?),
+        modules,
+        background,
+        finalizers,
+    })
+}
+
+/// The RBAC caches follow the invalidation bus. The listener is started inside the task, so a
+/// restart by the supervisor starts a fresh one.
+fn rbac_listener(rbac: &Arc<Rbac>, bus: &SharedBus) -> BackgroundTask {
+    let rbac = Arc::clone(rbac);
+    let bus = bus.clone();
+    BackgroundTask::new("rbac_invalidation", move |cancel| {
+        let listener = rbac.spawn_invalidation_listener(&bus, cancel);
+        async move {
+            if let Err(error) = listener.join().await {
+                tracing::error!(%error, "the rbac invalidation listener failed");
+            }
+        }
+    })
+}
+
+fn auth_invalidation(identity: &identity::Identity, bus: &SharedBus) -> BackgroundTask {
+    let service = Arc::clone(&identity.service);
+    let bus = bus.clone();
+    BackgroundTask::new("auth_invalidation", move |cancel| {
+        // The task is `'static` by its signature but its type still names the lifetimes of the
+        // borrows it was made from; boxing erases them, which a closure result cannot do alone.
+        let task: BoxFuture<'static, ()> = Box::pin(service.invalidation_task(&bus, cancel));
+        task
+    })
+}
+
+fn runtime_sampler(metrics: &MetricsHandle) -> BackgroundTask {
+    let metrics = metrics.clone();
+    BackgroundTask::new("runtime_sampler", move |cancel| {
+        run_runtime_sampler(metrics.clone(), RUNTIME_SAMPLE_INTERVAL, cancel)
+    })
 }
 
 /// The implementation behind `rustryx migrate`.
 #[must_use]
 pub fn migrator() -> Box<dyn Migrator> {
-    Box::new(NotWiredMigrator)
+    Box::new(PgMigrator)
 }
 
 /// Builds the shared state of the HTTP layer.
@@ -93,6 +352,9 @@ pub fn app_state(
     if let Some(rbac) = &components.rbac {
         state = state.with_rbac(rbac.clone());
     }
+    if let Some(sessions) = &components.sessions {
+        state = state.with_sessions(sessions.clone());
+    }
     state
 }
 
@@ -113,6 +375,8 @@ pub fn api_settings(config: &AppConfig) -> ApiSettings {
         .trusted_proxies
         .clone_from(&config.server.trusted_proxies);
     settings.anonymous_enabled = config.auth.anonymous_enabled;
+    settings.require_https = config.server.require_https;
+    settings.service_origin.clone_from(&config.server.base_url);
     settings.rate_limit = limits.rate_limit.enabled.then_some(RateLimitSettings {
         requests_per_second: limits.rate_limit.requests_per_second,
         burst: limits.rate_limit.burst,
@@ -261,17 +525,123 @@ mod tests {
         assert_eq!(options.max_connections, 123);
     }
 
+    /// A configuration that assembles without any service behind it: the database URL points at
+    /// a port nobody listens on, and nothing connects at assembly.
+    fn offline_config() -> AppConfig {
+        let mut config = AppConfig::default();
+        config.environment = rustryx_config::Environment::Development;
+        config.database.url = Some(ConfigSecret::new("postgres://u:p@127.0.0.1:1/rustryx"));
+        config.database.acquire_timeout_secs = 1;
+        config.server.base_url = Some("https://repo.example".into());
+        config
+    }
+
     #[tokio::test]
-    async fn nothing_is_wired_yet_and_the_node_says_so() {
-        let config = AppConfig::default();
+    async fn assembly_needs_no_database_and_wires_the_whole_node() {
         let metrics = MetricsHandle::new().expect("metrics");
-        let components = assemble(&config, &metrics).await.expect("assembles");
-        assert!(components.authenticator.is_none());
-        assert!(components.rbac.is_none());
-        assert!(components.modules.is_empty());
-        assert!(components.background.is_empty());
+        let components = assemble(&offline_config(), &metrics)
+            .await
+            .expect("assembles without reaching any service");
+        assert!(components.authenticator.is_some());
+        assert!(components.rbac.is_some());
+        assert!(components.sessions.is_some());
+        assert_eq!(components.modules.len(), 2, "native auth and artifacts");
+        let names: Vec<_> = components.background.iter().map(|task| task.name).collect();
+        for expected in [
+            "invalidation_bus",
+            "rbac_invalidation",
+            "auth_invalidation",
+            "blob_registry_invalidation",
+            "db_pool_sampler",
+            "runtime_sampler",
+            "db_maintenance",
+            "bootstrap",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "missing task {expected}: {names:?}"
+            );
+        }
+        assert!(
+            !names.contains(&"oidc_discovery"),
+            "no discovery task while OIDC is off"
+        );
+        let finalizers: Vec<_> = components.finalizers.iter().map(Finalizer::name).collect();
+        assert_eq!(
+            finalizers,
+            ["format_engine", "blob_stores", "database_pool"]
+        );
         let report = components.readiness.check().await;
         assert_eq!(report.database, rustryx_api::Outcome::Failed);
+    }
+
+    #[tokio::test]
+    async fn the_final_steps_run_cleanly_on_an_idle_node() {
+        let metrics = MetricsHandle::new().expect("metrics");
+        let components = assemble(&offline_config(), &metrics).await.unwrap();
+        let report =
+            crate::shutdown::run_all(components.finalizers, std::time::Duration::from_secs(10))
+                .await;
+        assert_eq!(report.abandoned, 0);
+        assert_eq!(report.finished, 3);
+    }
+
+    #[tokio::test]
+    async fn a_redis_lock_backend_is_refused_instead_of_replaced() {
+        let mut config = offline_config();
+        config.lock.backend = rustryx_config::LockBackendKind::Redis;
+        let metrics = MetricsHandle::new().expect("metrics");
+        let error = assemble(&config, &metrics).await.err().expect("refused");
+        assert!(format!("{error:#}").contains("lock.backend"), "{error:#}");
+    }
+
+    #[tokio::test]
+    async fn oidc_adds_a_discovery_task_and_the_browser_login() {
+        let mut config = offline_config();
+        config.auth.oidc.enabled = true;
+        config.auth.oidc.issuer = Some("https://kc.example/realms/r".into());
+        config.auth.oidc.client_id = Some("rustryx-ui".into());
+        config.auth.oidc.client_secret = Some(ConfigSecret::new("s3cret"));
+        let metrics = MetricsHandle::new().expect("metrics");
+        let components = assemble(&config, &metrics).await.expect("assembles");
+        assert!(
+            components
+                .background
+                .iter()
+                .any(|task| task.name == "oidc_discovery")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_malformed_key_stops_assembly_with_a_message_that_names_the_key() {
+        let mut config = offline_config();
+        config.database.sealing_key = Some(ConfigSecret::new("not-hex"));
+        let metrics = MetricsHandle::new().expect("metrics");
+        let error = assemble(&config, &metrics).await.err().expect("refused");
+        let text = format!("{error:#}");
+        assert!(text.contains("sealing"), "{text}");
+        assert!(
+            !text.contains("not-hex"),
+            "the value is never echoed: {text}"
+        );
+    }
+
+    #[test]
+    fn the_session_and_https_settings_reach_the_http_layer() {
+        let mut config = AppConfig::default();
+        config.server.require_https = false;
+        config.server.base_url = Some("https://repo.example".into());
+        let settings = api_settings(&config);
+        assert!(!settings.require_https);
+        assert_eq!(
+            settings.service_origin.as_deref(),
+            Some("https://repo.example")
+        );
+        config.server.require_https = true;
+        assert!(
+            api_settings(&config).require_https,
+            "on unless switched off"
+        );
     }
 
     #[test]

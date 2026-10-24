@@ -1,9 +1,9 @@
 //! Rules for `database`, `blob`, `lock` and `gc`.
 
 use super::Report;
-use crate::AppConfig;
 use crate::schema::{BlobKind, LockBackendKind};
 use crate::secret::ConfigSecret;
+use crate::{AppConfig, keyring};
 
 pub(super) fn database(config: &AppConfig, report: &mut Report) {
     let db = &config.database;
@@ -37,6 +37,7 @@ pub(super) fn database(config: &AppConfig, report: &mut Report) {
             postgres_url(config, "database.direct_url", secret, report);
         }
     }
+    sealing(config, report);
 }
 
 fn postgres_url(config: &AppConfig, key: &str, secret: &ConfigSecret, report: &mut Report) {
@@ -54,12 +55,62 @@ fn postgres_url(config: &AppConfig, key: &str, secret: &ConfigSecret, report: &m
         .query_pairs()
         .find(|(k, _)| k == "sslmode")
         .map(|(_, v)| v.into_owned());
-    let verified = matches!(sslmode.as_deref(), Some("verify-ca" | "verify-full"));
-    if config.is_production() && !verified {
-        report.warn(
+    // A Unix socket never crosses the network, so TLS does not apply to it.
+    let socket = url
+        .query_pairs()
+        .any(|(k, v)| k == "host" && v.starts_with('/'));
+    // `verify-ca` is not enough: it accepts any certificate the CA ever signed, whatever
+    // host it names, so a certificate for another service of the same CA impersonates the
+    // database. Only `verify-full` also checks the host name.
+    if config.is_production() && !socket && sslmode.as_deref() != Some("verify-full") {
+        report.err(
             key,
-            "production traffic to PostgreSQL should use sslmode=verify-full (or verify-ca)",
+            "must use sslmode=verify-full in production (certificate and host name are verified)",
         );
+    }
+}
+
+/// Sealing key ring: the key that seals upstream passwords in the database.
+fn sealing(config: &AppConfig, report: &mut Report) {
+    let db = &config.database;
+    let key = "database.sealing_key";
+    match db.sealing_key.as_ref() {
+        None if config.is_production() => {
+            report.require_secret(key, None);
+        }
+        None => report.warn(
+            key,
+            "not set: credentials of proxy repositories cannot be stored (set it before creating one)",
+        ),
+        Some(secret) if secret.is_blank() => report.err(key, "must not be blank"),
+        Some(secret) => {
+            let hex = secret.expose().trim();
+            if hex.len() != keyring::SEALING_KEY_HEX_CHARS || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+                report.err(key, "must be 64 hexadecimal characters (openssl rand -hex 32)");
+            } else if hex.bytes().all(|b| b == b'0') {
+                // What an unconfigured template looks like.
+                report.err(key, "must not be all zeros");
+            }
+        }
+    }
+    if !keyring::valid_sealing_id(&db.sealing_key_id) {
+        report.err(
+            "database.sealing_key_id",
+            "must be 1 to 32 characters of letters, digits, '_' or '-'",
+        );
+    }
+    if let Some(previous) = db.sealing_previous_keys.as_ref() {
+        match keyring::parse_sealing_previous(previous.expose()) {
+            Ok(entries) => {
+                if entries.iter().any(|(id, _)| *id == db.sealing_key_id) {
+                    report.err(
+                        "database.sealing_previous_keys",
+                        "must not reuse database.sealing_key_id: the current key id names one key only",
+                    );
+                }
+            }
+            Err(error) => report.err("database.sealing_previous_keys", error.to_string()),
+        }
     }
 }
 

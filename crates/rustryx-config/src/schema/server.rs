@@ -24,6 +24,10 @@ pub struct ServerConfig {
     pub trusted_proxies: Vec<IpNet>,
     /// Exact browser origins allowed by CORS. Empty means no CORS headers are sent.
     pub cors_allowed_origins: Vec<String>,
+    /// Refuse HTTP Basic credentials unless the request arrived over HTTPS. TLS ends in front
+    /// of the node, so "arrived over HTTPS" means: the peer is in `trusted_proxies` and its
+    /// `X-Forwarded-Proto` (or `Forwarded: proto=`) says `https`.
+    pub require_https: bool,
 }
 
 impl Default for ServerConfig {
@@ -35,6 +39,7 @@ impl Default for ServerConfig {
             drain_delay_secs: 0,
             trusted_proxies: Vec::new(),
             cors_allowed_origins: Vec::new(),
+            require_https: true,
         }
     }
 }

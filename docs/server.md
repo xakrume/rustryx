@@ -2,16 +2,16 @@
 
 `rustryx` is the single binary of the project (`crates/rustryx-server`). This page
 describes how it starts, serves and stops, what the HTTP layer
-(`crates/rustryx-api`) guarantees to every route, and, at the end, exactly what
-still has to be wired into the composition root. Configuration is described in
-[config.md](config.md).
+(`crates/rustryx-api`) guarantees to every route, how a module adds routes, and, at
+the end, what the composition root wires and what it does not. Configuration is
+described in [config.md](config.md).
 
 ## Commands
 
 | Command | What it does | Exit codes |
 |---|---|---|
 | `rustryx serve` | Runs the server. Never changes the database schema. | 0 after a graceful stop, 78 invalid configuration, 1 any other failure (for example the port is taken) |
-| `rustryx migrate` | Applies database migrations under an advisory lock. The only place the schema changes. Today it fails with a message that says it is not wired. | 0, 78, 1 |
+| `rustryx migrate` | Applies database migrations on `database.direct_url` (or `database.url`) under an advisory lock. The only place the schema changes. A node that is already serving turns ready by itself once the schema is there. | 0, 78, 1 |
 | `rustryx print-config [--no-validate]` | Prints the effective configuration as YAML, secrets as `[REDACTED]`. `--no-validate` skips the semantic rules, not the structural checks. | 0, 78 |
 
 `--config <path>` (short `-c`) works with every command and wins over
@@ -30,8 +30,11 @@ step blocks waiting for an external system.
    recorder is created and installed as the process-wide recorder.
 4. SIGTERM and SIGINT handlers are installed. A node that cannot receive its stop
    signal fails here instead of being unstoppable later.
-5. `wiring::assemble` builds the components. It must not run migrations and must
-   not wait for Keycloak, LDAP, Redis or S3: those are retried in the background.
+5. `wiring::assemble` builds the components. It does not run migrations and does not
+   wait for PostgreSQL, Keycloak, LDAP or S3: the pool connects lazily, Keycloak
+   discovery runs in a background task and LDAP binds on the first login. What stops
+   the process here is configuration that cannot work: a malformed key, an invalid
+   provider setting, `lock.backend: redis` (no such backend exists in this build).
 6. The listener is bound, readiness may report "listening", and the node logs
    `listening` with the bound address.
 
@@ -49,11 +52,17 @@ On SIGTERM or SIGINT:
    The drain is logged with the number of connections cut off.
 4. At the same moment the background-task token is cancelled and the tasks get the
    same deadline; stragglers are aborted.
-5. Logs and traces are flushed and the process exits with code 0.
+5. The final steps run in order, within a second budget of the same length: the format
+   engine stops its cache fills, lets uploads finish committing and flushes the download
+   counters (`FormatEngine::drain`), the blob stores finish their cleanup, and the
+   database pool closes last because the steps before it still write through it.
+6. Logs and traces are flushed and the process exits with code 0.
 
-Kubernetes: set `terminationGracePeriodSeconds` to `shutdown_timeout_secs +
-drain_delay_secs + 15`, and give the pod a `preStop` pause of at least the readiness
-period times its failure threshold unless `drain_delay_secs` covers it.
+Kubernetes: the worst case of steps 3 to 5 is twice `shutdown_timeout_secs` (the drain
+and the tasks share the first budget, the final steps get the second), so set
+`terminationGracePeriodSeconds` to `2 * shutdown_timeout_secs + drain_delay_secs + 15`,
+and give the pod a `preStop` pause of at least the readiness period times its failure
+threshold unless `drain_delay_secs` covers it.
 
 ## Endpoints owned by this layer
 
@@ -73,6 +82,21 @@ to the `readinessProbe` in the Helm chart.
 These three routes are outside the concurrency limit, the load shedder, the rate
 limiter and authentication: a node saturated with uploads must still answer its
 liveness probe.
+
+### Native authentication endpoints
+
+Mounted by `NativeAuthModule` (`crates/rustryx-api/src/native/`), contract in
+`docs/openapi/rustryx-api-v1.yaml`.
+
+| Route | Requires | Notes |
+|---|---|---|
+| `GET /api/v1/auth/providers` | public | Which sign-in methods are on. |
+| `POST /api/v1/auth/login` | public | Username and password, local or LDAP. Starts a cookie session. Its CSRF defence is the `Origin` check (the origin of `server.base_url` or of `server.cors_allowed_origins`; the `Host` when no base URL is set). A password starting with `ryx_` is refused: a token must not open a UI session. |
+| `GET /api/v1/auth/oidc/login`, `GET /api/v1/auth/oidc/callback` | public | Authorization code with PKCE. `return_to` is a plain absolute path, checked again on the way back. A failed callback redirects a browser to `/login?error=<code>` and answers anyone else with the envelope. |
+| `POST /api/v1/auth/logout` | public | Idempotent. Revokes the token id, drops the user's cached principals on every node and clears the cookies. |
+| `GET /api/v1/auth/session` | public | State of the session; `authenticated: false` for an anonymous caller. |
+| `POST /api/v1/auth/session/refresh`, `GET /api/v1/auth/csrf` | interactive | Reissue and CSRF token. An API token is refused here. |
+| `GET /api/v1/me` | public | The caller: roles, groups, permission summary, token policy. An anonymous caller gets what `nx-anonymous` may see. |
 
 ## What every route gets
 
@@ -98,11 +122,11 @@ Not found and wrong-method answers are envelopes too (`route_not_found`,
 
 ### Authentication
 
-The middleware reads `Authorization: Basic|Bearer` (and nothing else: a token in the
-query string is ignored), runs the authenticator chain from `AppState` and stores the
-`Principal` in the request extensions.
+The middleware reads `Authorization: Basic|Bearer` and the session cookie (and nothing
+else: a token in the query string is ignored), runs the authenticator chain from
+`AppState` and stores the `Principal` in the request extensions.
 
-- No header: anonymous, the authenticator is not called.
+- No credentials: anonymous, the authenticator is not called.
 - A header that is present but unusable (unknown scheme, bad base64, empty or NUL
   password, duplicated header, token outside the RFC 6750 alphabet): 401, never
   anonymous.
@@ -114,9 +138,47 @@ query string is ignored), runs the authenticator chain from `AppState` and store
 - The challenge defaults to `Basic realm="rustryx"`. The composition root can install
   a selector (`AppState::with_challenge_selector`) that answers `Bearer realm="pub"`
   on pub routes. A handler may also attach a challenge to its own 403.
-- `AppState::authorize(principal, action, resource)` is the deny-by-default floor for
-  handlers: no checker wired is 503, anonymous with the global switch off is 401, a
-  deny is 401 for anonymous and 403 otherwise.
+- `auth_attempts_total` is counted here, once per attempt, labelled with the method
+  that refused (the chain reports it). The chain's own counter is switched off
+  (`record_attempt_metrics: false`) so that no series is doubled.
+
+**Basic over plain HTTP.** TLS ends in front of the node, so a request is "HTTPS" only
+when the peer is in `server.trusted_proxies` and the right-most `X-Forwarded-Proto` (or
+`Forwarded: proto=`) says `https`. With `server.require_https` on (the default) HTTP
+Basic credentials from any other request are refused with 403 `https_required`, before
+the chain sees them. Bearer tokens, the session cookie (which is `Secure`) and `/metrics`
+are not subject to the guard. A development node on plain HTTP sets
+`RUSTRYX_SERVER_REQUIRE_HTTPS=false`.
+
+**Cookie session.** The web UI holds `__Host-rustryx_session` (the internal JWT,
+`HttpOnly`, `Secure`, `SameSite=Lax`) and `__Host-rustryx_csrf` (readable by script,
+`SameSite=Strict`); an SSO session also carries `__Host-rustryx_sso`. The session is
+stateless, so any node can serve it.
+
+| Limit | Value | Held by |
+|---|---|---|
+| Absolute | `auth.session.absolute_timeout_secs`, 8 hours at most | the token's `exp`, fixed at login and kept by every reissue |
+| Idle | `auth.session.idle_timeout_secs`, 30 minutes at most | `iat + idle`, checked before the chain; a request that finds less than half of it left reissues the token in the same response |
+| Group snapshot (SSO) | 5 minutes | the chain refuses an older snapshot (see the gap below) |
+
+A mutating request (`POST`, `PUT`, `PATCH`, `DELETE`) authenticated by the cookie must
+carry the CSRF token in `X-CSRF-Token` (equal to the CSRF cookie and the token of this
+session's id) and an `Origin` that is the service origin; otherwise 403 `csrf_rejected`.
+The one exception is `POST /api/v1/auth/login`, which has no session yet and relies on
+the `Origin` check alone. A stale cookie (idle, absolute, revoked, malformed) makes the
+request anonymous and tells the handler why, so an endpoint that needs a session answers
+`token_expired`; a failure of the dependency that verifies it is 503.
+
+**Deny by default.** A route is declared with a `Requires` (`Public`, `Authenticated`,
+`Interactive`, `Repo(action)`, `Project(permission)`, `App(area, action)`, `Admin`,
+`Delegated(reason)`), the route layer enforces what needs no resource and hands the
+handler an `Authorized<...>` proof as an extractor, and a handler that needs the
+resource asks `AppState::authorize*` itself. The proof type cannot be built outside the
+crate, and a route that is not `Public` whose handler answers 2xx or 3xx without any
+`authorize*` having succeeded is answered 500 `authorization_not_enforced` instead. The
+catalogue of declared routes is `RouterBuilder::build_with_catalog`, and a test walks it.
+`AppState::authorize` itself: no checker wired is 503, anonymous with the global switch
+off is 401, a deny is 401 for anonymous and 403 otherwise.
 
 The client address comes from the TCP peer; `X-Forwarded-For` is believed only when
 the peer is in `server.trusted_proxies`, read from the right.
@@ -152,27 +214,47 @@ instead of axum's plain text.
 
 ## Adding routes without editing this crate
 
+A feature is a `RouteModule`. It owns its state, and it declares each route with what the
+caller must be. `crates/rustryx-api/src/native/` (`NativeAuthModule`) is the worked
+example: state built from `RouteSet::app_state`, one `route(path, Requires, handler)` per
+endpoint, a proof taken as an extractor, response types in one file (`dto.rs`) that a test
+reads.
+
 ```rust
-struct MavenModule { /* its own state */ }
+struct WidgetModule { widgets: Arc<dyn WidgetRepo> }
 
-impl rustryx_api::RouteModule for MavenModule {
-    fn name(&self) -> &'static str { "maven" }
+#[derive(Clone)]
+struct WidgetApi { app: AppState, widgets: Arc<dyn WidgetRepo> }
 
-    // Artifact routes: no gzip, large body limit, idle timeouts.
-    fn mount_artifacts(&self, router: Router<AppState>) -> Router<AppState> {
-        router.merge(self.routes().with_state(self.state.clone()))
+impl RouteModule for WidgetModule {
+    fn name(&self) -> &'static str { "widgets" }
+
+    fn mount_api(&self, routes: RouteSet) -> RouteSet {
+        let api = WidgetApi { app: routes.app_state().clone(), widgets: self.widgets.clone() };
+        routes
+            .route("/api/v1/widgets", Requires::Authenticated, get(list).with_state(api.clone()))
+            // `Admin` is enforced before the handler; the proof proves it ran.
+            .route("/api/v1/widgets/{name}", Requires::Admin, delete(remove).with_state(api))
     }
+}
+
+async fn remove(State(api): State<WidgetApi>, proof: Authorized<AdminGrant>, ApiPath(name): ApiPath<String>)
+    -> Result<StatusCode, ApiError>
+{
+    api.widgets.delete(&name, proof.principal()).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 ```
 
-`Router::with_state(module_state)` turns a router over the module's own state into a
-`Router<AppState>`, so no field has to be added to `AppState`. A module has two hooks:
-`mount_api` (JSON metadata and management endpoints, for example `/service/rest/v1`)
-and `mount_artifacts` (package protocols, `/repository/{name}/...`, `/v2/...`). Handlers
-use `RequestPrincipal`, `AuthenticatedPrincipal`, `AppState::authorize`, `ApiError`,
-`record_repo(name)` (puts `repo` on the request span and so on every log line) and
-`ApiError::from_body_error` for body read failures. Add modules to
-`wiring::Components::modules`.
+A module has two hooks: `mount_api` (JSON endpoints under `/api/v1`) and
+`mount_artifacts` (package protocols). `RouteSet` has no way to add a route without a
+`Requires`; the one opt-out, `RouteSet::delegated(reason, router)`, is for the format
+engine, which authorizes per repository and coordinate and says so in the catalogue.
+For `Repo(..)` and `Project(..)` the handler calls `AppState::authorize` or
+`authorize_project` with the resource. Handlers use `RequestPrincipal`,
+`AuthenticatedPrincipal`, `ApiError`, `record_repo(name)` (puts `repo` on the request
+span and so on every log line) and `ApiError::from_body_error` for body read failures.
+Add modules to `wiring::assemble` (the `modules` list).
 
 ## Logs, metrics, traces
 
@@ -186,46 +268,63 @@ use `RequestPrincipal`, `AuthenticatedPrincipal`, `AppState::authorize`, `ApiErr
   directives); spans of this workspace stay enabled whatever the level, so that a
   warning still carries its request id.
 - Metrics: `http_requests_total{route,method,status}`,
-  `http_request_duration_seconds{route,method}` (time to the response head, buckets 5 ms
-  to 60 s), `http_requests_in_flight` (until the body finishes), `http_shed_total{reason}`,
-  `auth_attempts_total{method,result}` and the helpers for upstream, pool and job metrics
-  in `rustryx_observability::MetricsHandle`. The method label is bounded
-  (unknown methods become `OTHER`), the route label is a template or `unmatched`.
-  `process_*` and tokio runtime metrics are not emitted yet.
+  `http_request_duration_seconds{route,method,class,cache}` (time to the response head,
+  buckets 5 ms to 60 s; `class` is `metadata`, `download`, `upload`, `api` or `other`, `cache`
+  is `hit`, `miss`, `stale`, `bypass` or `none`, and the format engine decides both for
+  `/repository`), `http_requests_in_flight` (until the body finishes),
+  `http_shed_total{reason}`, `auth_attempts_total{method,result}`, `db_up`, the pool gauges,
+  `process_*` (Linux, from `/proc`) and `tokio_*` (workers, busy ratio, queue depth, alive
+  tasks), `background_job_*{task}`, and the helpers for upstream, pool and job metrics in
+  `rustryx_observability::MetricsHandle`. The method label is bounded (unknown methods
+  become `OTHER`), the route label is a template or `unmatched`. `tokio_blocking_queue_depth`
+  needs `--cfg tokio_unstable` and is not exported; `redis_up` is not exported because no
+  Redis backend exists in this build. The full catalogue is in `docs/slo.md`.
 - Traces: off unless `observability.otlp_endpoint` is set. gRPC or HTTP, parent-based
   sampling at `otlp_sample_ratio`, W3C trace context in and (via
   `propagation::inject_current_context`) out. Only this workspace's spans at info or
   above are exported. Keeping every error trace is the collector's job (tail sampling).
 
-## What the lead must wire
+## The composition root
 
-Everything below is concentrated in `crates/rustryx-server/src/wiring.rs`
-(`assemble`, `migrator`) unless noted. Nothing here may block startup on an external
-system other than PostgreSQL.
+`crates/rustryx-server/src/wiring.rs` is the one place that knows every crate; the pieces
+are in `src/wiring/`. `assemble` returns `Components`; `serve::run_server` runs them.
 
-| Component | What to do |
-|---|---|
-| Database | Build the pool from `config.database` (`effective_direct_url()` for advisory locks, `LISTEN` and migrations), implement `rustryx_api::ReadinessProbe` (`SELECT 1` and schema version: `UpToDate`, `Ahead`, `Behind`, `Unknown`) and put it in `Components::readiness`. Spawn a sampler that calls `MetricsHandle::set_db_pool` and `record_db_pool_wait`. |
-| Migrations | Implement `migrate::Migrator` over `rustryx-db` and return it from `wiring::migrator()`. `serve` must keep not migrating. |
-| Blob stores | Build the registry from `config.blob` (seed of the default store), respect `limits.max_blob_bytes`, `blob.local_min_free_percent`, the S3 part size. |
-| Authentication | Build the authenticator chain (local, token, internal JWT, OIDC bearer, LDAP) and the group resolver from `config.auth`; put the chain in `Components::authenticator`. OIDC discovery and JWKS fetches retry in the background. Own the semaphores `limits.effective_password_permits()` and `limits.effective_blocking_permits()` with the `limits.permit_wait()` deadline and answer `AuthError::Overloaded` when no permit is free. Emit `auth_attempts_total` in one place only: the middleware already does (method `unknown` on failures, because the chain does not say which authenticator refused); if the auth crate emits it too, remove one. |
-| Authorization | Put the `RbacChecker` in `Components::rbac`. |
-| Route modules | Mount `/service/rest/v1` (api), `/repository/{name}/...` and `/v2/...` (artifacts), one module per feature, in `Components::modules`. Install a challenge selector for pub (`Bearer realm="pub"` on both 401 and 403). |
-| Background tasks | Run schedulers, cleanup, blob GC and the RBAC invalidation listener as `supervisor::BackgroundTask`s in `Components::background`; they get the shutdown token and are restarted with back-off if they panic or exit. Use `config.lock` for the backend (one per process) and renew every `lock.renew_interval()`. |
-| Audit | Create the `AuditSink` and give it to the services; the HTTP layer already provides `request_id` and the client address (`RequestClientIp`) for audit events. |
-| Upstream | Enforce `config.upstream` (scheme and host allowlist, CIDR allowlist for internal mirrors, SSRF filter after DNS resolution, redirects, timeouts, retries) in the upstream client; emit `upstream_*` metrics through `MetricsHandle`. |
-| Config sections | `deny_unknown_fields` means a crate that needs a key the schema lacks (audit retention, docker upload limit, cleanup defaults, per-store settings) needs the key added in `rustryx-config` first (schema, key table, `RUSTRYX_BLESS_DOCS=1 cargo test -p rustryx-config docs_`, `config.example.yaml`). |
+| Component | Wired as | Notes |
+|---|---|---|
+| Database | lazy `PgPool` from `database.url`, `PgStore` over it | `PgReadiness`: `SELECT 1` plus `schema_status().is_serving()`, feeds `db_up`; a sampler publishes the pool gauges. `database.connect_timeout_secs` is not applied: the database crate has no knob for it (`acquire_timeout_secs` bounds the wait for a connection, connect included). |
+| Migrations | `PgMigrator` (`rustryx migrate`) | On `database.direct_url`, advisory lock, forward only. `serve` never migrates. |
+| Sealing | `AeadSealer` from the `database.sealing_*` ring | Production requires the key. In development without one a key for the process is generated and logged as a warning: sealed values do not survive a restart. |
+| Locks and invalidation | `PgLockBackend` and `PgInvalidationBus` on the direct URL | One shared `LISTEN` connection fans out to the RBAC caches, the authentication caches and the blob registry (`SharedBus`). `lock.backend: redis` is refused at startup: no Redis backend exists. |
+| Authentication | `AuthService` over `Passwords`, `InternalJwtService`, `LoginGuard`, `RoleMapper`, `JitProvisioner`, Keycloak and LDAP when enabled | Keys come from the rings (`auth.internal_jwt_key*`); development generates them when absent. `auth.jit_allowlist` feeds `jit_mode: allowlist`. Keycloak discovery is a supervised background task. |
+| Sessions | `SessionManager` with `JwtSessionIssuer` | The issuer also drops the user's cached principals on every node when a session is revoked: the chain caches a verified principal for 5 minutes without looking at the revocation list. |
+| Authorization | `Rbac` over the role and selector repositories | `auth.anonymous_enabled` is its global switch; an invalidation listener keeps its caches current. |
+| Blob stores | `BlobStoreRegistry` over the definitions in the database, adapted to the format engine's trait | The `blob.*` section only SEEDS the default store, once, after the schema exists. The row rules afterwards. Secrets are named by environment variable in the row, never stored. |
+| Format engine | `FormatEngine` with an EMPTY `FormatRegistry` | SSRF policy from `upstream.*`, routing rules through `RuleRoutingGate`, downloads counted by `DownloadBatcher` and flushed every `downloads.flush_interval_secs` and at shutdown. A request for an existing repository is answered by the engine with a 500 that says no handler is registered. Register a format in `wiring::formats::registry`. |
+| Routes | `NativeAuthModule` under `/api/v1`, `ArtifactModule` for `/repository/{name}/...` and `/v2/...` | `/v2` answers 404 in the OCI error format (`UNSUPPORTED`) until an OCI format is registered. |
+| First start | `bootstrap` task | Waits for a servable schema, then creates the bootstrap administrator (only when no administrator exists) and the default blob store, once, and parks. |
+| Maintenance | `db_maintenance` task, one node at a time under a lock | Creates audit partitions ahead, purges expired revocations and stale login counters. It does NOT drop old audit partitions: that deletes evidence and needs an archive step first. |
+| Samplers | pool and runtime samplers, metrics upkeep | `process_*` and `tokio_*`. |
+
+Not wired: the other native API resources (repositories, users, roles, tokens, audit,
+settings), any package format, an SSO session refresher (below), a Redis lock backend,
+the task framework (`rustryx-tasks` is empty), GC and the schedulers. Each is a module or a
+`BackgroundTask` added to `assemble`, and `Config sections` still applies: a crate that needs
+a key the schema lacks adds it to `rustryx-config` first (schema, key table,
+`RUSTRYX_BLESS_DOCS=1 cargo test -p rustryx-config docs_`, `config.example.yaml`).
 
 ## Known gaps and decisions
 
-- Basic credentials are accepted over plain HTTP. Rejecting them unless the request
-  arrived over TLS (directly or via a trusted proxy header) needs a policy for the
-  development compose setup and is left to the lead.
-- Deny-by-default for routes is a convention (`RequestPrincipal`,
-  `AuthenticatedPrincipal`, `AppState::authorize`), not enforced structurally: a handler
-  that never authorizes would serve anyone. A guard that fails a response whose handler
-  never authorized would enforce it; it was not built because public routes (status,
-  `/v2/` ping, login) need an explicit opt-out design first.
+- **SSO sessions last five minutes.** The chain refuses a group snapshot older than five
+  minutes, renewing it needs the Keycloak refresh token, and `OidcLoginFlow::complete` of
+  `rustryx-auth` returns only the identity (the refresh token is discarded, and the crate
+  has no refresh grant). Until `rustryx-auth` exposes both, a browser session started
+  through Keycloak ends five minutes after login; local and LDAP sessions are not
+  affected. The seam is ready: `SsoSessionRefresher` in `rustryx-api`, the sealed carrier
+  cookie, the `SessionManager` parameter.
+- The principal cache of the chain skips the revocation check for up to five minutes. Every
+  path that revokes something must therefore also invalidate the user on the bus; the
+  session logout does (`JwtSessionIssuer`), and so must token revocation and password
+  change when their endpoints are written.
 - The concurrency limit (`limits.max_in_flight_requests`) covers a request until its
   response head is produced. A long download body is then bounded only by
   `limits.max_connections` and the body idle timeout; a separate cap on concurrent
@@ -235,6 +334,8 @@ system other than PostgreSQL.
   timeout reaps slow clients. A separate internal probe port is a deployment option.
 - TLS is terminated in front of the node. `Strict-Transport-Security` is sent regardless
   (browsers ignore it over plain HTTP).
+- A reissued session token does not revoke the one it replaces: the old one stays valid
+  until its own idle end (30 minutes at most) and expires by itself.
 
 ## Running the tests
 
@@ -245,3 +346,10 @@ cargo test -p rustryx-config -p rustryx-observability -p rustryx-api -p rustryx-
 The server crate includes end-to-end tests that spawn the real binary, send it
 SIGTERM and SIGINT and inspect exit codes, output and ports. They need a `kill`
 executable in `PATH` (any Unix).
+
+`tests/postgres_serve.rs` runs the whole node against PostgreSQL 16 started with
+testcontainers (Docker required): it starts the server on an empty database, checks
+`/readyz` is 503, runs the migrations while the node is up, waits for ready, signs in as the
+bootstrap administrator, calls `/api/v1/me`, exercises the CSRF, origin and password refusals,
+reaches the format engine through `/repository`, scrapes `/metrics` and shuts down gracefully.
+The container removes itself after ten minutes if the test is killed.

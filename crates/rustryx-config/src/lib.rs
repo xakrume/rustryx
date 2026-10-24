@@ -14,6 +14,7 @@
 
 mod env;
 mod error;
+pub mod keyring;
 pub mod keys;
 mod load;
 mod overlay;
@@ -29,13 +30,15 @@ mod tests;
 
 pub use env::{EnvLookup, EnvSource, MapEnv, ProcessEnv};
 pub use error::{ConfigError, ConfigIssue, ConfigIssues, EXIT_CODE_CONFIG, IssueOrigin};
+pub use keyring::{JwtRing, KeyRingError, SealingRing};
 pub use load::{CONFIG_PATH_VAR, Loaded, load, load_without_rules, resolve_config_path};
 pub use resources::{logical_cpus, physical_cores};
 pub use schema::{
-    AppConfig, AuthConfig, BlobConfig, BlobKind, BootstrapAdminConfig, DatabaseConfig, Environment,
-    GcConfig, GroupStrategy, JitMode, LdapConfig, LimitsConfig, LockBackendKind, LockConfig,
-    LogFormat, ObservabilityConfig, OidcConfig, OtlpProtocol, RateLimitConfig, ServerConfig,
-    SessionConfig, UpstreamConfig,
+    AppConfig, AuthConfig, BlobConfig, BlobKind, BootstrapAdminConfig, DatabaseConfig,
+    DownloadsConfig, EgressConfig, EgressPolicyConfig, EgressProxyConfig, EgressSmtpConfig,
+    Environment, GcConfig, GroupStrategy, JitMode, LdapConfig, LimitsConfig, LockBackendKind,
+    LockConfig, LogFormat, ObservabilityConfig, OidcConfig, OtlpProtocol, OutboxConfig,
+    RateLimitConfig, ServerConfig, SessionConfig, TasksConfig, UpstreamConfig,
 };
 pub use secret::{ConfigSecret, REDACTED};
 

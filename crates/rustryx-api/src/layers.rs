@@ -16,7 +16,9 @@ use http::header::{self, HeaderName, HeaderValue};
 use http::{HeaderMap, Method};
 use http_body::{Frame, SizeHint};
 use http_body_util::Limited;
-use rustryx_observability::{InFlightGuard, MetricsHandle, UNMATCHED_ROUTE};
+use rustryx_observability::{
+    InFlightGuard, MetricsHandle, RequestLabelSlot, RequestLabels, UNMATCHED_ROUTE,
+};
 use tower::BoxError;
 use tower::load_shed::error::Overloaded;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -105,6 +107,9 @@ pub(crate) async fn observe(
         &state.settings().trusted_proxies,
     );
     request.extensions_mut().insert(ClientIp(client_ip));
+    // The format layer may put its labels here (class and cache of the request).
+    let label_slot = RequestLabelSlot::new();
+    request.extensions_mut().insert(label_slot.clone());
     let request_id = request
         .extensions()
         .get::<RequestId>()
@@ -136,7 +141,15 @@ pub(crate) async fn observe(
 
     span.record("status", status.as_u16());
     if let Some(metrics) = state.metrics() {
-        metrics.record_http_request(&route, method.as_str(), status.as_u16(), elapsed);
+        // A label set on the response wins over the slot of the request; what nobody set is
+        // derived from the route and the method.
+        let labels = response
+            .extensions()
+            .get::<RequestLabels>()
+            .copied()
+            .unwrap_or_default()
+            .or(label_slot.get());
+        metrics.record_http_request_with(&route, method.as_str(), status.as_u16(), elapsed, labels);
     }
     let duration_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
     span.in_scope(|| {

@@ -59,7 +59,7 @@ const RULES: &[(&str, &str)] = &[
     ),
     (r"\bryx_[A-Za-z0-9_\-]{8,}", "ryx_[REDACTED]"),
     (
-        r#"(?i)((?:^|[?&;\s])(?:access_token|id_token|refresh_token|token|password|passwd|secret|client_secret|api_key|apikey|code|sig|signature|x-amz-signature|x-amz-credential)=)[^&\s"']+"#,
+        r#"(?i)((?:^|[?&;\s])(?:access_token|id_token|refresh_token|token|password|passwd|secret|client_secret|api_key|apikey|code|sig|signature|x-amz-signature|x-amz-credential|x-amz-security-token)=)[^&\s"']+"#,
         "${1}[REDACTED]",
     ),
     (
@@ -182,6 +182,29 @@ mod tests {
             "request_id",
         ] {
             assert!(!Redactor::is_sensitive_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn must_not_log_the_signature_of_a_presigned_url() {
+        let r = redactor();
+        for (input, leaked) in [
+            (
+                "GET https://b.s3.example.org/key?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAEXAMPLE%2F20261024&X-Amz-Signature=0123456789abcdef",
+                "0123456789abcdef",
+            ),
+            (
+                "https://b.s3.example.org/key?X-Amz-Security-Token=FwoGZXIvYXdzEXAMPLE&X-Amz-Date=20261024",
+                "FwoGZXIvYXdzEXAMPLE",
+            ),
+            (
+                "https://acct.blob.example.net/c/o?sv=2023-11-03&sig=Zm9vYmFyYmF6%3D&se=2026-10-24T10%3A00%3A00Z",
+                "Zm9vYmFyYmF6",
+            ),
+        ] {
+            let out = r.scrub(input);
+            assert!(!out.contains(leaked), "{input} -> {out}");
+            assert!(out.contains("[REDACTED]"), "{input} -> {out}");
         }
     }
 

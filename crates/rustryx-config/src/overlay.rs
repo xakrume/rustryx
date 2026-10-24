@@ -201,6 +201,17 @@ fn parse_value(spec: &KeySpec, raw: &str) -> Result<Value, String> {
                 .map(|item| Value::String(item.to_owned()))
                 .collect(),
         )),
+        Kind::UIntList => raw
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(|item| {
+                item.parse::<u64>()
+                    .map(|n| Value::Number(Number::from(n)))
+                    .map_err(|_| "expected comma separated non-negative integers".to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Value::Sequence),
         Kind::Enum(variants) => {
             let lowered = raw.trim().to_ascii_lowercase();
             if variants.contains(&lowered.as_str()) {

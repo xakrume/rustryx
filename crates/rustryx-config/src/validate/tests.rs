@@ -26,8 +26,13 @@ fn valid() -> AppConfig {
         secret("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----");
     c.auth.cookie_key = secret(&STANDARD.encode([7_u8; 32]));
     c.observability.metrics_token = secret("0123456789abcdef0123");
+    c.database.sealing_key = secret(SEALING_KEY);
+    // TLS ends at an ingress: without a trusted proxy no request counts as HTTPS.
+    c.server.trusted_proxies = vec!["10.0.0.0/8".parse().expect("cidr")];
     c
 }
+
+const SEALING_KEY: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 
 fn dev() -> AppConfig {
     let mut c = valid();
@@ -106,6 +111,35 @@ fn must_not_start_production_without_required_secrets() {
         assert!(found.mentions(key), "missing {key}: {found}");
     }
     assert!(found.len() >= 5, "all errors come in one pass");
+}
+
+#[test]
+fn jit_allowlist_is_only_meaningful_in_allowlist_mode() {
+    use crate::JitMode;
+    let mut c = valid();
+    c.auth.jit_mode = JitMode::Allowlist;
+    assert!(
+        warnings(&c)
+            .iter()
+            .any(|w| w.contains("auth.jit_allowlist")),
+        "an empty list in allowlist mode lets nobody in"
+    );
+    c.auth.jit_allowlist = vec!["alice".into()];
+    assert!(warnings(&c).iter().all(String::is_empty));
+    c.auth.jit_mode = JitMode::Jit;
+    assert!(
+        warnings(&c).iter().any(|w| w.contains("ignored")),
+        "a list that nothing reads is reported"
+    );
+}
+
+#[test]
+fn must_not_accept_blank_or_padded_allowlist_entries() {
+    for bad in ["", "  ", " alice", "alice "] {
+        let mut c = valid();
+        c.auth.jit_allowlist = vec![bad.into()];
+        assert_fails(&c, "auth.jit_allowlist");
+    }
 }
 
 #[test]
@@ -409,18 +443,43 @@ fn must_not_request_offline_access() {
 }
 
 #[test]
-fn production_oidc_urls_must_be_https_but_development_may_use_http() {
-    let mut c = oidc_enabled();
-    c.auth.oidc.issuer = Some("http://sso.example/realms/main".into());
-    assert_fails(&c, "auth.oidc.issuer");
+fn must_not_accept_a_plain_http_oidc_issuer_in_any_environment() {
+    for env in [Environment::Production, Environment::Development] {
+        let mut c = oidc_enabled();
+        c.environment = env;
+        c.auth.oidc.issuer = Some("http://localhost:8080/realms/main".into());
+        assert_fails(&c, "auth.oidc.issuer");
+        let mut c = oidc_enabled();
+        c.environment = env;
+        c.auth.oidc.public_issuer_url = Some("http://public.example/realms/main".into());
+        assert_fails(&c, "auth.oidc.public_issuer_url");
+    }
+}
+
+#[test]
+fn production_base_url_must_be_https_but_development_may_use_http_on_localhost() {
     let mut c = oidc_enabled();
     c.server.base_url = Some("http://rustryx.example".into());
     assert_fails(&c, "server.base_url");
     let mut d = oidc_enabled();
     d.environment = Environment::Development;
-    d.auth.oidc.issuer = Some("http://localhost:8080/realms/main".into());
     d.server.base_url = Some("http://localhost:8081".into());
     assert_ok(&d);
+}
+
+#[test]
+fn must_not_accept_a_non_loopback_http_base_url_for_the_browser_login_in_development() {
+    let mut d = oidc_enabled();
+    d.environment = Environment::Development;
+    d.server.base_url = Some("http://repo.test:8081".into());
+    assert_fails(&d, "server.base_url");
+    // Without a client secret there is no browser login and no redirect URI to protect.
+    d.auth.oidc.client_secret = None;
+    d.server.base_url = Some("http://repo.test:8081".into());
+    assert!(
+        !issues(&d).mentions("server.base_url"),
+        "bearer validation only needs the issuer"
+    );
 }
 
 #[test]
@@ -641,16 +700,39 @@ fn direct_url_is_validated_when_set() {
 }
 
 #[test]
-fn production_warns_when_postgres_tls_is_not_verified() {
+fn must_not_accept_unverified_postgres_tls_in_production() {
+    for url in [
+        "postgres://u:p@h:5432/db",
+        "postgres://u:p@h:5432/db?sslmode=require",
+        "postgres://u:p@h:5432/db?sslmode=prefer",
+        "postgres://u:p@h:5432/db?sslmode=disable",
+        // verify-ca does not check the host name, so it is refused as well.
+        "postgres://u:p@h:5432/db?sslmode=verify-ca",
+    ] {
+        let mut c = valid();
+        c.database.url = secret(url);
+        assert_fails(&c, "database.url");
+        let mut direct = valid();
+        direct.database.direct_url = secret(url);
+        assert_fails(&direct, "database.direct_url");
+    }
+    // The message names the rule and never the URL (it carries the password).
     let mut c = valid();
-    c.database.url = secret("postgres://u:p@h:5432/db?sslmode=require");
-    assert!(
-        warnings(&c)
-            .iter()
-            .any(|w| w.contains("sslmode=verify-full"))
-    );
+    c.database.url = secret("postgres://u:hunter2-canary@h:5432/db?sslmode=require");
+    assert!(!issues(&c).to_string().contains("hunter2-canary"));
+}
+
+#[test]
+fn verify_full_and_unix_sockets_pass_in_production_and_development_is_lenient() {
+    let mut c = valid();
+    c.database.url = secret("postgres://u:p@h:5432/db?sslmode=verify-full&connect_timeout=3");
+    assert_ok(&c);
+    // A Unix socket never crosses the network, TLS does not apply.
+    c.database.url = secret("postgres:///db?host=/var/run/postgresql&user=rustryx");
+    assert_ok(&c);
     let mut d = dev();
     d.database.url = secret("postgres://u:p@h:5432/db");
+    assert_ok(&d);
     assert!(warnings(&d).iter().all(String::is_empty));
 }
 
@@ -933,4 +1015,373 @@ fn weak_password_detector_accepts_strong_values() {
     assert!(!is_weak_password("k9#Lm2$vQx7!pZ", "admin"));
     assert!(is_weak_password("", "admin"));
     assert!(is_weak_password("ADMIN123", "someone"));
+}
+
+// ---- sealing key ring ----------------------------------------------------------------
+
+#[test]
+fn must_not_start_production_without_a_sealing_key() {
+    let mut c = valid();
+    c.database.sealing_key = None;
+    assert_fails(&c, "database.sealing_key");
+    assert!(
+        issues(&c)
+            .to_string()
+            .contains("RUSTRYX_DATABASE_SEALING_KEY or RUSTRYX_DATABASE_SEALING_KEY_FILE")
+    );
+    // Development may run without it; it only warns, because storing the password of a
+    // proxy repository then fails.
+    let mut d = dev();
+    d.database.sealing_key = None;
+    assert_ok(&d);
+    assert!(
+        warnings(&d)
+            .iter()
+            .any(|w| w.contains("database.sealing_key"))
+    );
+}
+
+#[test]
+fn must_not_accept_a_malformed_or_template_sealing_key() {
+    for bad in [
+        String::new(),
+        "tooshort".to_owned(),
+        "zz".repeat(32),
+        "00".repeat(32),
+        format!("{}0", "ab".repeat(32)),
+    ] {
+        let mut c = valid();
+        c.database.sealing_key = secret(&bad);
+        assert_fails(&c, "database.sealing_key");
+    }
+    let mut c = valid();
+    c.database.sealing_key = secret("not-hex-canary-value");
+    assert!(!issues(&c).to_string().contains("not-hex-canary-value"));
+}
+
+#[test]
+fn sealing_key_id_and_previous_keys_are_checked() {
+    let mut c = valid();
+    c.database.sealing_key_id = "has.dot".into();
+    assert_fails(&c, "database.sealing_key_id");
+    c.database.sealing_key_id = String::new();
+    assert_fails(&c, "database.sealing_key_id");
+
+    let mut c = valid();
+    c.database.sealing_previous_keys = secret(&format!("k0:{SEALING_KEY}"));
+    assert_ok(&c);
+
+    c.database.sealing_previous_keys = secret("garbage");
+    assert_fails(&c, "database.sealing_previous_keys");
+    // The current id must name exactly one key.
+    c.database.sealing_previous_keys = secret(&format!("k1:{SEALING_KEY}"));
+    assert_fails(&c, "database.sealing_previous_keys");
+}
+
+#[test]
+fn direct_url_defaults_to_the_pooled_url_and_is_never_taken_from_elsewhere() {
+    let mut c = valid();
+    assert_eq!(
+        c.database.effective_direct_url().expect("url").expose(),
+        c.database.url.as_ref().expect("url").expose()
+    );
+    c.database.direct_url = secret("postgres://u:p@direct.example:5432/db?sslmode=verify-full");
+    assert!(
+        c.database
+            .effective_direct_url()
+            .expect("url")
+            .expose()
+            .contains("direct.example")
+    );
+    c.database.direct_url = secret("   ");
+    assert_fails(&c, "database.direct_url");
+}
+
+// ---- internal JWT ring ---------------------------------------------------------------
+
+fn pem_block(label: &str) -> String {
+    format!("-----BEGIN {label}-----\nAAAA\n-----END {label}-----")
+}
+
+#[test]
+fn jwt_ring_accepts_previous_keys_and_checks_ids() {
+    let mut c = valid();
+    c.auth.internal_jwt_key_id = "2026-10".into();
+    c.auth.internal_jwt_previous_keys =
+        secret(&format!("kid: 2026-09\n{}", pem_block("PUBLIC KEY")));
+    assert_ok(&c);
+    let ring = c.auth.jwt_ring().expect("parses").expect("configured");
+    assert_eq!(ring.current_id, "2026-10");
+    assert_eq!(ring.previous.len(), 1);
+
+    c.auth.internal_jwt_key_id = "bad id".into();
+    assert_fails(&c, "auth.internal_jwt_key_id");
+}
+
+#[test]
+fn must_not_reuse_the_current_kid_for_a_previous_key() {
+    let mut c = valid();
+    c.auth.internal_jwt_previous_keys = secret(&format!("kid: k1\n{}", pem_block("PUBLIC KEY")));
+    assert_fails(&c, "auth.internal_jwt_previous_keys");
+}
+
+#[test]
+fn must_not_accept_a_malformed_previous_jwt_key_list() {
+    for bad in [
+        pem_block("PUBLIC KEY"),
+        "kid: k0".to_owned(),
+        format!(
+            "kid: k0\n{}\nkid: k0\n{}",
+            pem_block("PUBLIC KEY"),
+            pem_block("PUBLIC KEY")
+        ),
+    ] {
+        let mut c = valid();
+        c.auth.internal_jwt_previous_keys = secret(&bad);
+        assert_fails(&c, "auth.internal_jwt_previous_keys");
+    }
+}
+
+// ---- OIDC authorized parties ---------------------------------------------------------
+
+#[test]
+fn authorized_parties_default_to_the_product_client_only() {
+    let c = oidc_enabled();
+    assert_eq!(c.auth.oidc.authorized_parties, Vec::<String>::new());
+    assert_eq!(
+        c.auth.oidc.effective_authorized_parties(),
+        [c.auth.oidc.client_id.clone().expect("client")]
+    );
+}
+
+#[test]
+fn authorized_parties_add_the_cli_and_never_drop_the_product_client() {
+    let mut c = oidc_enabled();
+    c.auth.oidc.authorized_parties = vec!["rustryx-cli".into()];
+    assert_ok(&c);
+    let client = c.auth.oidc.client_id.clone().expect("client");
+    assert_eq!(
+        c.auth.oidc.effective_authorized_parties(),
+        [client.clone(), "rustryx-cli".to_owned()]
+    );
+    c.auth.oidc.authorized_parties = vec![client.clone(), "rustryx-cli".into()];
+    assert_eq!(
+        c.auth.oidc.effective_authorized_parties().len(),
+        2,
+        "no duplicates"
+    );
+}
+
+#[test]
+fn must_not_accept_a_blank_or_joined_authorized_party() {
+    for bad in ["", "  ", "a b", "rustryx-ui,rustryx-cli"] {
+        let mut c = oidc_enabled();
+        c.auth.oidc.authorized_parties = vec![bad.into()];
+        assert_fails(&c, "auth.oidc.authorized_parties");
+    }
+}
+
+// ---- Basic over plain HTTP -----------------------------------------------------------
+
+#[test]
+fn require_https_is_on_by_default_and_warns_when_nobody_can_vouch_for_it() {
+    assert!(AppConfig::default().server.require_https);
+    let mut c = valid();
+    c.server.trusted_proxies.clear();
+    assert!(
+        warnings(&c)
+            .iter()
+            .any(|w| w.contains("server.require_https") && w.contains("always refused"))
+    );
+}
+
+#[test]
+fn must_warn_when_production_accepts_basic_over_plain_http() {
+    let mut c = valid();
+    c.server.require_https = false;
+    assert_ok(&c);
+    assert!(
+        warnings(&c)
+            .iter()
+            .any(|w| w.contains("server.require_https") && w.contains("plain HTTP"))
+    );
+    let mut d = dev();
+    d.server.require_https = false;
+    assert!(
+        warnings(&d).iter().all(String::is_empty),
+        "local work is quiet"
+    );
+}
+
+// ---- LDAP defaults -------------------------------------------------------------------
+
+#[test]
+fn ldap_group_cache_defaults_to_one_minute_inside_the_five_minute_window() {
+    let c = AppConfig::default();
+    assert_eq!(c.auth.ldap.groups_cache_ttl_secs, 60);
+    assert!(c.auth.ldap.groups_cache_ttl_secs <= 300);
+}
+
+// ---- wave 2 foundation ---------------------------------------------------------------
+
+#[test]
+fn foundation_defaults_follow_the_design() {
+    let c = AppConfig::default();
+    assert_eq!(
+        (
+            c.tasks.max_concurrent_runs,
+            c.tasks.scheduler_tick_secs,
+            c.tasks.run_retention_days,
+            c.tasks.log_retention_days
+        ),
+        (4, 15, 90, 30)
+    );
+    assert_eq!(
+        (c.outbox.retention_days, c.outbox.poll_interval_ms),
+        (30, 1000)
+    );
+    assert_eq!(
+        (c.downloads.flush_interval_secs, c.downloads.retention_days),
+        (10, 90)
+    );
+    assert_eq!(c.egress.registries.allowed_ports, [443]);
+    assert_eq!(c.egress.smtp.allowed_ports, [465, 587]);
+    assert!(
+        c.egress.proxy.allowed_hosts.is_empty(),
+        "the proxy setting is refused by default"
+    );
+    assert!(c.egress.webhooks.allow_private_cidrs.is_empty(), "SEC-34");
+    assert_eq!(c.tasks.scheduler_tick().as_secs(), 15);
+    assert_eq!(c.outbox.poll_interval().as_millis(), 1000);
+    assert_eq!(c.downloads.flush_interval().as_secs(), 10);
+    assert_ok(&valid());
+}
+
+#[test]
+fn foundation_values_are_bounded() {
+    let mut c = valid();
+    c.tasks.max_concurrent_runs = 0;
+    c.tasks.scheduler_tick_secs = 301;
+    c.tasks.run_retention_days = 0;
+    c.outbox.retention_days = 3651;
+    c.outbox.poll_interval_ms = 49;
+    c.downloads.flush_interval_secs = 0;
+    for key in [
+        "tasks.max_concurrent_runs",
+        "tasks.scheduler_tick_secs",
+        "tasks.run_retention_days",
+        "outbox.retention_days",
+        "outbox.poll_interval_ms",
+        "downloads.flush_interval_secs",
+    ] {
+        assert_fails(&c, key);
+    }
+}
+
+#[test]
+fn must_not_keep_task_logs_longer_than_their_runs() {
+    let mut c = valid();
+    c.tasks.run_retention_days = 30;
+    c.tasks.log_retention_days = 31;
+    assert_fails(&c, "tasks.log_retention_days");
+    c.tasks.log_retention_days = 30;
+    assert_ok(&c);
+}
+
+#[test]
+fn must_keep_download_counters_for_at_least_a_month_and_a_bit() {
+    let mut c = valid();
+    c.downloads.retention_days = 34;
+    assert_fails(&c, "downloads.retention_days");
+    c.downloads.retention_days = 35;
+    assert_ok(&c);
+}
+
+const HTTP_PURPOSES: [&str; 4] = ["registries", "webhooks", "scanners", "probe"];
+
+fn policy_mut<'a>(c: &'a mut AppConfig, purpose: &str) -> &'a mut crate::EgressPolicyConfig {
+    match purpose {
+        "registries" => &mut c.egress.registries,
+        "webhooks" => &mut c.egress.webhooks,
+        "scanners" => &mut c.egress.scanners,
+        _ => &mut c.egress.probe,
+    }
+}
+
+#[test]
+fn egress_policies_follow_the_rules_of_the_upstream_policy() {
+    for purpose in HTTP_PURPOSES {
+        let key = |name: &str| format!("egress.{purpose}.{name}");
+
+        let mut c = valid();
+        policy_mut(&mut c, purpose).allowed_schemes = vec!["http".into()];
+        assert_fails(&c, &key("allowed_schemes"));
+
+        // `http` needs the hosts it applies to, and the hosts need `http`.
+        let mut c = valid();
+        policy_mut(&mut c, purpose).allowed_schemes = vec!["https".into(), "http".into()];
+        assert_fails(&c, &key("allowed_schemes"));
+        policy_mut(&mut c, purpose).allow_insecure_http_hosts = vec!["mirror.internal".into()];
+        assert_ok(&c);
+        assert!(
+            warnings(&c)
+                .iter()
+                .any(|w| w.contains(&key("allowed_schemes")))
+        );
+        let mut c = valid();
+        policy_mut(&mut c, purpose).allow_insecure_http_hosts = vec!["mirror.internal".into()];
+        assert_fails(&c, &key("allow_insecure_http_hosts"));
+
+        let mut c = valid();
+        policy_mut(&mut c, purpose).allowed_schemes = vec!["ftp".into(), "https".into()];
+        assert_fails(&c, &key("allowed_schemes"));
+
+        let mut c = valid();
+        policy_mut(&mut c, purpose).allowed_hosts = vec!["https://x".into()];
+        assert_fails(&c, &key("allowed_hosts"));
+        policy_mut(&mut c, purpose).allowed_hosts = vec!["*.example.org".into()];
+        assert_ok(&c);
+
+        let mut c = valid();
+        policy_mut(&mut c, purpose).allowed_ports = Vec::new();
+        assert_fails(&c, &key("allowed_ports"));
+        policy_mut(&mut c, purpose).allowed_ports = vec![0];
+        assert_fails(&c, &key("allowed_ports"));
+    }
+}
+
+#[test]
+fn must_not_allow_private_cidrs_that_cover_loopback_or_metadata_in_any_egress_purpose() {
+    for net in ["127.0.0.0/8", "169.254.0.0/16", "0.0.0.0/0", "::/0"] {
+        let net: IpNet = net.parse().expect("cidr");
+        for purpose in HTTP_PURPOSES {
+            let mut c = valid();
+            policy_mut(&mut c, purpose).allow_private_cidrs = vec![net];
+            assert_fails(&c, &format!("egress.{purpose}.allow_private_cidrs"));
+        }
+        let mut c = valid();
+        c.egress.smtp.allow_private_cidrs = vec![net];
+        assert_fails(&c, "egress.smtp.allow_private_cidrs");
+    }
+    let mut c = valid();
+    c.egress.registries.allow_private_cidrs = vec!["10.20.0.0/16".parse().expect("cidr")];
+    c.egress.smtp.allow_private_cidrs = vec!["10.30.0.0/24".parse().expect("cidr")];
+    assert_ok(&c);
+}
+
+#[test]
+fn smtp_and_proxy_policies_check_hosts_and_ports() {
+    let mut c = valid();
+    c.egress.smtp.allowed_hosts = vec!["smtp://relay".into()];
+    assert_fails(&c, "egress.smtp.allowed_hosts");
+    c.egress.smtp.allowed_hosts = vec!["relay.example.org".into()];
+    c.egress.smtp.allowed_ports = Vec::new();
+    assert_fails(&c, "egress.smtp.allowed_ports");
+    c.egress.smtp.allowed_ports = vec![587];
+    assert_ok(&c);
+
+    c.egress.proxy.allowed_hosts = vec!["proxy.example.org:3128".into()];
+    assert_fails(&c, "egress.proxy.allowed_hosts");
+    c.egress.proxy.allowed_hosts = vec!["proxy.example.org".into()];
+    assert_ok(&c);
 }

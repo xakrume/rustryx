@@ -39,15 +39,25 @@ server:
   # CIDRs of peers allowed to set X-Forwarded-For (ingress, reverse proxy). The
   # client address used by the login guard and the audit log is taken from it only
   # when the direct peer is listed. /0 is refused.
+  # The same list decides whether a request counts as HTTPS (see require_https).
   # Env: RUSTRYX_SERVER_TRUSTED_PROXIES (comma separated). Default: [].
-  trusted_proxies: []
+  trusted_proxies:
+    - 10.0.0.0/8
   # Exact browser origins allowed by CORS, `scheme://host[:port]`. Empty sends no
   # CORS headers. `*` is refused. Env: RUSTRYX_SERVER_CORS_ALLOWED_ORIGINS.
   cors_allowed_origins: []
+  # Refuse HTTP Basic credentials unless the request arrived over HTTPS. TLS ends in
+  # front of the node, so a request counts as HTTPS only when its peer is in
+  # trusted_proxies and the right-most X-Forwarded-Proto (or Forwarded proto=) is
+  # https. Leave it on; turn it off only for local work on plain HTTP.
+  # Env: RUSTRYX_SERVER_REQUIRE_HTTPS. Default: true.
+  require_https: true
 
 database:
   # PostgreSQL URL. SECRET (carries the password). Required.
   # Env: RUSTRYX_DATABASE_URL or RUSTRYX_DATABASE_URL_FILE.
+  # Production requires sslmode=verify-full (certificate and host name are verified);
+  # a Unix socket (host=/var/run/postgresql) is exempt.
   # Example value: postgres://rustryx:<password>@db.example.org:5432/rustryx?sslmode=verify-full
   url: null
   # Non-pooled URL for advisory locks, LISTEN/NOTIFY and migrations. SECRET.
@@ -66,6 +76,19 @@ database:
   # statement_timeout of API connections, seconds.
   # Env: RUSTRYX_DATABASE_STATEMENT_TIMEOUT_SECS. Default: 30.
   statement_timeout_secs: 30
+  # AES-256 key, 64 hexadecimal characters (openssl rand -hex 32), that seals secrets
+  # stored in the database (upstream passwords of proxy repositories). SECRET.
+  # Required in production and identical on every node.
+  # Env: RUSTRYX_DATABASE_SEALING_KEY or RUSTRYX_DATABASE_SEALING_KEY_FILE.
+  sealing_key: null
+  # Id written into every sealed value, 1 to 32 characters of letters, digits, _ and -.
+  # Env: RUSTRYX_DATABASE_SEALING_KEY_ID. Default: k1.
+  sealing_key_id: k1
+  # Retired sealing keys that still open old values, `id:hex` entries separated by
+  # commas, spaces or new lines, at most 8. Rotation: set the new key as sealing_key
+  # with a new id, list the old one here, run the reseal job, then remove the entry.
+  # SECRET. Env: RUSTRYX_DATABASE_SEALING_PREVIOUS_KEYS or ..._PREVIOUS_KEYS_FILE.
+  sealing_previous_keys: null
 
 blob:
   # Name of the default blob store. Env: RUSTRYX_BLOB_STORE_NAME. Default: default.
@@ -108,10 +131,23 @@ auth:
   # Account creation for identity-provider users: jit | allowlist | manual.
   # Env: RUSTRYX_AUTH_JIT_MODE. Default: jit.
   jit_mode: jit
+  # Usernames that may get an account when jit_mode is allowlist (exact, case
+  # sensitive). Env: RUSTRYX_AUTH_JIT_ALLOWLIST (comma separated). Default: [].
+  jit_allowlist: []
   # PEM Ed25519 private key that signs internal JWTs. SECRET. Required in
   # production and identical on every node.
   # Env: RUSTRYX_AUTH_INTERNAL_JWT_KEY or RUSTRYX_AUTH_INTERNAL_JWT_KEY_FILE.
   internal_jwt_key: null
+  # `kid` written into the tokens signed with internal_jwt_key, 1 to 64 characters of
+  # letters, digits, '.', '_' and '-'. Env: RUSTRYX_AUTH_INTERNAL_JWT_KEY_ID.
+  # Default: k1.
+  internal_jwt_key_id: k1
+  # Retired signing keys that still verify tokens, so that a rotation does not force a
+  # re-login: `kid: <id>` lines, each followed by one PEM block (a public key is
+  # enough), at most 8. Rotation: set the new key as internal_jwt_key with a new id,
+  # list the old one here, wait one session lifetime (8 hours), then remove it.
+  # SECRET. Env: RUSTRYX_AUTH_INTERNAL_JWT_PREVIOUS_KEYS or ..._PREVIOUS_KEYS_FILE.
+  internal_jwt_previous_keys: null
   # Base64 of 32 random bytes sealing the OIDC state cookie (AES-256-GCM). SECRET.
   # Required in production and identical on every node (openssl rand -base64 32).
   # Env: RUSTRYX_AUTH_COOKIE_KEY or RUSTRYX_AUTH_COOKIE_KEY_FILE.
@@ -138,7 +174,7 @@ auth:
     # Keycloak login and bearer validation. Env: RUSTRYX_AUTH_OIDC_ENABLED.
     # Default: false.
     enabled: false
-    # Issuer URL, compared byte for byte with `iss`; https in production.
+    # Issuer URL, compared byte for byte with `iss`; https in every environment.
     # Env: RUSTRYX_AUTH_OIDC_ISSUER.
     issuer: "https://sso.example.org/realms/main"
     # Issuer as seen by browsers when it differs from `issuer` (split horizon).
@@ -169,6 +205,10 @@ auth:
     # Clock skew for exp, nbf and iat, seconds, at most 60.
     # Env: RUSTRYX_AUTH_OIDC_CLOCK_SKEW_SECS. Default: 60.
     clock_skew_secs: 60
+    # Values accepted for the `azp` claim besides client_id, for example the CLI client
+    # `rustryx-cli`. Empty means only client_id. The product client is always accepted.
+    # Env: RUSTRYX_AUTH_OIDC_AUTHORIZED_PARTIES (comma separated). Default: [].
+    authorized_parties: []
 
   ldap:
     # LDAP login. Env: RUSTRYX_AUTH_LDAP_ENABLED. Default: false.
@@ -204,8 +244,10 @@ auth:
     # Group DNs granting nx-admin by exact match.
     # Env: RUSTRYX_AUTH_LDAP_ADMIN_GROUPS (comma separated). Default: [].
     admin_groups: []
-    # PEM CA bundle for the server certificate, readable when LDAP is enabled.
-    # Env: RUSTRYX_AUTH_LDAP_CA_FILE. Default: unset (system roots only).
+    # PEM CA bundle for the server certificate, readable when LDAP is enabled. When set,
+    # ONLY the certificates in this file are trusted (the system roots are not
+    # consulted), so it must hold the whole chain the directory presents.
+    # Env: RUSTRYX_AUTH_LDAP_CA_FILE. Default: unset (system roots).
     ca_file: null
     # Connect timeout, seconds. Env: RUSTRYX_AUTH_LDAP_CONNECT_TIMEOUT_SECS.
     # Default: 5.
@@ -215,9 +257,10 @@ auth:
     # Search timeout, seconds. Env: RUSTRYX_AUTH_LDAP_SEARCH_TIMEOUT_SECS.
     # Default: 5.
     search_timeout_secs: 5
-    # Lifetime of confirmed group membership, seconds, at most 300.
-    # Env: RUSTRYX_AUTH_LDAP_GROUPS_CACHE_TTL_SECS. Default: 300.
-    groups_cache_ttl_secs: 300
+    # How long a confirmed group lookup is reused, seconds, at most 300. The chain
+    # accepts a group confirmation for five minutes in total, so keep this well below.
+    # Env: RUSTRYX_AUTH_LDAP_GROUPS_CACHE_TTL_SECS. Default: 60.
+    groups_cache_ttl_secs: 60
     # Maximum depth when expanding nested groups.
     # Env: RUSTRYX_AUTH_LDAP_NESTED_GROUP_DEPTH. Default: 5.
     nested_group_depth: 5
@@ -343,3 +386,116 @@ observability:
   # characters in production.
   # Env: RUSTRYX_OBSERVABILITY_METRICS_TOKEN or ..._METRICS_TOKEN_FILE.
   metrics_token: null
+
+tasks:
+  # Task runs one node executes at once (1 to 64).
+  # Env: RUSTRYX_TASKS_MAX_CONCURRENT_RUNS. Default: 4.
+  max_concurrent_runs: 4
+  # Seconds between looks at the schedule for due tasks (1 to 300).
+  # Env: RUSTRYX_TASKS_SCHEDULER_TICK_SECS. Default: 15.
+  scheduler_tick_secs: 15
+  # Days a finished run stays in the history (1 to 3650).
+  # Env: RUSTRYX_TASKS_RUN_RETENTION_DAYS. Default: 90.
+  run_retention_days: 90
+  # Days the log of a run is kept; at most run_retention_days because a log is deleted
+  # with its run. Env: RUSTRYX_TASKS_LOG_RETENTION_DAYS. Default: 30.
+  log_retention_days: 30
+
+outbox:
+  # Days events stay in the outbox before their partition is dropped (1 to 3650).
+  # Env: RUSTRYX_OUTBOX_RETENTION_DAYS. Default: 30.
+  retention_days: 30
+  # Milliseconds between polls of the outbox by a consumer (50 to 60000).
+  # Env: RUSTRYX_OUTBOX_POLL_INTERVAL_MS. Default: 1000.
+  poll_interval_ms: 1000
+
+downloads:
+  # Seconds between flushes of the download counters to PostgreSQL (1 to 3600).
+  # Env: RUSTRYX_DOWNLOADS_FLUSH_INTERVAL_SECS. Default: 10.
+  flush_interval_secs: 10
+  # Days of daily download counters kept (35 to 3650).
+  # Env: RUSTRYX_DOWNLOADS_RETENTION_DAYS. Default: 90.
+  retention_days: 90
+
+# Outbound policy per purpose, so that a webhook is never allowed what an internal mirror is.
+# These keys are the security boundary and are deliberately not editable through the API.
+# Loopback, link-local, metadata, multicast, unspecified and broadcast addresses can never
+# be allowlisted. Every HTTP purpose has the same five keys.
+egress:
+  registries:
+    # Registry endpoints and replication. Schemes must include https.
+    # Env: RUSTRYX_EGRESS_REGISTRIES_ALLOWED_SCHEMES. Default: [https].
+    allowed_schemes:
+      - https
+    # Hosts reachable over plain http. Env: RUSTRYX_EGRESS_REGISTRIES_ALLOW_INSECURE_HTTP_HOSTS.
+    # Default: [].
+    allow_insecure_http_hosts: []
+    # When not empty, only these hosts (exact or *.example.com) may be targets.
+    # Env: RUSTRYX_EGRESS_REGISTRIES_ALLOWED_HOSTS. Default: [].
+    allowed_hosts: []
+    # Destination ports. Env: RUSTRYX_EGRESS_REGISTRIES_ALLOWED_PORTS. Default: [443].
+    allowed_ports:
+      - 443
+    # Internal CIDRs allowed despite the SSRF filter.
+    # Env: RUSTRYX_EGRESS_REGISTRIES_ALLOW_PRIVATE_CIDRS. Default: [].
+    allow_private_cidrs: []
+  webhooks:
+    # Webhook deliveries. Redirects are never followed; internal ranges stay empty unless
+    # a webhook receiver lives inside the network. Env: RUSTRYX_EGRESS_WEBHOOKS_ALLOWED_SCHEMES.
+    # Default: [https].
+    allowed_schemes:
+      - https
+    # Env: RUSTRYX_EGRESS_WEBHOOKS_ALLOW_INSECURE_HTTP_HOSTS. Default: [].
+    allow_insecure_http_hosts: []
+    # Env: RUSTRYX_EGRESS_WEBHOOKS_ALLOWED_HOSTS. Default: [].
+    allowed_hosts: []
+    # Env: RUSTRYX_EGRESS_WEBHOOKS_ALLOWED_PORTS. Default: [443].
+    allowed_ports:
+      - 443
+    # Env: RUSTRYX_EGRESS_WEBHOOKS_ALLOW_PRIVATE_CIDRS. Default: [].
+    allow_private_cidrs: []
+  scanners:
+    # HTTP scanner adapters and scanner data set downloads.
+    # Env: RUSTRYX_EGRESS_SCANNERS_ALLOWED_SCHEMES. Default: [https].
+    allowed_schemes:
+      - https
+    # Env: RUSTRYX_EGRESS_SCANNERS_ALLOW_INSECURE_HTTP_HOSTS. Default: [].
+    allow_insecure_http_hosts: []
+    # Env: RUSTRYX_EGRESS_SCANNERS_ALLOWED_HOSTS. Default: [].
+    allowed_hosts: []
+    # Env: RUSTRYX_EGRESS_SCANNERS_ALLOWED_PORTS. Default: [443].
+    allowed_ports:
+      - 443
+    # Env: RUSTRYX_EGRESS_SCANNERS_ALLOW_PRIVATE_CIDRS. Default: [].
+    allow_private_cidrs: []
+  probe:
+    # The certificate fetch helper of the trust store: public addresses only unless
+    # allow_private_cidrs says otherwise. Env: RUSTRYX_EGRESS_PROBE_ALLOWED_SCHEMES.
+    # Default: [https].
+    allowed_schemes:
+      - https
+    # Env: RUSTRYX_EGRESS_PROBE_ALLOW_INSECURE_HTTP_HOSTS. Default: [].
+    allow_insecure_http_hosts: []
+    # Env: RUSTRYX_EGRESS_PROBE_ALLOWED_HOSTS. Default: [].
+    allowed_hosts: []
+    # Env: RUSTRYX_EGRESS_PROBE_ALLOWED_PORTS. Default: [443].
+    allowed_ports:
+      - 443
+    # Env: RUSTRYX_EGRESS_PROBE_ALLOW_PRIVATE_CIDRS. Default: [].
+    allow_private_cidrs: []
+  smtp:
+    # The mail relay (no URL, so no scheme). When not empty, only these hosts may be it.
+    # Env: RUSTRYX_EGRESS_SMTP_ALLOWED_HOSTS. Default: [].
+    allowed_hosts: []
+    # Relay ports: 465 (implicit TLS) and 587 (submission). Env: RUSTRYX_EGRESS_SMTP_ALLOWED_PORTS.
+    # Default: [465, 587].
+    allowed_ports:
+      - 465
+      - 587
+    # Internal CIDRs allowed for an internal relay.
+    # Env: RUSTRYX_EGRESS_SMTP_ALLOW_PRIVATE_CIDRS. Default: [].
+    allow_private_cidrs: []
+  proxy:
+    # Hosts an administrator may configure as the outbound HTTP proxy. Empty refuses the
+    # proxy setting. Env: RUSTRYX_EGRESS_PROXY_ALLOWED_HOSTS. Default: [].
+    allowed_hosts: []

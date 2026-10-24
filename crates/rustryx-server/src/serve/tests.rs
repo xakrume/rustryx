@@ -5,9 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use axum::Router;
 use axum::routing::get;
-use rustryx_api::{AppState, RouteModule};
+use rustryx_api::{Requires, RouteModule, RouteSet};
 use rustryx_config::{AppConfig, ConfigSecret, Environment};
 use rustryx_observability::MetricsHandle;
 use tokio::net::{TcpListener, TcpStream};
@@ -39,11 +38,12 @@ impl RouteModule for GateModule {
         "gate"
     }
 
-    fn mount_api(&self, router: Router<AppState>) -> Router<AppState> {
+    fn mount_api(&self, routes: RouteSet) -> RouteSet {
         let gate = self.gate.clone();
         let entered = self.entered.clone();
-        router.route(
+        routes.route(
             "/api/gate",
+            Requires::Public,
             get(move || {
                 let gate = gate.clone();
                 let entered = entered.clone();

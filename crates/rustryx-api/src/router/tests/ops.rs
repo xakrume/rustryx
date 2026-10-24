@@ -408,10 +408,75 @@ async fn request_duration_histogram_is_recorded_per_route() {
     let text = get_uri(&router, "/metrics").await.text();
     assert!(
         text.contains(
-            r#"http_request_duration_seconds_count{route="/api/only-get",method="GET"} 1"#
+            r#"http_request_duration_seconds_count{route="/api/only-get",method="GET",class="api",cache="none"} 1"#
         ),
         "{text}"
     );
+}
+
+/// A module whose artifact routes label themselves the two ways the format layer can.
+struct LabellingModule;
+
+impl RouteModule for LabellingModule {
+    fn name(&self) -> &'static str {
+        "labelling"
+    }
+
+    fn mount_artifacts(&self, routes: crate::RouteSet) -> crate::RouteSet {
+        use axum::extract::Extension;
+        use rustryx_observability::{CacheStatus, RequestClass, RequestLabelSlot, RequestLabels};
+        let fixture = axum::Router::new()
+            // Through the slot of the request.
+            .route(
+                "/repository/slot/index",
+                axum::routing::get(|Extension(slot): Extension<RequestLabelSlot>| async move {
+                    slot.set_class(RequestClass::Metadata);
+                    slot.set_cache(CacheStatus::Hit);
+                    "index"
+                }),
+            )
+            // Through an extension of the response, which wins over the slot.
+            .route(
+                "/repository/response/index",
+                axum::routing::get(|Extension(slot): Extension<RequestLabelSlot>| async move {
+                    slot.set_cache(CacheStatus::Hit);
+                    let mut response = axum::response::Response::new(Body::from("index"));
+                    response.extensions_mut().insert(
+                        RequestLabels::class(RequestClass::Metadata).with_cache(CacheStatus::Miss),
+                    );
+                    response
+                }),
+            )
+            .route(
+                "/repository/plain/blob",
+                axum::routing::get(|| async { "bytes" }).put(|| async { "stored" }),
+            );
+        routes.delegated("fixture", fixture)
+    }
+}
+
+#[tokio::test]
+async fn the_format_layer_labels_class_and_cache_through_the_slot_or_the_response() {
+    let router = RouterBuilder::new(ready_state())
+        .module(Arc::new(LabellingModule))
+        .build();
+    let _ = get_uri(&router, "/repository/slot/index").await;
+    let _ = get_uri(&router, "/repository/response/index").await;
+    let _ = get_uri(&router, "/repository/plain/blob").await;
+    let put = request(Method::PUT, "/repository/plain/blob")
+        .body(Body::empty())
+        .expect("req");
+    let _ = call(&router, put).await;
+    let text = get_uri(&router, "/metrics").await.text();
+    for expected in [
+        r#"route="/repository/slot/index",method="GET",class="metadata",cache="hit""#,
+        r#"route="/repository/response/index",method="GET",class="metadata",cache="miss""#,
+        // Nobody labelled these: the class comes from the route and the method.
+        r#"route="/repository/plain/blob",method="GET",class="download",cache="none""#,
+        r#"route="/repository/plain/blob",method="PUT",class="upload",cache="none""#,
+    ] {
+        assert!(text.contains(expected), "missing {expected}\n{text}");
+    }
 }
 
 // ---- fallbacks and modules -------------------------------------------------
@@ -455,8 +520,12 @@ impl RouteModule for SecondModule {
         "second"
     }
 
-    fn mount_api(&self, router: axum::Router<crate::AppState>) -> axum::Router<crate::AppState> {
-        router.route("/api/second", axum::routing::get(|| async { "second" }))
+    fn mount_api(&self, routes: crate::RouteSet) -> crate::RouteSet {
+        routes.route(
+            "/api/second",
+            crate::Requires::Public,
+            axum::routing::get(|| async { "second" }),
+        )
     }
 }
 

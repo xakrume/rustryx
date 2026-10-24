@@ -26,7 +26,8 @@ use tower::ServiceExt;
 
 use crate::{
     ApiError, ApiJson, ApiPath, ApiQuery, ApiSettings, AppState, AuthenticatedPrincipal, Lifecycle,
-    MetricsAccess, ProbeReport, ReadinessProbe, RequestPrincipal, RouteModule, RouterBuilder,
+    MetricsAccess, ProbeReport, ReadinessProbe, RequestPrincipal, Requires, RouteModule, RouteSet,
+    RouterBuilder,
 };
 
 /// Probe with a configurable answer, delay and call counter.
@@ -164,12 +165,7 @@ pub(crate) fn principal(name: &str, method: AuthMethod, role: &str) -> Principal
 }
 
 pub(crate) fn resource() -> ResourceRef {
-    ResourceRef {
-        repository: "maven-central".to_owned(),
-        format: RepoFormat::Maven2,
-        path: "org/example/lib.jar".to_owned(),
-        coordinate: None,
-    }
+    rustryx_testkit::fixtures::resource("maven-central", RepoFormat::Maven2, "org/example/lib.jar")
 }
 
 /// A state that is ready, with metrics and a public `/metrics`.
@@ -193,6 +189,9 @@ fn state_with_probe_and_settings(
     lifecycle.mark_listening();
     let mut settings = ApiSettings {
         metrics_access: MetricsAccess::Public,
+        // The tests that exercise HTTP Basic send it over the in-process transport, which is
+        // not HTTPS; the guard has its own tests that switch it on.
+        require_https: false,
         ..ApiSettings::default()
     };
     edit(&mut settings);
@@ -247,32 +246,36 @@ impl RouteModule for TestModule {
         "test"
     }
 
-    fn mount_api(&self, router: Router<AppState>) -> Router<AppState> {
+    fn mount_api(&self, routes: RouteSet) -> RouteSet {
         let gate = self.gate.clone();
-        let gated = Router::new()
-            .route("/api/gate", get(gated))
-            .with_state(gate);
-        router
-            .route("/api/whoami", get(whoami))
-            .route("/api/me", get(me))
-            .route("/api/panic", get(panics))
-            .route("/api/slow", get(slow))
-            .route("/api/echo", post(echo))
-            .route("/api/search", get(search))
-            .route("/api/items/{id}", get(item_by_id))
-            .route("/api/body", post(read_body))
-            .route("/api/large", get(large_json))
-            .route("/api/authz", get(authz))
-            .route("/api/csp", get(own_csp))
-            .route("/api/error/{kind}", get(error_of_kind))
-            .route("/api/only-get", get(|| async { "ok" }))
-            .merge(gated)
+        let gated = axum::routing::get(gated).with_state(gate);
+        routes
+            // Identity routes: the handler reads the principal itself and serves anonymous
+            // callers where the test wants to see that.
+            .route("/api/whoami", Requires::Public, get(whoami))
+            .route("/api/me", Requires::Public, get(me))
+            .route("/api/panic", Requires::Public, get(panics))
+            .route("/api/slow", Requires::Public, get(slow))
+            .route("/api/echo", Requires::Public, post(echo))
+            .route("/api/search", Requires::Public, get(search))
+            .route("/api/items/{id}", Requires::Public, get(item_by_id))
+            .route("/api/body", Requires::Public, post(read_body))
+            .route("/api/large", Requires::Public, get(large_json))
+            .route("/api/authz", Requires::Repo(Action::Read), get(authz))
+            .route("/api/csp", Requires::Public, get(own_csp))
+            .route("/api/error/{kind}", Requires::Public, get(error_of_kind))
+            .route("/api/only-get", Requires::Public, get(|| async { "ok" }))
+            .route("/api/gate", Requires::Public, gated)
     }
 
-    fn mount_artifacts(&self, router: Router<AppState>) -> Router<AppState> {
-        router
+    fn mount_artifacts(&self, routes: RouteSet) -> RouteSet {
+        let fixture = Router::new()
             .route("/repository/{name}/{*path}", get(artifact).post(upload))
-            .route("/repository-big/{name}", get(large_artifact))
+            .route("/repository-big/{name}", get(large_artifact));
+        routes.delegated(
+            "test artifact routes authorize nothing (a fixture)",
+            fixture,
+        )
     }
 }
 

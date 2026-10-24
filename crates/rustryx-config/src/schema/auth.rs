@@ -91,6 +91,30 @@ pub struct OidcConfig {
     pub scopes: Vec<String>,
     /// Clock skew tolerated for `exp`, `nbf` and `iat` (at most 60).
     pub clock_skew_secs: u64,
+    /// Values accepted for the `azp` claim of access tokens besides the product client id.
+    /// Empty means only `client_id`. A token of another client (the CLI) is accepted only
+    /// when that client is listed here: the second client is an explicit allowlist entry,
+    /// never implicit.
+    pub authorized_parties: Vec<String>,
+}
+
+impl OidcConfig {
+    /// The `azp` values to accept: `client_id` (when set) first, then the listed parties,
+    /// without duplicates. The product client is always included so that a list naming only
+    /// the CLI cannot lock the UI out.
+    #[must_use]
+    pub fn effective_authorized_parties(&self) -> Vec<String> {
+        let mut parties: Vec<String> = Vec::with_capacity(self.authorized_parties.len() + 1);
+        if let Some(client) = self.client_id.as_deref().filter(|c| !c.trim().is_empty()) {
+            parties.push(client.to_owned());
+        }
+        for party in &self.authorized_parties {
+            if !parties.contains(party) {
+                parties.push(party.clone());
+            }
+        }
+        parties
+    }
 }
 
 impl Default for OidcConfig {
@@ -110,6 +134,7 @@ impl Default for OidcConfig {
                 "email".to_owned(),
             ],
             clock_skew_secs: 60,
+            authorized_parties: Vec::new(),
         }
     }
 }
@@ -142,7 +167,10 @@ pub struct LdapConfig {
     pub group_filter: String,
     /// Group DNs that grant `nx-admin` by exact match.
     pub admin_groups: Vec<String>,
-    /// PEM bundle of the CA that signed the server certificate (in addition to system roots).
+    /// PEM bundle of the CA that signed the server certificate. When set, the LDAP client
+    /// trusts ONLY the certificates in this file (the system roots are not consulted), so
+    /// the bundle must hold the whole chain the directory presents. Unset means the
+    /// system roots.
     pub ca_file: Option<PathBuf>,
     /// Connect timeout.
     pub connect_timeout_secs: u64,
@@ -150,7 +178,9 @@ pub struct LdapConfig {
     pub bind_timeout_secs: u64,
     /// Search timeout.
     pub search_timeout_secs: u64,
-    /// How long confirmed group membership stays valid (at most 300).
+    /// How long a confirmed group lookup is reused (at most 300; 60 by default because the
+    /// authentication chain accepts a group confirmation for five minutes in total, and a
+    /// cache that ate that window would leave removed members their access).
     pub groups_cache_ttl_secs: u64,
     /// Maximum depth when expanding nested groups.
     pub nested_group_depth: u32,
@@ -177,7 +207,7 @@ impl Default for LdapConfig {
             connect_timeout_secs: 5,
             bind_timeout_secs: 5,
             search_timeout_secs: 5,
-            groups_cache_ttl_secs: 300,
+            groups_cache_ttl_secs: 60,
             nested_group_depth: 5,
             max_groups: 1000,
         }
@@ -220,8 +250,15 @@ pub struct AuthConfig {
     pub allow_local_role_supplement: bool,
     /// Account creation policy for identity-provider users.
     pub jit_mode: JitMode,
+    /// Usernames that may get an account when `jit_mode` is `allowlist`. Exact, case sensitive.
+    pub jit_allowlist: Vec<String>,
     /// PEM private key (Ed25519) that signs internal JWTs. Shared by all nodes.
     pub internal_jwt_key: Option<ConfigSecret>,
+    /// `kid` written into the tokens signed with `internal_jwt_key`.
+    pub internal_jwt_key_id: String,
+    /// Retired signing keys that still verify tokens, for a rotation without forced
+    /// re-login: `kid: <id>` lines each followed by one PEM block (public keys preferred).
+    pub internal_jwt_previous_keys: Option<ConfigSecret>,
     /// Base64 of 32 random bytes sealing the OIDC state cookie (AES-256-GCM).
     /// Shared by all nodes.
     pub cookie_key: Option<ConfigSecret>,
@@ -241,7 +278,10 @@ impl Default for AuthConfig {
             anonymous_enabled: false,
             allow_local_role_supplement: false,
             jit_mode: JitMode::Jit,
+            jit_allowlist: Vec::new(),
             internal_jwt_key: None,
+            internal_jwt_key_id: "k1".to_owned(),
+            internal_jwt_previous_keys: None,
             cookie_key: None,
             session: SessionConfig::default(),
             bootstrap_admin: BootstrapAdminConfig::default(),

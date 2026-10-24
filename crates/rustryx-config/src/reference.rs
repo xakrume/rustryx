@@ -47,6 +47,7 @@ fn type_label(spec: &KeySpec) -> String {
         Kind::Float => "number".to_owned(),
         Kind::Str | Kind::Secret => "string".to_owned(),
         Kind::StrList => "list".to_owned(),
+        Kind::UIntList => "list of integers".to_owned(),
         Kind::Enum(variants) => format!("`{}`", variants.join("` / `")),
     }
 }
@@ -70,6 +71,7 @@ fn render_default(value: &Value) -> String {
                 .iter()
                 .map(|item| match item {
                     Value::String(s) => format!("\"{s}\""),
+                    Value::Number(n) => n.to_string(),
                     other => format!("{other:?}"),
                 })
                 .collect();

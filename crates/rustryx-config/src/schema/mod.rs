@@ -8,8 +8,10 @@
 mod auth;
 mod blob;
 mod database;
+mod egress;
 mod limits;
 mod misc;
+mod platform;
 mod server;
 mod upstream;
 
@@ -20,10 +22,12 @@ pub use auth::{
 };
 pub use blob::{BlobConfig, BlobKind};
 pub use database::DatabaseConfig;
+pub use egress::{EgressConfig, EgressPolicyConfig, EgressProxyConfig, EgressSmtpConfig};
 pub use limits::{LimitsConfig, RateLimitConfig};
 pub use misc::{
     GcConfig, LockBackendKind, LockConfig, LogFormat, ObservabilityConfig, OtlpProtocol,
 };
+pub use platform::{DownloadsConfig, OutboxConfig, TasksConfig};
 pub use server::ServerConfig;
 pub use upstream::UpstreamConfig;
 
@@ -62,6 +66,14 @@ pub struct AppConfig {
     pub gc: GcConfig,
     /// Logging, metrics and tracing.
     pub observability: ObservabilityConfig,
+    /// Background task framework.
+    pub tasks: TasksConfig,
+    /// Event outbox.
+    pub outbox: OutboxConfig,
+    /// Download counters.
+    pub downloads: DownloadsConfig,
+    /// Outbound policy of registries, webhooks, scanners, mail and the trust store probe.
+    pub egress: EgressConfig,
 }
 
 impl Default for AppConfig {
@@ -77,6 +89,10 @@ impl Default for AppConfig {
             upstream: UpstreamConfig::default(),
             gc: GcConfig::default(),
             observability: ObservabilityConfig::default(),
+            tasks: TasksConfig::default(),
+            outbox: OutboxConfig::default(),
+            downloads: DownloadsConfig::default(),
+            egress: EgressConfig::default(),
         }
     }
 }

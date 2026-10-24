@@ -20,7 +20,11 @@
 //!    `server.shutdown_timeout_secs`, the rest are cut off;
 //! 4. at the same moment the background-task token is cancelled and the tasks get the
 //!    same deadline, after which stragglers are aborted;
-//! 5. logs and traces are flushed and the process exits with code 0.
+//! 5. the final steps run in order (the format engine drains and flushes the download
+//!    counters, the blob stores finish their cleanup, the database pool closes), within a
+//!    second budget of the same length: the worst case is therefore twice
+//!    `server.shutdown_timeout_secs`, which the pod's termination grace period must cover;
+//! 6. logs and traces are flushed and the process exits with code 0.
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -35,6 +39,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::listener::{self, DrainReport};
+use crate::shutdown;
 use crate::signals::StopSignals;
 use crate::supervisor::{BackgroundTask, StopReport, Supervisor};
 use crate::wiring::{self, Components};
@@ -133,6 +138,7 @@ pub async fn run_server(
     on_bound: Option<oneshot::Sender<SocketAddr>>,
 ) -> anyhow::Result<Outcome> {
     let background = std::mem::take(&mut components.background);
+    let finalizers = std::mem::take(&mut components.finalizers);
     let lifecycle = Lifecycle::new();
     let state = wiring::app_state(config, &components, lifecycle.clone(), metrics.clone());
     let mut builder = RouterBuilder::new(state);
@@ -187,10 +193,14 @@ pub async fn run_server(
             "shutdown deadline passed, open connections were cut off"
         );
     }
+    // Nothing serves or runs any more: what is left is to flush and close, in order.
+    let finalized = shutdown::run_all(finalizers, deadline).await;
     tracing::info!(
         accepted_connections = drain.accepted,
         stopped_tasks = background.stopped,
         aborted_tasks = background.aborted,
+        finished_steps = finalized.finished,
+        abandoned_steps = finalized.abandoned,
         "shutdown complete"
     );
     Ok(Outcome { drain, background })

@@ -4,7 +4,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 
 use super::Report;
-use crate::AppConfig;
+use crate::{AppConfig, keyring};
 
 /// Passwords refused in production. All lowercase; comparison lowercases the input.
 const WEAK_PASSWORDS: &[&str] = &[
@@ -92,8 +92,38 @@ pub(super) fn auth(config: &AppConfig, report: &mut Report) {
             "anonymous access is enabled in production",
         );
     }
+    jit_allowlist(config, report);
     bootstrap_admin(config, report);
     keys(config, report);
+}
+
+/// The allowlist is only read in `allowlist` mode. An empty one in that mode lets nobody in,
+/// which is safe but is almost always a forgotten key, so it is reported.
+fn jit_allowlist(config: &AppConfig, report: &mut Report) {
+    let auth = &config.auth;
+    let key = "auth.jit_allowlist";
+    if auth
+        .jit_allowlist
+        .iter()
+        .any(|name| name.trim().is_empty() || name.trim() != name)
+    {
+        report.err(
+            key,
+            "entries must be non-empty usernames without leading or trailing whitespace",
+        );
+    }
+    match auth.jit_mode {
+        crate::JitMode::Allowlist if auth.jit_allowlist.is_empty() => report.warn(
+            key,
+            "auth.jit_mode is allowlist and the list is empty: no identity-provider user can sign in",
+        ),
+        crate::JitMode::Allowlist => {}
+        _ if !auth.jit_allowlist.is_empty() => report.warn(
+            key,
+            "ignored: it is only read when auth.jit_mode is allowlist",
+        ),
+        _ => {}
+    }
 }
 
 fn bootstrap_admin(config: &AppConfig, report: &mut Report) {
@@ -167,6 +197,36 @@ pub(crate) fn is_weak_password(password: &str, username: &str) -> bool {
     WEAK_STEMS.contains(&stem)
 }
 
+/// The ids and the retired keys of the internal JWT ring.
+fn jwt_ring(config: &AppConfig, report: &mut Report) {
+    let auth = &config.auth;
+    if !keyring::valid_jwt_id(&auth.internal_jwt_key_id) {
+        report.err(
+            "auth.internal_jwt_key_id",
+            "must be 1 to 64 characters of letters, digits, '.', '_' or '-'",
+        );
+    }
+    let Some(previous) = auth.internal_jwt_previous_keys.as_ref() else {
+        return;
+    };
+    match keyring::parse_jwt_previous(previous.expose()) {
+        Ok(entries) => {
+            if entries
+                .iter()
+                .any(|(kid, _)| *kid == auth.internal_jwt_key_id)
+            {
+                // Two keys under one `kid` would make the verifier pick one of them at random
+                // from the token's point of view: the id has to name exactly one key.
+                report.err(
+                    "auth.internal_jwt_previous_keys",
+                    "must not reuse auth.internal_jwt_key_id: the current key id names one key only",
+                );
+            }
+        }
+        Err(error) => report.err("auth.internal_jwt_previous_keys", error.to_string()),
+    }
+}
+
 fn keys(config: &AppConfig, report: &mut Report) {
     let auth = &config.auth;
     let jwt = "auth.internal_jwt_key";
@@ -183,6 +243,8 @@ fn keys(config: &AppConfig, report: &mut Report) {
             }
         }
     }
+
+    jwt_ring(config, report);
 
     let cookie = "auth.cookie_key";
     match auth.cookie_key.as_ref() {

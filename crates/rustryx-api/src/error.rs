@@ -25,7 +25,7 @@ use axum::body::Body;
 use axum::response::{IntoResponse, Response};
 use http::{HeaderValue, StatusCode, header};
 use rustryx_core::error::BoxedSource;
-use rustryx_core::{AuthError, BlobError, DomainError, StoreError};
+use rustryx_core::{AuthError, BlobError, DomainError, PolicyViolation, StoreError, UpstreamError};
 use serde::Serialize;
 
 use crate::request_id::current_request_id;
@@ -175,6 +175,27 @@ impl ApiError {
         )
     }
 
+    /// 403 `csrf_rejected`: a cookie authenticated request that can change state lacks a valid
+    /// CSRF token or a service `Origin`.
+    #[must_use]
+    pub fn csrf_rejected() -> Self {
+        Self::new(
+            StatusCode::FORBIDDEN,
+            "csrf_rejected",
+            "The request was refused: its CSRF token or origin is not valid",
+        )
+    }
+
+    /// 403 `https_required`: HTTP Basic credentials on a request that is not HTTPS.
+    #[must_use]
+    pub fn https_required() -> Self {
+        Self::new(
+            StatusCode::FORBIDDEN,
+            "https_required",
+            "Credentials are only accepted over HTTPS",
+        )
+    }
+
     /// 403.
     #[must_use]
     pub fn forbidden() -> Self {
@@ -279,6 +300,14 @@ impl ApiError {
             "Internal server error",
         )
         .with_source(Box::<dyn StdError + Send + Sync>::from(detail))
+    }
+
+    /// Replaces the public code, keeping status and message. For the few places that report a
+    /// code of their own over a generic constructor.
+    #[must_use]
+    pub(crate) fn with_code(mut self, code: &'static str) -> Self {
+        self.0.code = Cow::Borrowed(code);
+        self
     }
 
     /// Attaches the error that caused this one, for the log chain.
@@ -481,7 +510,17 @@ impl From<StoreError> for ApiError {
                 "The request conflicts with the current state",
             ),
             StoreError::Unavailable(_) => Self::unavailable("store_unavailable"),
-            StoreError::Backend { .. } => internal_from(),
+            // The text of a store's `Invalid` is for the log; the client learns the code.
+            StoreError::Invalid(text) if text == "invalid page token" => Self::bad_request(
+                "invalid_page_token",
+                "The page token is malformed or was issued for another request",
+            ),
+            StoreError::Invalid(_) => {
+                Self::bad_request("invalid_input", "The request contains an invalid value")
+            }
+            // Includes `Backend` and every variant added later: an unknown failure is never an
+            // allow and never a 404.
+            _ => internal_from(),
         };
         base.with_source(Box::new(err))
     }
@@ -501,7 +540,17 @@ impl From<BlobError> for ApiError {
                 "range_not_satisfiable",
                 "The requested range cannot be satisfied",
             ),
-            BlobError::WriterClosed | BlobError::Backend { .. } => internal_from(),
+            BlobError::InsufficientStorage => Self::new(
+                StatusCode::INSUFFICIENT_STORAGE,
+                "insufficient_storage",
+                "The blob store has no space left",
+            ),
+            BlobError::Overloaded { retry_after } => {
+                Self::overloaded(retry_after.unwrap_or(DEFAULT_RETRY_AFTER))
+            }
+            // A bad key is a caller bug and `Unsupported` an unprobed capability: 500, and the
+            // cause goes to the log. `WriterClosed`, `Backend` and later variants end here too.
+            _ => internal_from(),
         };
         base.with_source(Box::new(err))
     }
@@ -543,12 +592,14 @@ impl From<AuthError> for ApiError {
                 "username_conflict",
                 "The username is already used by another identity source",
             ),
-            // Fail closed: a group lookup that failed is "no access", not "no groups".
-            AuthError::GroupLookupFailed(_) => Self::forbidden(),
+            // Fail closed: a group lookup that failed is "no access", not "no groups". And no
+            // mapped group and no default role, or not provisioned: the identity is real and
+            // refused, which is a 403 and not a 401.
+            AuthError::GroupLookupFailed(_) | AuthError::AccessDenied(_) => Self::forbidden(),
             AuthError::ProviderUnavailable(_) => Self::unavailable("identity_provider_unavailable"),
             AuthError::Overloaded => Self::overloaded(DEFAULT_RETRY_AFTER),
             AuthError::GuardUnavailable => Self::unavailable("login_unavailable"),
-            AuthError::Backend { .. } => internal_from(),
+            _ => internal_from(),
         };
         base.with_source(Box::new(err))
     }
@@ -591,8 +642,57 @@ impl From<DomainError> for ApiError {
             DomainError::Unavailable(_) => {
                 Self::unavailable("dependency_unavailable").with_source(Box::new(err))
             }
-            DomainError::Internal(_) => internal_from().with_source(Box::new(err)),
+            DomainError::Upstream(ref inner) => upstream_error(inner).with_source(Box::new(err)),
+            DomainError::Violation(ref violation) => {
+                violation_error(violation).with_source(Box::new(err))
+            }
+            // `Internal` and every variant added later.
+            _ => internal_from().with_source(Box::new(err)),
         }
+    }
+}
+
+fn upstream_error(error: &UpstreamError) -> ApiError {
+    if error.http_status() == 504 {
+        ApiError::upstream_timeout()
+    } else {
+        ApiError::upstream_error()
+    }
+}
+
+/// A policy refusal as the API contract spells it (docs/api-conventions.md section 5.2), not
+/// as `PolicyViolation::label` does: that is the metric label.
+fn violation_error(violation: &PolicyViolation) -> ApiError {
+    match violation {
+        PolicyViolation::QuotaExceeded(_) => ApiError::new(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "quota_exceeded",
+            "The storage quota would be exceeded",
+        ),
+        // The contract wins over the design text, which said `read_only`.
+        PolicyViolation::ReadOnly => ApiError::unavailable("read_only_mode"),
+        PolicyViolation::Immutable { .. } => ApiError::new(
+            StatusCode::CONFLICT,
+            "immutable_tag",
+            "An immutability rule protects this item",
+        ),
+        PolicyViolation::WritePolicy(_) => ApiError::new(
+            StatusCode::CONFLICT,
+            "write_policy_violation",
+            "The repository write policy forbids this write",
+        ),
+        PolicyViolation::AlreadyExists => ApiError::new(
+            StatusCode::CONFLICT,
+            "already_exists",
+            "The item already exists",
+        ),
+        // A hold, an approval requirement and any refusal added later: a conflict with the
+        // state of the item, nothing was changed.
+        _ => ApiError::new(
+            StatusCode::CONFLICT,
+            "conflict",
+            "The request conflicts with the current state",
+        ),
     }
 }
 
