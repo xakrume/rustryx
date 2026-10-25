@@ -7,6 +7,7 @@
 //! | ops | `/healthz`, `/readyz`, `/metrics` | none of the limiting layers, no authentication |
 //! | api | metadata and management routes | load shed, timeout, body limit, CORS, compression, no-store, authentication |
 //! | artifacts | package format routes | load shed, timeout, large body limit and idle timeouts, authentication |
+//! | ui | fallback for the embedded SPA, when the composition root supplies one | compression; no authentication |
 //!
 //! Over all three, outermost first: request id, request span and metrics, static
 //! security headers, panic recovery. Compression is not applied to artifacts:
@@ -42,6 +43,7 @@ use crate::rate_limit::{
 use crate::request_id::request_id_layer;
 use crate::routes::{RouteCatalog, RouteSet};
 use crate::state::AppState;
+use crate::ui::{WebUi, ui_service};
 
 /// A feature that contributes routes without editing this crate.
 ///
@@ -75,6 +77,7 @@ pub trait RouteModule: Send + Sync {
 pub struct RouterBuilder {
     state: AppState,
     modules: Vec<Arc<dyn RouteModule>>,
+    web_ui: Option<Arc<dyn WebUi>>,
 }
 
 impl RouterBuilder {
@@ -84,6 +87,7 @@ impl RouterBuilder {
         Self {
             state,
             modules: Vec::new(),
+            web_ui: None,
         }
     }
 
@@ -94,6 +98,17 @@ impl RouterBuilder {
         self
     }
 
+    /// Serves the embedded web UI as the fallback.
+    ///
+    /// Without this, an unknown path is the JSON 404. With it, a browser route
+    /// receives `index.html` and a hashed asset is served from `ui`. API and
+    /// protocol prefixes are unchanged.
+    #[must_use]
+    pub fn web_ui(mut self, ui: Arc<dyn WebUi>) -> Self {
+        self.web_ui = Some(ui);
+        self
+    }
+
     /// Assembles the router.
     pub fn build(self) -> Router {
         self.build_with_catalog().0
@@ -101,7 +116,11 @@ impl RouterBuilder {
 
     /// Assembles the router and lists every route that was declared, with its requirement.
     pub fn build_with_catalog(self) -> (Router, RouteCatalog) {
-        let Self { state, modules } = self;
+        let Self {
+            state,
+            modules,
+            web_ui,
+        } = self;
         let mut api = RouteSet::new(state.clone());
         let mut artifacts = RouteSet::new(state.clone());
         for module in &modules {
@@ -154,11 +173,11 @@ impl RouterBuilder {
             guard.as_ref(),
         );
 
-        let router = Router::new()
-            .merge(ops)
-            .merge(api)
-            .merge(artifacts)
-            .fallback(not_found);
+        let router = Router::new().merge(ops).merge(api).merge(artifacts);
+        let router = match web_ui {
+            Some(ui) => router.fallback_service(ui_service(ui)),
+            None => router.fallback(not_found),
+        };
         // Applied last so that they also wrap the fallbacks: a 404 for an unknown
         // path still gets a request id, security headers and a metrics sample.
         let router = router

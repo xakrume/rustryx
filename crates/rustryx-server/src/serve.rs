@@ -28,6 +28,7 @@
 
 use std::future::Future;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -145,7 +146,7 @@ pub async fn run_server(
     for module in &components.modules {
         builder = builder.module(module.clone());
     }
-    let router = builder.build();
+    let router = builder.web_ui(Arc::new(crate::ui::EmbeddedUi)).build();
 
     let addr = config.server.listen_addr;
     let tcp = TcpListener::bind(addr)

@@ -6233,6 +6233,17 @@ export interface components {
                 name: string;
             } | null;
             stats: components["schemas"]["RepositoryStats"] | null;
+            /** Vulnerability totals from stored findings. Absent unless `include=stats`. */
+            health: {
+              scanned: boolean;
+              component_count: number;
+              scanned_components: number;
+              critical: number;
+              severe: number;
+              moderate: number;
+              licenses: { copyleft: number; non_standard: number; other: number };
+              scanned_at: string | null;
+            } | null;
             permissions: components["schemas"]["RepositoryPermissions"];
             upstream: components["schemas"]["UpstreamStatus"] | null;
             /** @description `allow_anonymous` and the global switch are both on. */

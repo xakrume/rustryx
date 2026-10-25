@@ -7,7 +7,7 @@ use super::{
     MAX_FINDING_TITLE_CHARS, MAX_SCAN_ERROR_CHARS, MAX_VULN_ID_LEN, ScanKind, ScannerKind, Severity,
 };
 use crate::error::DomainError;
-use crate::ids::{ComponentId, ScanReportId, ScannerId, UserId};
+use crate::ids::{ComponentId, RepositoryId, ScanReportId, ScannerId, UserId};
 
 /// State of a scan report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -210,6 +210,131 @@ pub fn normalize_vuln_id(raw: &str) -> Result<String, DomainError> {
         ));
     }
     Ok(id.to_ascii_uppercase())
+}
+
+/// compat-style vulnerability bucket from a CVSS base score.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VulnBucket {
+    /// CVSS 7.0–10.0.
+    Critical,
+    /// CVSS 4.0–6.9.
+    Severe,
+    /// CVSS 1.0–3.9.
+    Moderate,
+}
+
+/// Puts a score into a compat bucket. A missing score uses the severity label: critical and
+/// high count as critical (7+), medium as severe, low as moderate. Negligible and unknown
+/// stay out of the three counters.
+#[must_use]
+pub fn cvss_bucket(cvss: Option<f32>, severity: Severity) -> Option<VulnBucket> {
+    let score = cvss.unwrap_or(match severity {
+        Severity::Critical | Severity::High => 9.0,
+        Severity::Medium => 5.0,
+        Severity::Low => 2.0,
+        Severity::Negligible | Severity::Unknown => return None,
+    });
+    if (7.0..=10.0).contains(&score) {
+        Some(VulnBucket::Critical)
+    } else if (4.0..7.0).contains(&score) {
+        Some(VulnBucket::Severe)
+    } else if (1.0..4.0).contains(&score) {
+        Some(VulnBucket::Moderate)
+    } else {
+        None
+    }
+}
+
+/// License warning counters. The scan model does not store a license yet, so these stay zero.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LicenseBuckets {
+    /// Copyleft.
+    pub copyleft: u64,
+    /// A license the policy does not recognize.
+    pub non_standard: u64,
+    /// Every other license warning.
+    pub other: u64,
+}
+
+/// Vulnerability and license totals for one repository, counted from stored findings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RepositoryHealth {
+    /// The repository.
+    pub repository_id: RepositoryId,
+    /// False until at least one component has a completed scan.
+    pub scanned: bool,
+    /// Components in the repository.
+    pub component_count: u64,
+    /// Components whose current vulnerability report is complete.
+    pub scanned_components: u64,
+    /// Findings with CVSS 7–10.
+    pub critical: u64,
+    /// Findings with CVSS 4–6.
+    pub severe: u64,
+    /// Findings with CVSS 1–3.
+    pub moderate: u64,
+    /// License warnings. Zero until a license is stored on a component.
+    pub licenses: LicenseBuckets,
+    /// Newest completed scan time among the repository's components.
+    #[serde(default, with = "crate::rfc3339::option")]
+    pub scanned_at: Option<OffsetDateTime>,
+}
+
+impl RepositoryHealth {
+    /// Zeros and `scanned: false`.
+    #[must_use]
+    pub fn unscanned(repository_id: RepositoryId) -> Self {
+        Self {
+            repository_id,
+            scanned: false,
+            component_count: 0,
+            scanned_components: 0,
+            critical: 0,
+            severe: 0,
+            moderate: 0,
+            licenses: LicenseBuckets::default(),
+            scanned_at: None,
+        }
+    }
+
+    /// Adds one finding to the matching bucket.
+    pub fn record(&mut self, finding: &Finding) {
+        match cvss_bucket(finding.cvss, finding.severity) {
+            Some(VulnBucket::Critical) => self.critical = self.critical.saturating_add(1),
+            Some(VulnBucket::Severe) => self.severe = self.severe.saturating_add(1),
+            Some(VulnBucket::Moderate) => self.moderate = self.moderate.saturating_add(1),
+            None => {}
+        }
+    }
+
+    /// Sums member repositories into a group row. An empty member list stays unscanned.
+    #[must_use]
+    pub fn sum(repository_id: RepositoryId, parts: &[Self]) -> Self {
+        let mut total = Self::unscanned(repository_id);
+        for part in parts {
+            total.scanned |= part.scanned;
+            total.component_count = total.component_count.saturating_add(part.component_count);
+            total.scanned_components = total
+                .scanned_components
+                .saturating_add(part.scanned_components);
+            total.critical = total.critical.saturating_add(part.critical);
+            total.severe = total.severe.saturating_add(part.severe);
+            total.moderate = total.moderate.saturating_add(part.moderate);
+            total.licenses.copyleft = total
+                .licenses
+                .copyleft
+                .saturating_add(part.licenses.copyleft);
+            total.licenses.non_standard = total
+                .licenses
+                .non_standard
+                .saturating_add(part.licenses.non_standard);
+            total.licenses.other = total.licenses.other.saturating_add(part.licenses.other);
+            if part.scanned_at > total.scanned_at {
+                total.scanned_at = part.scanned_at;
+            }
+        }
+        total
+    }
 }
 
 /// One finding of a report. Findings exist only for the current report of a component.

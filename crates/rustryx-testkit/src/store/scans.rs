@@ -15,7 +15,8 @@ use rustryx_core::ports::{
 };
 use rustryx_core::scan::{
     ComponentSecurityState, Finding, MAX_FINDINGS_PER_REPORT, MAX_SCAN_ERROR_CHARS,
-    QuarantineState, ScanKind, ScanReport, ScanStatus, ScanSummary, ScannerDataSet, ScannerKind,
+    QuarantineState, RepositoryHealth, ScanKind, ScanReport, ScanStatus, ScanSummary,
+    ScannerDataSet, ScannerKind,
 };
 use rustryx_core::tasks::TaskRunStatus;
 use time::OffsetDateTime;
@@ -278,6 +279,44 @@ impl ScanRepo for MemStore {
             .iter()
             .filter_map(|id| state.security_states.get(id).cloned())
             .collect())
+    }
+
+    async fn repository_health(
+        &self,
+        repositories: &[RepositoryId],
+    ) -> Result<Vec<RepositoryHealth>, StoreError> {
+        let state = self.tables()?;
+        let mut out = Vec::with_capacity(repositories.len());
+        for id in repositories {
+            let components: Vec<ComponentId> = state
+                .components
+                .values()
+                .filter(|component| component.repository_id == *id)
+                .map(|component| component.id)
+                .collect();
+            let mut health = RepositoryHealth::unscanned(*id);
+            health.component_count = u64::try_from(components.len()).unwrap_or(u64::MAX);
+            for component in components {
+                let Some(security) = state.security_states.get(&component) else {
+                    continue;
+                };
+                if security.scan_status != Some(ScanStatus::Complete) {
+                    continue;
+                }
+                health.scanned = true;
+                health.scanned_components = health.scanned_components.saturating_add(1);
+                if security.scanned_at > health.scanned_at {
+                    health.scanned_at = security.scanned_at;
+                }
+                if let Some((_, findings)) = state.current_findings(component) {
+                    for finding in findings {
+                        health.record(finding);
+                    }
+                }
+            }
+            out.push(health);
+        }
+        Ok(out)
     }
 
     async fn findings(

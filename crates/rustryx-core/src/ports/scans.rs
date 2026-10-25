@@ -19,7 +19,8 @@ use crate::lifecycle::PolicyScope;
 use crate::ports::repos::{Page, PageRequest};
 use crate::scan::{
     AllowlistMode, AllowlistScope, ComponentSecurityState, CveAllowlistEntry, Finding, ProbeResult,
-    QuarantineState, ScanPolicy, ScanReport, ScanStatus, ScanSummary, ScannerDataSet, ScannerKind,
+    QuarantineState, RepositoryHealth, ScanPolicy, ScanReport, ScanStatus, ScanSummary,
+    ScannerDataSet, ScannerKind,
     ScannerRecord, Severity, TrustMaterial, TrustMaterialKind, TrustPolicy,
 };
 use crate::tasks::TaskRunStatus;
@@ -110,6 +111,13 @@ pub trait ScanRepo: Send + Sync {
         &self,
         components: &[ComponentId],
     ) -> Result<Vec<ComponentSecurityState>, StoreError>;
+    /// Totals for each repository from the current vulnerability findings of its components.
+    /// A repository with no completed scan is returned with `scanned: false` and zero counters.
+    /// Group members are not expanded here.
+    async fn repository_health(
+        &self,
+        repositories: &[RepositoryId],
+    ) -> Result<Vec<RepositoryHealth>, StoreError>;
     /// Findings of the current report of a component.
     async fn findings(
         &self,

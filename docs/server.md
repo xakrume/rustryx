@@ -84,6 +84,16 @@ These three routes are outside the concurrency limit, the load shedder, the rate
 limiter and authentication: a node saturated with uploads must still answer its
 liveness probe.
 
+`/service/rest/v1` is the compat Repository 3 compatibility surface. `GET /repositories` returns the public list shape (name, format, type, url, attributes). `POST /repositories/{format}/{type}` creates a repository (`maven` in the path is the maven2 format). `GET /search` and `GET /components` return `items` and `continuationToken`. `GET /status` is 200. This is not the native `/api/v1` API.
+
+The same binary serves the web UI. `ui/dist` (from `npm run build` in `ui/`) is
+embedded at compile time and answered from the fallback: an existing file is that
+file, a missing `/assets/` name is 404, and any other `GET` that accepts
+`text/html` receives `index.html`. `/api/`, `/repository/`, `/v2/`, `/service/`,
+`/healthz`, `/readyz` and `/metrics` never receive that page. The UI responses
+use the policy in `ui/scripts/csp.mjs`. Hashed assets are cached as immutable;
+`index.html`, `theme-init.js` and `favicon.svg` are `Cache-Control: no-cache`.
+
 ### Native authentication endpoints
 
 Mounted by `NativeAuthModule` (`crates/rustryx-api/src/native/`), contract in

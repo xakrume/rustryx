@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use rustryx_core::ports::{
     AssetRepo, AuditSink, BlobRepo, BlobStoreRepo, Clock, ComponentRepo, IdpMappingRepo,
-    LoginAttemptRepo, RepositoryRepo, RevokedTokenRepo, RoleRepo, RoutingRuleRepo, SelectorRepo,
-    SystemClock, TokenRepo, UserRepo,
+    LoginAttemptRepo, PrivilegeRepo, RepositoryRepo, RevokedTokenRepo, RoleRepo, RoutingRuleRepo,
+    SelectorRepo, SystemClock, TokenRepo, UserRepo,
 };
 use rustryx_db::PgStore;
 
@@ -20,6 +20,8 @@ pub struct Repos {
     pub users: Arc<dyn UserRepo>,
     /// Roles.
     pub roles: Arc<dyn RoleRepo>,
+    /// Privileges.
+    pub privileges: Arc<dyn PrivilegeRepo>,
     /// Selectors (content filters of privileges).
     pub selectors: Arc<dyn SelectorRepo>,
     /// API tokens.
@@ -55,6 +57,7 @@ impl Repos {
         Self {
             users: Arc::new(store.users.clone()),
             roles: Arc::new(store.roles.clone()),
+            privileges: Arc::new(store.privileges.clone()),
             selectors: Arc::new(store.selectors.clone()),
             tokens: Arc::new(store.tokens.clone()),
             idp_mappings: Arc::new(store.idp_mappings.clone()),
@@ -80,6 +83,7 @@ impl Repos {
         Self {
             users: Arc::new(store.clone()),
             roles: Arc::new(store.clone()),
+            privileges: Arc::new(store.clone()),
             selectors: Arc::new(store.clone()),
             tokens: Arc::new(store.clone()),
             idp_mappings: Arc::new(store.clone()),

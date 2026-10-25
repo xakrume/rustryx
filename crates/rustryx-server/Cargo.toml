@@ -43,6 +43,7 @@ clap.workspace = true
 futures.workspace = true
 http.workspace = true
 hyper-util.workspace = true
+include_dir.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true

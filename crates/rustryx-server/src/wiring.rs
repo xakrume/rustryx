@@ -13,6 +13,8 @@
 //! | `blobs` | the registry of open stores, its adapter for the format engine, the default store seed |
 //! | `formats` | the format engine and the SSRF policy of `upstream.*` |
 //! | `artifacts` | `/repository/{name}/...` and `/v2/...` |
+//! | `repositories` | `/api/v1/repositories` and `GET /api/v1/blob-stores` |
+//! | `compat` | compat v1 compatibility under `/service/rest/v1` |
 //! | `bootstrap` | the bootstrap administrator and the default store, once the schema is servable |
 //! | `maintenance` | audit partitions, revoked token and login counter purges |
 //!
@@ -24,12 +26,17 @@
 mod artifacts;
 mod blobs;
 pub mod bootstrap;
+mod browse;
 mod bus;
+mod catalog;
+mod client_setup;
 mod database;
 mod formats;
 mod identity;
 pub mod maintenance;
+mod compat;
 mod registry_login;
+mod repositories;
 mod sso;
 mod store;
 
@@ -270,9 +277,16 @@ pub async fn assemble(config: &AppConfig, metrics: &MetricsHandle) -> anyhow::Re
     ];
     background.extend(identity.background.iter().cloned());
 
-    let modules = route_modules(
-        config, &identity, &repos, &formats, base_url, tokens, catalog,
+    let mut modules = route_modules(
+        config,
+        &identity,
+        &repos,
+        &formats,
+        base_url.clone(),
+        tokens,
+        catalog,
     );
+    modules.extend(management_modules(config, &repos, &rbac, base_url)?);
 
     let sessions = session_manager(config, &identity, &repos, &cookie_key, Arc::new(bus))?;
     let finalizers = shutdown_finalizers(
@@ -293,6 +307,84 @@ pub async fn assemble(config: &AppConfig, metrics: &MetricsHandle) -> anyhow::Re
         background,
         finalizers,
     })
+}
+
+fn repository_module(
+    config: &AppConfig,
+    repos: &Repos,
+    rbac: &Arc<Rbac>,
+    base_url: Option<url::Url>,
+) -> anyhow::Result<Arc<dyn RouteModule>> {
+    Ok(Arc::new(repositories::RepositoriesModule::new(
+        Arc::clone(&repos.repositories),
+        Arc::clone(&repos.blob_stores),
+        Arc::clone(rbac) as Arc<dyn RbacChecker>,
+        Arc::clone(&repos.clock),
+        repositories::RepoHttp {
+            base_url,
+            require_https: config.server.require_https,
+            anonymous_enabled: config.auth.anonymous_enabled,
+            upstream: formats::url_policy(&config.upstream)?,
+        },
+    )))
+}
+
+fn management_modules(
+    config: &AppConfig,
+    repos: &Repos,
+    rbac: &Arc<Rbac>,
+    base_url: Option<url::Url>,
+) -> anyhow::Result<Vec<Arc<dyn RouteModule>>> {
+    Ok(vec![
+        repository_module(config, repos, rbac, base_url.clone())?,
+        compat_module(config, repos, rbac, base_url.clone())?,
+        Arc::new(browse::BrowseModule::new(
+            Arc::clone(&repos.repositories),
+            Arc::clone(&repos.assets),
+            Arc::clone(&repos.components),
+            Arc::clone(rbac) as Arc<dyn RbacChecker>,
+            client_setup::SetupHttp {
+                base_url,
+                fallback_scheme: if config.server.require_https {
+                    "https"
+                } else {
+                    "http"
+                },
+                anonymous_enabled: config.auth.anonymous_enabled,
+            },
+        )),
+        Arc::new(catalog::CatalogModule::new(catalog::CatalogDeps {
+            users: Arc::clone(&repos.users),
+            roles: Arc::clone(&repos.roles),
+            privileges: Arc::clone(&repos.privileges),
+            selectors: Arc::clone(&repos.selectors),
+            tokens: Arc::clone(&repos.tokens),
+            mappings: Arc::clone(&repos.idp_mappings),
+            repositories: Arc::clone(&repos.repositories),
+            routing_rules: Arc::clone(&repos.routing_rules),
+            components: Arc::clone(&repos.components),
+            clock: Arc::clone(&repos.clock),
+            anonymous_enabled: config.auth.anonymous_enabled,
+        })),
+    ])
+}
+
+fn compat_module(
+    config: &AppConfig,
+    repos: &Repos,
+    rbac: &Arc<Rbac>,
+    base_url: Option<url::Url>,
+) -> anyhow::Result<Arc<dyn RouteModule>> {
+    Ok(Arc::new(compat::compatModule::new(compat::compatDeps {
+        repositories: Arc::clone(&repos.repositories),
+        blob_stores: Arc::clone(&repos.blob_stores),
+        components: Arc::clone(&repos.components),
+        rbac: Arc::clone(rbac) as Arc<dyn RbacChecker>,
+        clock: Arc::clone(&repos.clock),
+        base_url,
+        require_https: config.server.require_https,
+        upstream: formats::url_policy(&config.upstream)?,
+    })))
 }
 
 fn route_modules(

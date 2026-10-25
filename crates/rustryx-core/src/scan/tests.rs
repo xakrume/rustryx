@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::ids::{
-    BlobId, ComponentId, CveAllowlistEntryId, ProjectId, ScanReportId, ScannerDataSetId, ScannerId,
-    SecurityPolicyId, TrustMaterialId, TrustPolicyId,
+    BlobId, ComponentId, CveAllowlistEntryId, ProjectId, RepositoryId, ScanReportId,
+    ScannerDataSetId, ScannerId, SecurityPolicyId, TrustMaterialId, TrustPolicyId,
 };
 use crate::lifecycle::PolicyScope;
 use crate::secret::Secret;
@@ -15,6 +15,21 @@ fn summary(counts: [u32; 6]) -> ScanSummary {
         total: counts.iter().sum(),
         ..ScanSummary::default()
     }
+}
+
+#[test]
+fn cvss_buckets_follow_the_compat_ranges() {
+    assert_eq!(cvss_bucket(Some(7.0), Severity::Low), Some(VulnBucket::Critical));
+    assert_eq!(cvss_bucket(Some(6.9), Severity::Critical), Some(VulnBucket::Severe));
+    assert_eq!(cvss_bucket(Some(1.0), Severity::Critical), Some(VulnBucket::Moderate));
+    assert_eq!(cvss_bucket(Some(0.9), Severity::Critical), None);
+    assert_eq!(cvss_bucket(None, Severity::High), Some(VulnBucket::Critical));
+    assert_eq!(cvss_bucket(None, Severity::Unknown), None);
+    let group = RepositoryHealth::sum(
+        RepositoryId::generate(),
+        &[RepositoryHealth::unscanned(RepositoryId::generate())],
+    );
+    assert!(!group.scanned);
 }
 
 #[test]

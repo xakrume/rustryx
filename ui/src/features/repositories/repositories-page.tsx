@@ -178,6 +178,27 @@ function buildColumns(actions: RowActions): AnyColumnDef<RepositoryView>[] {
         row.original.stats ? row.original.stats.component_count.toLocaleString() : '-',
     },
     {
+      id: 'health',
+      header: t('repos.columns.health'),
+      meta: { label: t('repos.columns.health') },
+      cell: ({ row }) => {
+        const health = row.original.health
+        if (!health?.scanned) {
+          return <span className="text-muted-foreground">{t('repos.health.notScanned')}</span>
+        }
+        const checked =
+          health.component_count === 0
+            ? '0'
+            : `${health.scanned_components}/${health.component_count}`
+        return (
+          <span title={health.scanned_at ?? undefined}>
+            {health.critical} / {health.severe} / {health.moderate}
+            <span className="ml-2 text-muted-foreground">{checked}</span>
+          </span>
+        )
+      },
+    },
+    {
       id: 'url',
       header: t('repos.columns.url'),
       meta: { label: t('repos.columns.url') },

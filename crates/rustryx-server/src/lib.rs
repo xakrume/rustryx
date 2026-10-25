@@ -29,6 +29,7 @@ pub mod serve;
 pub mod shutdown;
 pub mod signals;
 pub mod supervisor;
+pub mod ui;
 pub mod wiring;
 
 #[cfg(test)]

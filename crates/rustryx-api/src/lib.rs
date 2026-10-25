@@ -51,6 +51,7 @@ mod router;
 mod routes;
 mod session;
 mod state;
+mod ui;
 
 #[cfg(test)]
 mod session_support;
@@ -91,3 +92,4 @@ pub use state::{
     ApiSettings, AppState, ChallengeSelector, Lifecycle, MetricsAccess, RateLimitSettings,
     RegistryBearerTokens,
 };
+pub use ui::WebUi;

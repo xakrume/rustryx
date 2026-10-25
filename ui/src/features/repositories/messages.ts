@@ -53,9 +53,13 @@ export const repositoriesMessages = {
       blobStore: 'Blob store',
       size: 'Size',
       components: 'Components',
+      health: 'Health',
       url: 'URL',
       created: 'Created',
       actions: 'Actions',
+    },
+    health: {
+      notScanned: 'Not scanned',
     },
     list: {
       description: 'Hosted, proxy and group repositories you can browse.',
