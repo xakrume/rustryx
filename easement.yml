@@ -1,0 +1,151 @@
+version: 1
+
+# CI and deploy scripts are not part of the crate graph. Fuzz targets are
+# separate crates that are not in the workspace.
+exclude:
+  - "**/*.py"
+  - "**/fuzz/**"
+
+# TypeScript tests (*.test.*, *.spec.*) may import the UI. Rust has no test
+# glob here, so cfg(test) modules stay in their crate.
+tests: auto
+
+# Rust has no test-file glob in easement, and cfg(test) modules live in src,
+# so a crate's test kit imports show up as crate -> testkit. That allowance
+# is the test harness, not a product dependency.
+components:
+  core: { in: crates/rustryx-core }
+  config: { in: crates/rustryx-config }
+  observability: { in: crates/rustryx-observability }
+  db: { in: crates/rustryx-db }
+  blob: { in: crates/rustryx-blob }
+  auth: { in: crates/rustryx-auth }
+  rbac: { in: crates/rustryx-rbac }
+  format-core: { in: crates/rustryx-format-core }
+  format-maven: { in: crates/rustryx-format-maven }
+  format-npm: { in: crates/rustryx-format-npm }
+  format-pypi: { in: crates/rustryx-format-pypi }
+  format-oci: { in: crates/rustryx-format-oci }
+  format-helm: { in: crates/rustryx-format-helm }
+  format-raw: { in: crates/rustryx-format-raw }
+  format-pub: { in: crates/rustryx-format-pub }
+  api: { in: crates/rustryx-api }
+  tasks: { in: crates/rustryx-tasks }
+  server: { in: crates/rustryx-server }
+  testkit: { in: crates/rustryx-testkit }
+  testserver: { in: crates/rustryx-testserver }
+
+  # Routes, features and components import each other (the router types live
+  # in app, shared components use features). One UI component matches that.
+  ui:
+    in:
+      - ui/src/app
+      - ui/src/components
+      - ui/src/features
+      - ui/src/hooks
+      - ui/src/i18n
+      - ui/src/lib
+      - ui/src/main.tsx
+      - ui/src/routeTree.gen.ts
+      - ui/src/routes
+  ui-api: { in: ui/src/api }
+  ui-mocks: { in: ui/src/mocks }
+
+rules:
+  core:
+    may_depend_on: []
+    because: the core types are a leaf
+  observability:
+    may_depend_on: []
+    because: telemetry does not depend on product crates
+  config:
+    may_depend_on: [core]
+    because: configuration reads core types only
+  db:
+    may_depend_on: [core]
+    because: persistence uses core types and does not call HTTP or formats
+  blob:
+    may_depend_on: [core]
+    because: blob storage uses core types only
+  auth:
+    may_depend_on: [core, testkit]
+    because: authentication uses core types; testkit is only reached from cfg(test) modules
+  rbac:
+    may_depend_on: [core, testkit]
+    because: authorization uses core types; testkit is only reached from tests
+  tasks:
+    may_depend_on: [core]
+    because: the task crate uses core types only
+  format-core:
+    may_depend_on: [core, testkit]
+    because: the format kernel uses core types; testkit is only reached from tests
+  format-maven:
+    may_depend_on: [core, format-core, testkit, testserver]
+    because: a format implements format-core; testkit and testserver are the harness
+  format-npm:
+    may_depend_on: [core, format-core, testkit, testserver]
+    because: a format implements format-core; testkit and testserver are the harness
+  format-pypi:
+    may_depend_on: [core, format-core, testkit]
+    because: a format implements format-core; testkit is only reached from tests
+  format-helm:
+    may_depend_on: [core, format-core, testkit]
+    because: a format implements format-core; testkit is only reached from tests
+  format-raw:
+    may_depend_on: [core, format-core, testkit, testserver]
+    because: a format implements format-core; testkit and testserver are the harness
+  format-pub:
+    may_depend_on: [core, format-core, testkit]
+    because: a format implements format-core; testkit is only reached from tests
+  format-oci:
+    may_depend_on: [core, format-core, rbac, testkit]
+    because: OCI uses the format kernel and RBAC; testkit is only reached from tests
+  api:
+    may_depend_on: [core, observability, testkit]
+    because: the HTTP edge uses core types and telemetry; testkit is only reached from cfg(test) modules
+  testkit:
+    may_depend_on: [core]
+    because: the test kit builds on core types
+  testserver:
+    may_depend_on: [core, format-core, rbac, testkit]
+    because: the test server is a harness, not a dependency of the product server
+  server:
+    may_depend_on:
+      - api
+      - auth
+      - blob
+      - config
+      - core
+      - db
+      - format-core
+      - format-helm
+      - format-maven
+      - format-npm
+      - format-oci
+      - format-pub
+      - format-pypi
+      - format-raw
+      - observability
+      - rbac
+      - testkit
+    because: the binary is the composition root; testkit is only reached from its tests
+
+  ui:
+    may_depend_on: [ui-api, ui-mocks]
+    because: the interface talks to the gateway through the API client and the mock
+  ui-api:
+    may_depend_on: []
+    because: the generated client is a leaf
+  ui-mocks:
+    may_depend_on: [ui-api]
+    because: the in-browser mock implements the API client
+
+uncovered_ok:
+  - name: ui/scripts/**
+    because: node build checks, outside the app tsconfig except csp.mjs
+  - name: ui/eslint.config.js
+    because: eslint config, not part of the UI graph
+  - name: ui/public/**
+    because: static files with no imports to check
+  - name: crates/rustryx-format-oci/src/proxy/passthrough/tests.rs
+    because: rust-analyzer did not index this cfg(test) module

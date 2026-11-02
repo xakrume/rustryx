@@ -38,7 +38,10 @@ fi
 
 mkdir -p "$dest"
 if [ -n "${member:-}" ]; then
-  tar -xzf "$file" -C "$work" "$member"
+  case "$url" in
+    *.tar.xz) tar -xJf "$file" -C "$work" "$member" ;;
+    *) tar -xzf "$file" -C "$work" "$member" ;;
+  esac
   install -m 0755 "$work/$member" "$dest/$tool"
 else
   install -m 0755 "$file" "$dest/$tool"

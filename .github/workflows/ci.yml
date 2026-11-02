@@ -135,6 +135,36 @@ jobs:
       - name: Compiler and base image pins agree
         run: ci/check-toolchain-pin.sh
 
+  architecture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Rust toolchain from rust-toolchain.toml
+        run: |
+          rustup toolchain install --profile minimal
+          rustup component add rust-analyzer
+      - name: TypeScript indexer and UI dependencies
+        run: |
+          npm install -g @sourcegraph/scip-typescript
+          npm ci --prefix ui
+      - name: Install easement (SHA-256 pinned in ci/tools.lock)
+        run: ci/install-tool.sh easement
+      - name: Architecture
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            easement check --diff origin/main
+          else
+            easement check
+          fi
+        env:
+          EVENT: ${{ github.event_name }}
+
   test:
     runs-on: ubuntu-24.04
     timeout-minutes: 60

@@ -88,6 +88,27 @@ lint:
     - python3 -I -m unittest discover -s ci/tests -v
     - ci/check-toolchain-pin.sh
 
+architecture:
+  stage: lint
+  image: $RUST_IMAGE
+  interruptible: true
+  variables:
+    GIT_DEPTH: "0"
+  script:
+    - rustup toolchain install --profile minimal
+    - rustup component add rust-analyzer
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends nodejs npm >/dev/null
+    - npm install -g @sourcegraph/scip-typescript
+    - npm ci --prefix ui
+    - ci/install-tool.sh easement
+    - |
+      if [ "$CI_PIPELINE_SOURCE" = merge_request_event ]; then
+        git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+        easement check --diff "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+      else
+        easement check
+      fi
+
 # ---------------------------------------------------------------- test
 # Integration tests start their dependencies with testcontainers, so the job needs
 # a Docker daemon: docker-in-docker. RUSTRYX_IT=1 makes them required.
