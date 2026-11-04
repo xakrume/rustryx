@@ -4,6 +4,7 @@
 //! all values as parameters, and maps errors through [`crate::error`].
 
 pub mod asset;
+pub mod allowlist;
 pub mod blob;
 pub mod blob_group;
 pub mod blob_store;
@@ -44,6 +45,7 @@ mod write;
 pub(crate) use common::{escape_like, notify};
 
 pub use asset::PgAssetRepo;
+pub use allowlist::PgCveAllowlistRepo;
 pub use blob::PgBlobRepo;
 pub use blob_group::PgBlobStoreMemberRepo;
 pub use blob_store::PgBlobStoreRepo;

@@ -31,6 +31,7 @@ mod lifecycle_run_tests;
 mod support;
 
 mod asset_tests;
+mod allowlist_tests;
 mod audit_read_tests;
 mod audit_tests;
 mod blob_group_tests;
