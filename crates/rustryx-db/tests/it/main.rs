@@ -18,6 +18,7 @@
 
 mod fixtures;
 mod foundation_tests;
+mod registry_tests;
 mod webhook_tests;
 mod guard_tests;
 mod immutability_tests;
