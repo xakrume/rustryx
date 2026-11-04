@@ -19,6 +19,7 @@
 mod fixtures;
 mod foundation_tests;
 mod scanner_tests;
+mod scan_policy_tests;
 mod registry_tests;
 mod webhook_tests;
 mod guard_tests;

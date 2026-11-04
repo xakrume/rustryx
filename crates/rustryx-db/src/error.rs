@@ -91,6 +91,9 @@ const CONSTRAINT_MESSAGES: &[(&str, &str)] = &[
     ("uq_idp_mapping_group", "group mapping already exists"),
     ("uq_job_leases_dedupe", "job is already queued or running"),
     ("uq_projects_name", "project name already exists"),
+    ("uq_scan_policy_system", "the scope already has a policy"),
+    ("uq_scan_policy_project", "the scope already has a policy"),
+    ("uq_scan_policy_repo", "the scope already has a policy"),
     ("uq_routing_rules_name", "routing rule name already exists"),
     ("uq_cleanup_policies_name", "cleanup policy already exists"),
     (
