@@ -252,9 +252,8 @@ impl AssetRepo for PgAssetRepo {
     /// Row locks are taken first, in ascending id order, by a materialized
     /// `SELECT .. FOR UPDATE .. ORDER BY id`: two nodes flushing overlapping sets then wait
     /// for each other instead of deadlocking (an `UPDATE .. FROM` locks in the order of its
-    /// join, which differs between plans). The counts of the ticks are not used yet: the daily
-    /// counters table belongs to the lifecycle stream (`asset_downloads_daily`, migration 0040)
-    /// and that stream adds its insert here, in the same transaction.
+    /// join, which differs between plans). Counts of assets that still exist are added to
+    /// `asset_downloads_daily` in the same transaction, keyed by the UTC date of each tick.
     async fn record_downloads(&self, batch: &[DownloadTick]) -> Result<(), StoreError> {
         if batch.is_empty() {
             return Ok(());
@@ -302,8 +301,45 @@ impl AssetRepo for PgAssetRepo {
         .execute(&mut *tx)
         .await
         .map_err(|e| map_err("record component downloads", e))?;
+        let (tick_ids, tick_at, tick_count) = download_ticks(batch);
+        let earliest = tick_at.iter().copied().min();
+        if let Some(at) = earliest {
+            sqlx::query("SELECT ensure_download_partitions($1, 1)")
+                .bind(at)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| map_err("ensure download partitions", e))?;
+        }
+        sqlx::query(
+            "INSERT INTO asset_downloads_daily (asset_id, day, count) \
+             SELECT v.id, (v.at AT TIME ZONE 'UTC')::date, sum(v.count)::bigint \
+             FROM unnest($1::uuid[], $2::timestamptz[], $3::integer[]) AS v(id, at, count) \
+             JOIN assets a ON a.id = v.id \
+             GROUP BY v.id, (v.at AT TIME ZONE 'UTC')::date \
+             HAVING sum(v.count) > 0 \
+             ON CONFLICT (asset_id, day) DO UPDATE \
+             SET count = asset_downloads_daily.count + EXCLUDED.count",
+        )
+        .bind(&tick_ids)
+        .bind(&tick_at)
+        .bind(&tick_count)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| map_err("record download counts", e))?;
         tx.commit()
             .await
             .map_err(|e| map_err("record downloads", e))
     }
+}
+
+fn download_ticks(batch: &[DownloadTick]) -> (Vec<Uuid>, Vec<OffsetDateTime>, Vec<i32>) {
+    let mut ids = Vec::with_capacity(batch.len());
+    let mut times = Vec::with_capacity(batch.len());
+    let mut counts = Vec::with_capacity(batch.len());
+    for tick in batch {
+        ids.push(tick.asset_id.as_uuid());
+        times.push(tick.at);
+        counts.push(i32::try_from(tick.count).unwrap_or(i32::MAX));
+    }
+    (ids, times, counts)
 }

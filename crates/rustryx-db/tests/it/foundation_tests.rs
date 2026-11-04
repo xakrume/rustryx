@@ -69,6 +69,7 @@ async fn the_foundation_creates_its_tables_and_nothing_of_the_streams() {
         "project_members",
         "labels",
         "component_labels",
+        "asset_downloads_daily",
     ] {
         assert!(tables.iter().any(|t| t == expected), "missing {expected}");
     }
@@ -77,7 +78,6 @@ async fn the_foundation_creates_its_tables_and_nothing_of_the_streams() {
         "scanners",
         "webhooks",
         "registries",
-        "asset_downloads_daily",
     ] {
         assert!(
             !tables.iter().any(|t| t == foreign),

@@ -5,7 +5,7 @@ use std::time::Duration;
 use rustryx_core::StoreError;
 use rustryx_core::ids::AssetId;
 use rustryx_core::model::DownloadTick;
-use rustryx_core::ports::{AssetRepo, ComponentRepo};
+use rustryx_core::ports::{AssetRepo, ComponentRepo, DownloadStatsRepo};
 use time::Duration as Span;
 
 use crate::fixtures::{blob, new_asset, new_component, now, seed_repository};
@@ -235,4 +235,53 @@ async fn overlapping_flushes_from_two_nodes_do_not_deadlock() {
         .unwrap()
         .last_downloaded_at;
     assert!(newest.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn record_downloads_adds_daily_counts_and_fills_gaps_with_zero() {
+    let db = TestDb::new().await;
+    let store = db.store().await;
+    let (bs, repo) = seed_repository(&store).await;
+    let asset = store
+        .assets
+        .publish(&new_asset(repo.id, "counted", blob(bs.id, 1)))
+        .await
+        .unwrap()
+        .asset;
+    let noon = time::OffsetDateTime::now_utc().replace_time(time::Time::from_hms(12, 0, 0).unwrap());
+    let yesterday = noon - Span::days(1);
+    let ghost = AssetId::generate();
+    let mut ticks = vec![
+        DownloadTick {
+            asset_id: asset.id,
+            at: yesterday,
+            count: 2,
+        },
+        DownloadTick {
+            asset_id: asset.id,
+            at: noon,
+            count: 3,
+        },
+        DownloadTick {
+            asset_id: asset.id,
+            at: yesterday,
+            count: 1,
+        },
+        DownloadTick {
+            asset_id: ghost,
+            at: noon,
+            count: 9,
+        },
+    ];
+    store.assets.record_downloads(&ticks).await.unwrap();
+    ticks[1].count = 4;
+    store.assets.record_downloads(&ticks[1..2]).await.unwrap();
+
+    let stats = rustryx_db::repos::PgDownloadStatsRepo::new(store.pool().clone());
+    let series = stats.daily(asset.id, 3).await.unwrap();
+    let counts: Vec<u64> = series.iter().map(|(_, n)| *n).collect();
+    assert_eq!(counts, [0, 3, 7]);
+    assert_eq!(series[2].0, noon.date());
+    assert!(stats.daily(ghost, 0).await.unwrap().is_empty());
+    assert_eq!(stats.daily(asset.id, 1000).await.unwrap().len(), 90);
 }
