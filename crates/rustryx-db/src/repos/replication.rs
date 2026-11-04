@@ -20,6 +20,15 @@ use uuid::Uuid;
 
 use crate::error::{backend, map_err};
 
+#[path = "replication_exec.rs"]
+mod exec;
+
+impl PgReplicationRepo {
+    pub(super) fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+}
+
 /// Replication rules.
 #[derive(Clone)]
 pub struct PgReplicationRepo {
@@ -61,9 +70,7 @@ struct Row {
     updated_at: OffsetDateTime,
 }
 
-fn not_stored() -> StoreError {
-    StoreError::Invalid("replication executions are not stored yet".to_owned())
-}
+
 
 #[async_trait::async_trait]
 impl ReplicationRepo for PgReplicationRepo {
@@ -148,6 +155,19 @@ impl ReplicationRepo for PgReplicationRepo {
                 "stale version: expected {expected_version}, found {current}"
             )));
         }
+        let active: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM replication_executions \
+             WHERE rule_id = $1 AND status IN ('queued', 'running'))",
+        )
+        .bind(rule.id.as_uuid())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| map_err("read replication execution", e))?;
+        if active {
+            return Err(StoreError::Conflict(
+                "the rule has an execution that is queued or running".to_owned(),
+            ));
+        }
         let (direction, trigger, on_push, on_delete, scope_repo, scope_project, filter, bandwidth) =
             columns(rule)?;
         sqlx::query(
@@ -200,104 +220,104 @@ impl ReplicationRepo for PgReplicationRepo {
 
     async fn start_execution(
         &self,
-        _execution: &ReplicationExecution,
+        execution: &ReplicationExecution,
     ) -> Result<Option<ReplicationExecution>, StoreError> {
-        Err(not_stored())
+        exec::start_execution(self, execution).await
     }
 
     async fn get_execution(
         &self,
-        _id: ReplicationExecutionId,
+        id: ReplicationExecutionId,
     ) -> Result<Option<ReplicationExecution>, StoreError> {
-        Err(not_stored())
+        exec::get_execution(self, id).await
     }
 
     async fn list_executions(
         &self,
-        _rule: Option<ReplicationRuleId>,
-        _page: &PageRequest,
+        rule: Option<ReplicationRuleId>,
+        page: &PageRequest,
     ) -> Result<Page<ReplicationExecution>, StoreError> {
-        Err(not_stored())
+        exec::list_executions(self, rule, page).await
     }
 
-    async fn request_stop(&self, _id: ReplicationExecutionId) -> Result<bool, StoreError> {
-        Err(not_stored())
+    async fn request_stop(&self, id: ReplicationExecutionId) -> Result<bool, StoreError> {
+        exec::request_stop(self, id).await
     }
 
-    async fn add_tasks(&self, _tasks: &[ReplicationTask]) -> Result<(), StoreError> {
-        Err(not_stored())
+    async fn add_tasks(&self, tasks: &[ReplicationTask]) -> Result<(), StoreError> {
+        exec::add_tasks(self, tasks).await
     }
 
     async fn create_event_tasks(
         &self,
-        _rule: ReplicationRuleId,
-        _tasks: &[ReplicationTask],
-        _advance: Option<&CursorAdvance>,
+        rule: ReplicationRuleId,
+        tasks: &[ReplicationTask],
+        advance: Option<&CursorAdvance>,
     ) -> Result<u64, StoreError> {
-        Err(not_stored())
+        exec::create_event_tasks(self, rule, tasks, advance).await
     }
 
     async fn claim_task(
         &self,
-        _owner: &str,
-        _lease: Duration,
+        owner: &str,
+        lease: Duration,
     ) -> Result<Option<ReplicationTask>, StoreError> {
-        Err(not_stored())
+        exec::claim_task(self, owner, lease).await
     }
 
     async fn heartbeat_task(
         &self,
-        _id: ReplicationTaskId,
-        _owner: &str,
-        _lease: Duration,
+        id: ReplicationTaskId,
+        owner: &str,
+        lease: Duration,
     ) -> Result<bool, StoreError> {
-        Err(not_stored())
+        exec::heartbeat_task(self, id, owner, lease).await
     }
 
     async fn finish_task(
         &self,
-        _id: ReplicationTaskId,
-        _owner: &str,
-        _status: ReplicationTaskStatus,
-        _bytes: u64,
-        _error: Option<&str>,
-        _retry_in: Option<Duration>,
-        _events: &[EventDraft],
+        id: ReplicationTaskId,
+        owner: &str,
+        status: ReplicationTaskStatus,
+        bytes: u64,
+        error: Option<&str>,
+        retry_in: Option<Duration>,
+        events: &[EventDraft],
     ) -> Result<bool, StoreError> {
-        Err(not_stored())
+        exec::finish_task(self, id, owner, status, bytes, error, retry_in, events).await
     }
 
     async fn tasks(
         &self,
-        _execution: ReplicationExecutionId,
-        _page: &PageRequest,
+        execution: ReplicationExecutionId,
+        page: &PageRequest,
     ) -> Result<Page<ReplicationTask>, StoreError> {
-        Err(not_stored())
+        exec::tasks(self, execution, page).await
     }
 
     async fn append_task_log(
         &self,
-        _id: ReplicationTaskId,
-        _lines: &[TaskLogLine],
+        id: ReplicationTaskId,
+        lines: &[TaskLogLine],
     ) -> Result<(), StoreError> {
-        Err(not_stored())
+        exec::append_task_log(self, id, lines).await
     }
 
     async fn read_task_log(
         &self,
-        _id: ReplicationTaskId,
-        _after_seq: i32,
-        _limit: u32,
+        id: ReplicationTaskId,
+        after_seq: i32,
+        limit: u32,
     ) -> Result<Vec<TaskLogLine>, StoreError> {
-        Err(not_stored())
+        exec::read_task_log(self, id, after_seq, limit).await
     }
 
-    async fn settle_executions(&self, _now: OffsetDateTime) -> Result<u64, StoreError> {
-        Err(not_stored())
+    async fn settle_executions(&self, now: OffsetDateTime) -> Result<u64, StoreError> {
+        exec::settle_executions(self, now).await
     }
 
-    async fn purge(&self, _finished_before: OffsetDateTime) -> Result<u64, StoreError> {
-        Err(not_stored())
+    async fn purge(&self, finished_before: OffsetDateTime) -> Result<u64, StoreError> {
+        exec::purge(self, finished_before).await
     }
 }
 

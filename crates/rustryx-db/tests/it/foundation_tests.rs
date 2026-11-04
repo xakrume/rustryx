@@ -75,12 +75,15 @@ async fn the_foundation_creates_its_tables_and_nothing_of_the_streams() {
         "scanners",
         "scan_policies",
         "replication_rules",
+        "replication_executions",
+        "replication_tasks",
+        "replication_task_log",
     ] {
         assert!(tables.iter().any(|t| t == expected), "missing {expected}");
     }
     // Owned by the streams, in their own migration ranges (design section 1.5).
     for foreign in [
-        "replication_executions",
+        "webhook_deliveries",
     ] {
         assert!(
             !tables.iter().any(|t| t == foreign),
