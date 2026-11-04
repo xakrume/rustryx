@@ -52,5 +52,6 @@ pub use migrate::{MigrateReport, SchemaStatus, migrate, schema_status};
 pub use pool::{connect, connect_lazy, ping};
 pub use revoked::PgRevokedTokens;
 pub use sealer::{AeadSealer, KeyEntry, SecretSealer};
+pub use repos::{PgImmutabilityRepo, PgRetentionPolicyRepo};
 pub use store::PgStore;
 pub use system_config::PgSystemConfig;

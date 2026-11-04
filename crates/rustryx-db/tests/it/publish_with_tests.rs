@@ -6,7 +6,7 @@ use rustryx_core::audit::ActorRef;
 use rustryx_core::error::{MutationError, PolicyViolation};
 use rustryx_core::events::{EventDraft, EventKind};
 use rustryx_core::model::{PublishMode, WriteOptions, WritePolicy};
-use rustryx_core::ports::{AssetRepo, BlobRepo, RepositoryRepo};
+use rustryx_core::ports::{AssetRepo, BlobRepo, QuotaRepo, RepositoryRepo};
 use rustryx_core::quota::QuotaScope;
 use tokio::task::JoinSet;
 
@@ -351,6 +351,64 @@ async fn the_repository_quota_is_checked_on_the_actual_size_inside_the_transacti
     assert!(
         matches!(err, StoreError::Conflict(ref m) if m == "quota exceeded"),
         "{err:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn must_not_publish_past_a_project_quota() {
+    let db = TestDb::new().await;
+    let store = db.store().await;
+    let (bs, repo) = seed_repository(&store).await;
+    let project_id = uuid::Uuid::now_v7();
+    sqlx::query("INSERT INTO projects (id, name) VALUES ($1, 'libs')")
+        .bind(project_id)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE repositories SET project_id = $2 WHERE id = $1")
+        .bind(repo.id.as_uuid())
+        .bind(project_id)
+        .execute(store.pool())
+        .await
+        .unwrap();
+    rustryx_db::repos::quota::PgQuotaRepo::new(store.pool().clone())
+        .set_limit(
+            QuotaScope::Project(project_id.into()),
+            Some(100),
+            80,
+            None,
+            &ActorRef::system("test"),
+        )
+        .await
+        .unwrap();
+
+    store
+        .assets
+        .publish_with(
+            &new_asset(repo.id, "a", blob(bs.id, 60)),
+            &WriteOptions::new(),
+        )
+        .await
+        .unwrap();
+    let err = store
+        .assets
+        .publish_with(
+            &new_asset(repo.id, "b", blob(bs.id, 50)),
+            &WriteOptions::new(),
+        )
+        .await
+        .unwrap_err();
+    let PolicyViolation::QuotaExceeded(exceeded) = violation(err) else {
+        panic!("project quota expected");
+    };
+    assert_eq!(exceeded.scope, QuotaScope::Project(project_id.into()));
+    assert_eq!(
+        (
+            exceeded.limit_bytes,
+            exceeded.used_bytes,
+            exceeded.requested_bytes
+        ),
+        (100, 60, 50)
     );
 }
 

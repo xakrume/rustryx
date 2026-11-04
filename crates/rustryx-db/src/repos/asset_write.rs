@@ -15,7 +15,7 @@
 
 use rustryx_core::StoreError;
 use rustryx_core::error::{MutationError, PolicyViolation};
-use rustryx_core::ids::{AssetId, BlobId, RepositoryId};
+use rustryx_core::ids::{AssetId, BlobId, ProjectId, RepositoryId};
 use rustryx_core::model::{
     BlobRecord, NewAsset, NewAssetLink, PublishMode, PublishOutcome, WriteOptions, WritePolicy,
 };
@@ -37,6 +37,8 @@ struct RepositoryGuard {
     write_policy: WritePolicy,
     quota_bytes: Option<i64>,
     blob_store_id: Uuid,
+    project_id: Option<Uuid>,
+    project_quota: Option<i64>,
 }
 
 /// The asset to create or switch, and the blob it points at.
@@ -67,15 +69,17 @@ async fn lock_repository(
     conn: &mut PgConnection,
     repository_id: RepositoryId,
 ) -> Result<RepositoryGuard, MutationError> {
-    let row: Option<(String, Option<i64>, Uuid)> = sqlx::query_as(
-        "SELECT write_policy, quota_bytes, blob_store_id FROM repositories \
-         WHERE id = $1 FOR SHARE",
+    let row: Option<(String, Option<i64>, Uuid, Option<Uuid>, Option<i64>)> = sqlx::query_as(
+        "SELECT r.write_policy, r.quota_bytes, r.blob_store_id, r.project_id, q.limit_bytes \
+         FROM repositories r \
+         LEFT JOIN quotas q ON q.project_id = r.project_id \
+         WHERE r.id = $1 FOR SHARE OF r",
     )
     .bind(repository_id.as_uuid())
     .fetch_optional(&mut *conn)
     .await
     .map_err(|e| map_mutation_err("lock repository", e))?;
-    let Some((policy, quota_bytes, blob_store_id)) = row else {
+    let Some((policy, quota_bytes, blob_store_id, project_id, project_quota)) = row else {
         return Err(StoreError::NotFound("repository".to_owned()).into());
     };
     if quota_bytes.is_some() {
@@ -85,10 +89,21 @@ async fn lock_repository(
             .await
             .map_err(|e| map_mutation_err("lock repository quota", e))?;
     }
+    if let Some(project_id) = project_id
+        && project_quota.is_some()
+    {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!("rustryx.project_quota:{project_id}"))
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| map_mutation_err("lock project quota", e))?;
+    }
     Ok(RepositoryGuard {
         write_policy: parse_write_policy(&policy)?,
         quota_bytes,
         blob_store_id,
+        project_id,
+        project_quota,
     })
 }
 
@@ -312,6 +327,85 @@ async fn enforce_repository_quota(
     .into())
 }
 
+/// Project quota: distinct blobs of every repository in the project. A write that does not
+/// grow the project is kept, and the counter is set to the sum so headroom matches.
+async fn enforce_project_quota(
+    conn: &mut PgConnection,
+    project_id: Uuid,
+    quota: i64,
+    spec: &Switch<'_>,
+    switched: &Switched,
+) -> Result<(), MutationError> {
+    let mut delta = 0_i64;
+    if !referenced_in_project(conn, project_id, spec.blob_id, Some(switched.asset_id)).await? {
+        delta += spec.blob_size;
+    }
+    if let Some(old) = switched.replaced_blob
+        && old != spec.blob_id
+        && !referenced_in_project(conn, project_id, old, None).await?
+    {
+        let old_size: i64 = sqlx::query_scalar("SELECT size_bytes FROM blobs WHERE id = $1")
+            .bind(old)
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(|e| map_mutation_err("read replaced blob size", e))?;
+        delta -= old_size;
+    }
+    let used_after: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(b.size_bytes), 0)::bigint FROM blobs b \
+         WHERE b.id IN ( \
+             SELECT a.blob_id FROM assets a \
+             JOIN repositories r ON r.id = a.repository_id \
+             WHERE r.project_id = $1)",
+    )
+    .bind(project_id)
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(|e| map_mutation_err("sum project usage", e))?;
+    if delta > 0 && used_after > quota {
+        return Err(PolicyViolation::QuotaExceeded(QuotaExceeded {
+            scope: QuotaScope::Project(ProjectId::from_uuid(project_id)),
+            limit_bytes: u64::try_from(quota).unwrap_or(0),
+            used_bytes: u64::try_from(used_after - delta).unwrap_or(0),
+            requested_bytes: u64::try_from(delta).unwrap_or(0),
+        })
+        .into());
+    }
+    sqlx::query(
+        "INSERT INTO quota_usage (scope_kind, scope_id, used_bytes, recounted_at) \
+         VALUES ('project', $1, $2, now()) \
+         ON CONFLICT (scope_kind, scope_id) DO UPDATE \
+            SET used_bytes = EXCLUDED.used_bytes, recounted_at = now()",
+    )
+    .bind(project_id)
+    .bind(used_after)
+    .execute(&mut *conn)
+    .await
+    .map_err(|e| map_mutation_err("update project quota usage", e))?;
+    Ok(())
+}
+
+async fn referenced_in_project(
+    conn: &mut PgConnection,
+    project_id: Uuid,
+    blob_id: Uuid,
+    except: Option<Uuid>,
+) -> Result<bool, MutationError> {
+    let found: bool = sqlx::query_scalar(
+        "SELECT EXISTS ( \
+            SELECT 1 FROM assets a \
+            JOIN repositories r ON r.id = a.repository_id \
+            WHERE r.project_id = $1 AND a.blob_id = $2 AND a.id IS DISTINCT FROM $3)",
+    )
+    .bind(project_id)
+    .bind(blob_id)
+    .bind(except)
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(|e| map_mutation_err("check project blob references", e))?;
+    Ok(found)
+}
+
 /// The outcome of a switch: the asset as it is now, and the displaced blob only when it lost
 /// its last reference (the same rule as `delete_by_path`). With `link` two assets can share a
 /// blob, and returning a still referenced blob as "to be garbage collected" would invite a
@@ -381,6 +475,9 @@ pub(super) async fn publish(
     if let Some(quota) = guard.quota_bytes {
         enforce_repository_quota(&mut tx, new.repository_id, quota, &spec, &switched).await?;
     }
+    if let (Some(project_id), Some(quota)) = (guard.project_id, guard.project_quota) {
+        enforce_project_quota(&mut tx, project_id, quota, &spec, &switched).await?;
+    }
     let result = outcome(&mut tx, &switched, spec.blob_id).await?;
     write::commit(tx, options, CONTEXT).await?;
     Ok(result)
@@ -419,6 +516,9 @@ pub(super) async fn link(
     let switched = switch_asset(&mut tx, &guard, &spec, options.mode, Some(link.blob_id)).await?;
     if let Some(quota) = guard.quota_bytes {
         enforce_repository_quota(&mut tx, link.repository_id, quota, &spec, &switched).await?;
+    }
+    if let (Some(project_id), Some(quota)) = (guard.project_id, guard.project_quota) {
+        enforce_project_quota(&mut tx, project_id, quota, &spec, &switched).await?;
     }
     let result = outcome(&mut tx, &switched, spec.blob_id).await?;
     write::commit(tx, options, CONTEXT).await?;

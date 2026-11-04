@@ -91,6 +91,14 @@ const CONSTRAINT_MESSAGES: &[(&str, &str)] = &[
     ("uq_projects_name", "project name already exists"),
     ("uq_routing_rules_name", "routing rule name already exists"),
     (
+        "ck_immutability_max_per_scope",
+        "a scope has at most 15 immutability rules",
+    ),
+    (
+        "ck_immutability_scope",
+        "an immutability rule belongs to a project or a repository",
+    ),
+    (
         "ck_routing_rules_patterns",
         "a routing rule needs 1 to 32 patterns of 1 to 256 bytes",
     ),
@@ -157,6 +165,36 @@ const CONSTRAINT_MESSAGES: &[(&str, &str)] = &[
     (
         "ck_users_local_no_external",
         "local accounts have no external identity",
+    ),
+    (
+        "ck_robot_tokens_name",
+        concat!(
+            "robot full name must be 1 to 128 letters, digits, '+', '.', '_' or '-', ",
+            "starting with a letter or digit"
+        ),
+    ),
+    (
+        "ck_robot_tokens_short_name",
+        concat!(
+            "robot name must be 1 to 64 letters, digits, '.', '_' or '-', ",
+            "starting with a letter or digit"
+        ),
+    ),
+    (
+        "ck_robot_tokens_scopes",
+        "a robot needs at least one scope and at most 64",
+    ),
+    (
+        "ck_robot_tokens_hash",
+        "token hash must be 64 lowercase hex characters",
+    ),
+    (
+        "uq_robot_tokens_name",
+        "a robot with that name or secret already exists",
+    ),
+    (
+        "uq_robot_tokens_hash",
+        "a robot with that name or secret already exists",
     ),
     ("ck_role_roles_not_self", "a role cannot contain itself"),
     (

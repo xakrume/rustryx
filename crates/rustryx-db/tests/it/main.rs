@@ -19,6 +19,8 @@
 mod fixtures;
 mod foundation_tests;
 mod guard_tests;
+mod immutability_tests;
+mod lifecycle_hold_tests;
 mod support;
 
 mod asset_tests;
@@ -38,10 +40,13 @@ mod migrate_tests;
 mod outbox_tests;
 mod privilege_tests;
 mod publish_with_tests;
+mod quota_tests;
 mod rbac_tests;
 mod repository_tests;
 mod repository_wave2_tests;
+mod retention_tests;
 mod revoked_tests;
+mod robot_tests;
 mod routing_tests;
 mod system_config_tests;
 mod token_tests;
