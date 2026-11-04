@@ -196,6 +196,14 @@ const CONSTRAINT_MESSAGES: &[(&str, &str)] = &[
         "uq_robot_tokens_hash",
         "a robot with that name or secret already exists",
     ),
+    (
+        "uq_project_members_user",
+        "the subject already has a role in the project",
+    ),
+    (
+        "uq_project_members_group",
+        "the subject already has a role in the project",
+    ),
     ("ck_role_roles_not_self", "a role cannot contain itself"),
     (
         "ck_privileges_grant_shape",

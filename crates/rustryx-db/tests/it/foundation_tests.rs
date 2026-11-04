@@ -64,13 +64,13 @@ async fn the_foundation_creates_its_tables_and_nothing_of_the_streams() {
         "quotas",
         "quota_usage",
         "robot_tokens",
+        "project_members",
     ] {
         assert!(tables.iter().any(|t| t == expected), "missing {expected}");
     }
     // Owned by the streams, in their own migration ranges (design section 1.5).
     for foreign in [
         "cleanup_policies",
-        "project_members",
         "labels",
         "scanners",
         "webhooks",
