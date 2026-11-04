@@ -67,9 +67,9 @@ type SyncView = {
   error: string | null
 }
 
-async function readSync(name: string, method: 'GET' | 'POST'): Promise<SyncView> {
+async function readSync(name: string, method: 'GET' | 'POST' | 'DELETE'): Promise<SyncView> {
   const headers = new Headers({ Accept: 'application/json' })
-  if (method === 'POST') {
+  if (method !== 'GET') {
     const csrf = getCsrfToken()
     if (csrf) headers.set('x-csrf-token', csrf)
   }
@@ -159,7 +159,8 @@ function UpstreamActions({ repo }: { repo: RepositoryView }) {
         {rpmProxy ? (
           <Button
             variant="outline"
-            loading={sync?.status === 'running'}
+            loading={sync?.status === 'running' || sync?.status === 'stopping'}
+            disabled={sync?.status === 'running' || sync?.status === 'stopping'}
             onClick={() => {
               readSync(repo.name, 'POST')
                 .then((view) => {
@@ -171,7 +172,27 @@ function UpstreamActions({ repo }: { repo: RepositoryView }) {
                 .catch(() => toast.apiError(new Error('sync'), t('repoForm.upstream.syncFailed')))
             }}
           >
-            {sync?.status === 'running' ? t('repoForm.upstream.syncing') : t('repoForm.upstream.sync')}
+            {sync?.status === 'running' || sync?.status === 'stopping'
+              ? t('repoForm.upstream.syncing')
+              : t('repoForm.upstream.sync')}
+          </Button>
+        ) : null}
+        {rpmProxy && (sync?.status === 'running' || sync?.status === 'stopping') ? (
+          <Button
+            variant="outline"
+            disabled={sync.status === 'stopping'}
+            onClick={() => {
+              readSync(repo.name, 'DELETE')
+                .then((view) => {
+                  setSync(view)
+                  toast.success(t('repoForm.upstream.syncStopped', { name: repo.name }))
+                })
+                .catch(() => toast.apiError(new Error('sync'), t('repoForm.upstream.syncFailed')))
+            }}
+          >
+            {sync.status === 'stopping'
+              ? t('repoForm.upstream.syncStopping')
+              : t('repoForm.upstream.syncStop')}
           </Button>
         ) : null}
       </div>

@@ -329,8 +329,11 @@ export const repositoriesMessages = {
       blockFailed: 'The upstream could not be changed',
       sync: 'Synchronize',
       syncing: 'Synchronizing',
+      syncStop: 'Stop',
+      syncStopping: 'Stopping',
       syncProgress: '{fetched} fetched, {skipped} already stored, {failed} failed, of {total}',
       syncDone: '{name} is synchronized.',
+      syncStopped: 'Synchronization of {name} was stopped.',
       syncFailed: 'Synchronization failed',
     },
     danger: {

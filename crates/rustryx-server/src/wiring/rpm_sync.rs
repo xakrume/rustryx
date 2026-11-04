@@ -1,7 +1,8 @@
 //! Synchronize an RPM proxy: metadata first, then packages that are not cached yet.
 //!
 //! `POST /api/v1/repositories/{name}/actions/sync` starts one run. A second post while
-//! that run is in progress returns the same progress. Packages already stored are skipped.
+//! that run is in progress returns the same progress. `DELETE` on the same path asks the
+//! run to stop after the current batch. Packages already stored are skipped.
 
 use std::sync::{Arc, Mutex};
 
@@ -72,6 +73,7 @@ impl RouteModule for RpmSyncModule {
             Requires::Admin,
             axum::routing::get(sync_status)
                 .post(sync_start)
+                .delete(sync_stop)
                 .with_state(state),
         )
     }
@@ -142,7 +144,10 @@ async fn sync_start(
     }
     {
         let mut runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
-        if runs.get(&name).is_some_and(|view| view.status == "running") {
+        if runs
+            .get(&name)
+            .is_some_and(|view| view.status == "running" || view.status == "stopping")
+        {
             let view = runs.get(&name).cloned().unwrap_or_else(SyncView::running);
             return Ok((StatusCode::OK, Json(view)).into_response());
         }
@@ -159,6 +164,11 @@ async fn sync_start(
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         let view = runs.entry(key).or_insert_with(SyncView::running);
+        if view.status == "stopping" || view.status == "cancelled" {
+            view.status = "cancelled".to_owned();
+            view.error = None;
+            return;
+        }
         match result {
             Ok(()) if view.packages_failed == 0 => view.status = "succeeded".to_owned(),
             Ok(()) => {
@@ -176,6 +186,27 @@ async fn sync_start(
         runs.get(&name).cloned().unwrap_or_else(SyncView::running)
     };
     Ok((StatusCode::ACCEPTED, Json(view)).into_response())
+}
+
+async fn sync_stop(
+    State(api): State<SyncApi>,
+    _proof: Authorized<AdminGrant>,
+    Path(name): Path<String>,
+) -> Result<Json<SyncView>, ApiError> {
+    let _ = parse_name(&name)?;
+    let mut runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
+    if let Some(view) = runs.get_mut(&name)
+        && view.status == "running"
+    {
+        view.status = "stopping".to_owned();
+    }
+    Ok(Json(runs.get(&name).cloned().unwrap_or_else(SyncView::idle)))
+}
+
+fn stopping(api: &SyncApi, name: &str) -> bool {
+    let runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
+    runs.get(name)
+        .is_some_and(|view| view.status == "stopping" || view.status == "cancelled")
 }
 
 fn parse_name(name: &str) -> Result<RepoName, ApiError> {
@@ -204,6 +235,9 @@ async fn run_sync(
         packages: rpm_index::package_paths(&primary_xml).map_err(index_error)?,
     };
     for path in &index.metadata {
+        if stopping(api, name) {
+            return Ok(());
+        }
         if path == "repodata/repomd.xml" || path == &primary {
             continue;
         }
@@ -221,6 +255,9 @@ async fn run_sync(
         }
     }
     for chunk in index.packages.chunks(PARALLEL) {
+        if stopping(api, name) {
+            return Ok(());
+        }
         let mut work = Vec::new();
         for path in chunk {
             if api
