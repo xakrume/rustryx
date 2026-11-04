@@ -86,6 +86,8 @@ async fn the_foundation_creates_its_tables_and_nothing_of_the_streams() {
         "promotion_items",
         "promotion_decisions",
         "cve_allowlist",
+        "gc_runs",
+        "gc_samples",
     ] {
         assert!(tables.iter().any(|t| t == expected), "missing {expected}");
     }

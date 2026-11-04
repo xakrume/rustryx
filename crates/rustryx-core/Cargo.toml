@@ -24,8 +24,8 @@ thiserror.workspace = true
 # workspace-wide by cargo, so no workspace line had to change.
 time = { workspace = true, features = ["serde-well-known"] }
 uuid.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 # Differential and property tests of the glob translation (`glob_translation_matches_reference`).
 proptest.workspace = true
-regex.workspace = true
