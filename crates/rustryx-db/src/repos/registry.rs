@@ -174,9 +174,19 @@ impl RegistryRepo for PgRegistryRepo {
         .fetch_all(&self.pool)
         .await
         .map_err(|e| map_err("read registry dependents", e))?;
+        let rules: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM replication_rules WHERE registry_id = $1 ORDER BY id",
+        )
+        .bind(id.as_uuid())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| map_err("read registry dependents", e))?;
         Ok(RegistryDependents {
             proxy_repositories: proxies.into_iter().map(RepositoryId::from_uuid).collect(),
-            replication_rules: Vec::<ReplicationRuleId>::new(),
+            replication_rules: rules
+                .into_iter()
+                .map(ReplicationRuleId::from_uuid)
+                .collect(),
         })
     }
 
