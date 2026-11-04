@@ -4055,7 +4055,7 @@ export interface components {
          * @example maven2
          * @enum {string}
          */
-        RepoFormat: "maven2" | "npm" | "pypi" | "docker" | "oci" | "helm" | "raw" | "pub";
+        RepoFormat: "maven2" | "npm" | "pypi" | "docker" | "oci" | "helm" | "raw" | "pub" | "rpm" | "apt" | "apk";
         /**
          * @description How a repository obtains its content (rustryx-core `RepoType`).
          * @example hosted

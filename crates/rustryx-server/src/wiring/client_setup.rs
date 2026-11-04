@@ -223,6 +223,9 @@ fn snippets(
         ),
         RepoFormat::Pub => pub_snippets(url, publish_url.as_deref(), anonymous, can_write),
         RepoFormat::Raw => raw(url, publish_url.as_deref(), anonymous, can_write),
+        RepoFormat::Rpm => rpm(url, anonymous),
+        RepoFormat::Apt => apt(url, anonymous),
+        RepoFormat::Apk => apk(url),
         _ => Vec::new(),
     }
 }
@@ -599,6 +602,69 @@ fn pub_snippets(
         ));
     }
     out
+}
+
+fn rpm(url: &str, anonymous: bool) -> Vec<Snippet> {
+    let auth = if anonymous {
+        String::new()
+    } else {
+        "\nusername=<USERNAME>\npassword=<TOKEN>".to_owned()
+    };
+    let mut placeholders = Vec::new();
+    if !anonymous {
+        placeholders.extend([USERNAME, TOKEN]);
+    }
+    vec![snippet(
+        "dnf-repo",
+        "dnf",
+        "Use the repository with dnf or yum",
+        "resolve",
+        "ini",
+        Some("/etc/yum.repos.d/rustryx.repo"),
+        format!("[rustryx]\nname=rustryx\nbaseurl={url}\nenabled=1\ngpgcheck=0{auth}\n"),
+        placeholders,
+        "browse",
+    )]
+}
+
+fn apt(url: &str, anonymous: bool) -> Vec<Snippet> {
+    let line = if anonymous {
+        format!("deb {url} <SUITE> main")
+    } else {
+        format!("deb [trusted=yes] {url} <SUITE> main")
+    };
+    let mut placeholders = vec![Placeholder {
+        name: "SUITE",
+        description: "Distribution suite, for example trixie or noble.",
+    }];
+    if !anonymous {
+        placeholders.extend([USERNAME, TOKEN]);
+    }
+    vec![snippet(
+        "apt-source",
+        "apt",
+        "Add the repository to apt",
+        "resolve",
+        "text",
+        Some("/etc/apt/sources.list.d/rustryx.list"),
+        line,
+        placeholders,
+        "browse",
+    )]
+}
+
+fn apk(url: &str) -> Vec<Snippet> {
+    vec![snippet(
+        "apk-repo",
+        "apk",
+        "Add the repository to apk",
+        "resolve",
+        "text",
+        Some("/etc/apk/repositories"),
+        url.to_owned(),
+        Vec::new(),
+        "browse",
+    )]
 }
 
 fn raw(url: &str, publish: Option<&str>, anonymous: bool, can_write: bool) -> Vec<Snippet> {

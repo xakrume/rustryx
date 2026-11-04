@@ -383,6 +383,46 @@ export function buildSnippets(input: SnippetInput): ClientSnippet[] {
       return pub(input)
     case 'raw':
       return raw(input)
+    case 'rpm':
+      return [
+        snippet({
+          id: 'dnf-repo',
+          client: 'dnf',
+          title: 'Use the repository with dnf or yum',
+          purpose: 'resolve',
+          language: 'ini',
+          file: '/etc/yum.repos.d/rustryx.repo',
+          content: `[rustryx]\nname=rustryx\nbaseurl=${input.url}\nenabled=1\ngpgcheck=0\n`,
+          requires: 'browse',
+        }),
+      ]
+    case 'apt':
+      return [
+        snippet({
+          id: 'apt-source',
+          client: 'apt',
+          title: 'Add the repository to apt',
+          purpose: 'resolve',
+          language: 'text',
+          file: '/etc/apt/sources.list.d/rustryx.list',
+          content: `deb ${input.url} <SUITE> main`,
+          placeholders: [{ name: 'SUITE', description: 'Distribution suite, for example trixie or noble.' }],
+          requires: 'browse',
+        }),
+      ]
+    case 'apk':
+      return [
+        snippet({
+          id: 'apk-repo',
+          client: 'apk',
+          title: 'Add the repository to apk',
+          purpose: 'resolve',
+          language: 'text',
+          file: '/etc/apk/repositories',
+          content: input.url,
+          requires: 'browse',
+        }),
+      ]
     default:
       return []
   }

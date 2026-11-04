@@ -695,6 +695,9 @@ fn format_label(format: RepoFormat) -> &'static str {
         RepoFormat::Helm => "Helm",
         RepoFormat::Raw => "Raw",
         RepoFormat::Pub => "Dart pub",
+        RepoFormat::Rpm => "RPM (yum, dnf)",
+        RepoFormat::Apt => "APT",
+        RepoFormat::Apk => "APK (Alpine)",
         _ => "Other",
     }
 }

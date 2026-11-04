@@ -55,7 +55,14 @@ impl RawHandler {
 #[async_trait]
 impl FormatHandler for RawHandler {
     fn formats(&self) -> &'static [RepoFormat] {
-        &[RepoFormat::Raw]
+        // RPM, apt and apk repositories are path trees. yum and dnf share `rpm`.
+        // The same pipeline serves them until a format grows its own index.
+        &[
+            RepoFormat::Raw,
+            RepoFormat::Rpm,
+            RepoFormat::Apt,
+            RepoFormat::Apk,
+        ]
     }
 
     fn classify(
@@ -228,7 +235,15 @@ mod tests {
     }
 
     #[test]
-    fn the_handler_serves_the_raw_format_only() {
-        assert_eq!(RawHandler::new().formats(), &[RepoFormat::Raw]);
+    fn the_handler_serves_raw_rpm_apt_and_apk() {
+        assert_eq!(
+            RawHandler::new().formats(),
+            &[
+                RepoFormat::Raw,
+                RepoFormat::Rpm,
+                RepoFormat::Apt,
+                RepoFormat::Apk
+            ]
+        );
     }
 }

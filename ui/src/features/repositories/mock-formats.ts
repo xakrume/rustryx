@@ -137,6 +137,9 @@ export const MOCK_FORMATS: readonly FormatInfo[] = [
     cleanup_criteria: ['older_than_days', 'last_downloaded_days', 'keep_last_versions'],
     client_ids: ['dart'],
   }),
+  info('rpm', 'RPM (yum, dnf)', { client_ids: ['dnf', 'yum'] }),
+  info('apt', 'APT', { client_ids: ['apt'] }),
+  info('apk', 'APK (Alpine)', { client_ids: ['apk'] }),
 ]
 
 const field = (f: Partial<UploadField> & Pick<UploadField, 'name' | 'label'>): UploadField => ({
@@ -231,6 +234,9 @@ export function mockUploadSchema(format: FormatInfo['format']): UploadSchema | n
     case 'pub':
       return { ...base, format, accepted_extensions: ['.tar.gz'], fields: [] }
     case 'raw':
+    case 'rpm':
+    case 'apt':
+    case 'apk':
       return {
         ...base,
         format,

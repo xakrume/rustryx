@@ -54,7 +54,7 @@ const whole = (text: string): boolean => /^\d+$/.test(text.trim()) && Number(tex
 const shape = {
   name: z.string(),
   description: z.string(),
-  format: z.enum(['maven2', 'npm', 'pypi', 'docker', 'oci', 'helm', 'raw', 'pub']),
+  format: z.enum(['maven2', 'npm', 'pypi', 'docker', 'oci', 'helm', 'raw', 'pub', 'rpm', 'apt', 'apk']),
   older_than_days: z.string(),
   last_downloaded_days: z.string(),
   keep_last_versions: z.string(),

@@ -504,6 +504,9 @@ fn recipe(format: &str) -> Result<RepoFormat, compatFail> {
         "helm" => Ok(RepoFormat::Helm),
         "raw" => Ok(RepoFormat::Raw),
         "pub" => Ok(RepoFormat::Pub),
+        "rpm" | "yum" | "dnf" => Ok(RepoFormat::Rpm),
+        "apt" | "deb" => Ok(RepoFormat::Apt),
+        "apk" | "alpine" => Ok(RepoFormat::Apk),
         _ => Err(fail(StatusCode::BAD_REQUEST, "Unknown repository format")),
     }
 }

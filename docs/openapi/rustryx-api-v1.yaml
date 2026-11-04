@@ -10488,7 +10488,7 @@ components:
       example: maven-releases
     RepoFormat:
       type: string
-      enum: [maven2, npm, pypi, docker, oci, helm, raw, pub]
+      enum: [maven2, npm, pypi, docker, oci, helm, raw, pub, rpm, apt, apk]
       description: Package format of a repository (rustryx-core `RepoFormat`, lowercase label). More formats arrive additively;
         clients must tolerate unknown values.
       example: maven2

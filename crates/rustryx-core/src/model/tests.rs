@@ -32,12 +32,12 @@ fn format_labels_round_trip() {
 }
 
 #[test]
-fn format_all_lists_the_eight_phase_one_formats_in_order() {
+fn format_all_lists_the_formats_in_order() {
     let labels: Vec<_> = RepoFormat::ALL.iter().map(|f| f.as_str()).collect();
     assert_eq!(
         labels,
         [
-            "maven2", "npm", "pypi", "docker", "oci", "helm", "raw", "pub"
+            "maven2", "npm", "pypi", "docker", "oci", "helm", "raw", "pub", "rpm", "apt", "apk"
         ]
     );
 }

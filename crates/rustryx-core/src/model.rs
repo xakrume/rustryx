@@ -42,6 +42,12 @@ pub enum RepoFormat {
     Raw,
     /// Dart and Flutter hosted pub repository (spec v2).
     Pub,
+    /// RPM repository layout. `yum` and `dnf` both read it (`repodata/repomd.xml`).
+    Rpm,
+    /// Debian package repository layout. `apt` reads `dists/<suite>/Release`.
+    Apt,
+    /// Alpine package repository layout. `apk` reads `APKINDEX.tar.gz`.
+    Apk,
 }
 
 impl RepoFormat {
@@ -56,6 +62,9 @@ impl RepoFormat {
         Self::Helm,
         Self::Raw,
         Self::Pub,
+        Self::Rpm,
+        Self::Apt,
+        Self::Apk,
     ];
 
     /// Canonical lowercase label used in URLs, JSON and the database.
@@ -70,6 +79,9 @@ impl RepoFormat {
             Self::Helm => "helm",
             Self::Raw => "raw",
             Self::Pub => "pub",
+            Self::Rpm => "rpm",
+            Self::Apt => "apt",
+            Self::Apk => "apk",
         }
     }
 }
