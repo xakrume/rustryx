@@ -62,7 +62,8 @@ export const repositoriesMessages = {
       notScanned: 'Not scanned',
     },
     list: {
-      description: 'Hosted, proxy and group repositories you can browse.',
+      description:
+        'Package and image repositories in one list: hosted, proxy, and group. Open an image repository for tags and the pull command.',
       actionsFor: 'Actions for {name}',
       open: 'Open',
       clientSetup: 'Client setup',
@@ -78,6 +79,7 @@ export const repositoriesMessages = {
     tabs: {
       label: 'Repository sections',
       overview: 'Overview',
+      images: 'Images',
       settings: 'Settings',
     },
     delete: {

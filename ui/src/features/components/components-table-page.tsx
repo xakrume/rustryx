@@ -134,10 +134,10 @@ export function RepositoryComponentsPage() {
   )
   return (
     <div className="space-y-3">
-      <h2 className="sr-only">{t('pages.components')}</h2>
+      <h2 className="sr-only">{images ? t('repos.tabs.images') : t('pages.components')}</h2>
       <DataTable<ComponentView>
         tableId={`components-${images ? 'images' : 'packages'}`}
-        label={t('pages.components')}
+        label={images ? t('repos.tabs.images') : t('pages.components')}
         columns={columns}
         rows={list.items}
         getRowId={(c) => c.id}

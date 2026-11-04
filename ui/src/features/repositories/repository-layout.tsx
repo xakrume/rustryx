@@ -44,10 +44,11 @@ function tabsFor(repo: RepositoryView, canViewAudit: boolean): Tab[] {
   if (repo.format !== 'docker' && repo.format !== 'oci') {
     tabs.push({ id: 'browse', to: '/repositories/$name/browse', label: t('pages.browse') })
   }
+  const images = repo.format === 'docker' || repo.format === 'oci'
   tabs.push({
     id: 'components',
     to: '/repositories/$name/components',
-    label: t('pages.components'),
+    label: images ? t('repos.tabs.images') : t('pages.components'),
   })
   if (repo.permissions.admin) {
     tabs.push({

@@ -8,7 +8,6 @@ import {
 } from '@tanstack/react-table'
 import { ArrowDown, ArrowUp, ArrowUpDown, Inbox } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { DensityToggle } from '@/components/density-toggle'
 import { EmptyState } from '@/components/empty-state'
 import { ErrorPanel } from '@/components/error-panel'
 import { Button } from '@/components/ui/button'
@@ -94,7 +93,7 @@ const SKELETON_ROWS = 8
 /**
  * The table every list page uses. Data, filters, sort and paging are server side (keyset
  * pagination, "load more"); this component only presents them: sortable headers with
- * aria-sort, sticky header, column chooser, row selection with a bulk action bar, density,
+ * aria-sort, sticky header, column chooser, row selection with a bulk action bar,
  * delayed loading skeleton, empty / filtered / error states, and a keyboard focusable
  * horizontal scroll region for narrow screens.
  *
@@ -258,7 +257,6 @@ export function DataTable<T>({
         </div>
         <div className="flex items-center gap-1">
           <ColumnMenu table={table} />
-          <DensityToggle />
         </div>
       </div>
 

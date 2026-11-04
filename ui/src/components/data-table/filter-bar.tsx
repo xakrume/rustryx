@@ -22,7 +22,7 @@ export interface FilterBarProps {
   /** Called with the new value, or null to remove the filter. */
   onChange: (id: string, value: string | null) => void
   onClear: () => void
-  /** Extra controls on the right: column chooser, density, refresh. */
+  /** Extra controls on the right: column chooser, refresh. Density lives in the top bar. */
   trailing?: ReactNode
 }
 

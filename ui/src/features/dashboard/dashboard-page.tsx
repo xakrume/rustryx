@@ -48,6 +48,144 @@ function Summary({ summary }: { summary: DashboardSummary }) {
   )
 }
 
+interface JobLink {
+  to:
+    | '/search'
+    | '/repositories'
+    | '/upload'
+    | '/admin/blob-stores'
+    | '/admin/cleanup-policies'
+    | '/admin/routing-rules'
+    | '/admin/tokens'
+    | '/admin/tasks'
+    | '/admin/users'
+  label: string
+  hint: string
+  search?: Record<string, never>
+}
+
+function JobGroup({ title, jobs }: { title: string; jobs: JobLink[] }) {
+  if (jobs.length === 0) return null
+  return (
+    <div>
+      <h3 className="text-sm font-semibold">{title}</h3>
+      <ul className="mt-2 space-y-3">
+        {jobs.map((job) => (
+          <li key={job.label}>
+            <Link
+              to={job.to}
+              search={job.search ?? {}}
+              className="font-medium text-link underline-offset-2 hover:underline"
+            >
+              {job.label}
+            </Link>
+            <p className="text-sm text-muted-foreground">{job.hint}</p>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+/** The jobs an engineer has on both a package manager and an image registry, on the screens that exist. */
+function EngineerJobs() {
+  const permissions = usePermissions()
+  if (!permissions.authenticated) return null
+  const find: JobLink[] = [
+    {
+      to: '/search',
+      label: t('dashboard.jobs.search'),
+      hint: t('dashboard.jobs.searchHint'),
+    },
+    {
+      to: '/repositories',
+      label: t('dashboard.jobs.repositories'),
+      hint: t('dashboard.jobs.repositoriesHint'),
+    },
+  ]
+  const publish: JobLink[] = [
+    ...(permissions.can.upload
+      ? [
+          {
+            to: '/upload' as const,
+            label: t('dashboard.jobs.upload'),
+            hint: t('dashboard.jobs.uploadHint'),
+          },
+        ]
+      : []),
+    {
+      to: '/repositories',
+      label: t('dashboard.jobs.setup'),
+      hint: t('dashboard.jobs.setupHint'),
+    },
+  ]
+  const run: JobLink[] = [
+    ...(permissions.hasArea('blobstores')
+      ? [
+          {
+            to: '/admin/blob-stores' as const,
+            label: t('dashboard.jobs.blobStores'),
+            hint: t('dashboard.jobs.blobStoresHint'),
+          },
+        ]
+      : []),
+    ...(permissions.isAdmin
+      ? [
+          {
+            to: '/admin/cleanup-policies' as const,
+            label: t('dashboard.jobs.cleanup'),
+            hint: t('dashboard.jobs.cleanupHint'),
+          },
+          {
+            to: '/admin/routing-rules' as const,
+            label: t('dashboard.jobs.routing'),
+            hint: t('dashboard.jobs.routingHint'),
+          },
+        ]
+      : []),
+    ...(permissions.hasArea('tokens')
+      ? [
+          {
+            to: '/admin/tokens' as const,
+            label: t('dashboard.jobs.tokens'),
+            hint: t('dashboard.jobs.tokensHint'),
+          },
+        ]
+      : []),
+    ...(permissions.hasArea('tasks')
+      ? [
+          {
+            to: '/admin/tasks' as const,
+            label: t('dashboard.jobs.tasks'),
+            hint: t('dashboard.jobs.tasksHint'),
+          },
+        ]
+      : []),
+    ...(permissions.hasArea('users')
+      ? [
+          {
+            to: '/admin/users' as const,
+            label: t('dashboard.jobs.users'),
+            hint: t('dashboard.jobs.usersHint'),
+          },
+        ]
+      : []),
+  ]
+  return (
+    <section aria-labelledby="engineer-jobs" className="mb-6 rounded-lg border border-border p-4">
+      <h2 id="engineer-jobs" className="text-base font-semibold">
+        {t('dashboard.jobs.title')}
+      </h2>
+      <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t('dashboard.jobs.lead')}</p>
+      <div className="mt-4 grid gap-6 md:grid-cols-3">
+        <JobGroup title={t('dashboard.jobs.find')} jobs={find} />
+        <JobGroup title={t('dashboard.jobs.publish')} jobs={publish} />
+        <JobGroup title={t('dashboard.jobs.run')} jobs={run} />
+      </div>
+    </section>
+  )
+}
+
 /** Quick actions of the home page: what a signed in user most often wants to do next. */
 function QuickActions() {
   const permissions = usePermissions()
@@ -107,7 +245,10 @@ export function DashboardPage() {
           title={t('dashboard.loadFailed')}
         />
       ) : data ? (
-        <Summary summary={data} />
+        <>
+          <EngineerJobs />
+          <Summary summary={data} />
+        </>
       ) : (
         <div aria-busy="true" className="grid min-h-48 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {showSkeleton ? (

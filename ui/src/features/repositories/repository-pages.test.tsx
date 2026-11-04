@@ -58,7 +58,7 @@ describe('repository detail', () => {
     renderApp('/repositories/docker-releases', { user: 'admin' })
     const nav = await screen.findByRole('navigation', { name: 'Repository sections' })
     expect(within(nav).queryByRole('link', { name: 'Browse' })).not.toBeInTheDocument()
-    expect(within(nav).getByRole('link', { name: 'Components' })).toBeInTheDocument()
+    expect(within(nav).getByRole('link', { name: 'Images' })).toBeInTheDocument()
   })
 
   it('says "not found or hidden" for a repository that does not exist', async () => {
