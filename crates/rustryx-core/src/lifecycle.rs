@@ -31,6 +31,9 @@ pub const MAX_HOLD_REASON_CHARS: usize = 500;
 pub const MAX_LIFECYCLE_ITEMS_PER_RUN: usize = 100_000;
 
 mod gc;
+mod select;
+
+pub use select::deletions_for;
 
 pub use gc::{
     DEFAULT_GC_WORKERS, GcCounts, GcOptions, GcRun, GcSample, MAX_GC_WORKERS, SoftQuota,
