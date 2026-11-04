@@ -42,6 +42,8 @@ pub const SQLSTATE_READ_ONLY: &str = "RX007";
 /// SQLSTATE raised by the scope guards (a label on a component of another project, the last
 /// project administrator).
 pub const SQLSTATE_SCOPE_VIOLATION: &str = "RX008";
+/// SQLSTATE raised when a component already carries 50 labels.
+pub const SQLSTATE_LABEL_LIMIT: &str = "RX009";
 
 /// Sanitised error source for logs: no statement text, no row values.
 #[derive(Debug)]
@@ -204,6 +206,8 @@ const CONSTRAINT_MESSAGES: &[(&str, &str)] = &[
         "uq_project_members_group",
         "the subject already has a role in the project",
     ),
+    ("uq_labels_system", "a label with that name already exists"),
+    ("uq_labels_project", "a label with that name already exists"),
     ("ck_role_roles_not_self", "a role cannot contain itself"),
     (
         "ck_privileges_grant_shape",
@@ -289,6 +293,9 @@ fn map_database(context: &'static str, db: &dyn DatabaseError) -> StoreError {
         SQLSTATE_QUOTA_EXCEEDED => StoreError::Conflict(QUOTA_TEXT.to_owned()),
         SQLSTATE_READ_ONLY => StoreError::Conflict(READ_ONLY_TEXT.to_owned()),
         SQLSTATE_SCOPE_VIOLATION => StoreError::Conflict(SCOPE_TEXT.to_owned()),
+        SQLSTATE_LABEL_LIMIT => {
+            StoreError::Invalid("a component carries at most 50 labels".to_owned())
+        }
         // serialization_failure, deadlock_detected: the caller may retry the whole operation
         "40001" | "40P01" => StoreError::Unavailable("transaction conflict, retry".to_owned()),
         // query_canceled (statement_timeout), admin_shutdown, crash_shutdown, cannot_connect_now

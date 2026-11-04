@@ -33,6 +33,7 @@ mod closed_pool_tests;
 mod component_tests;
 mod downloads_tests;
 mod error_tests;
+mod label_tests;
 mod lease_tests;
 mod link_gc_tests;
 mod lock_tests;
