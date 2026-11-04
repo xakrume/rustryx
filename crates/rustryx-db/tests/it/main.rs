@@ -29,6 +29,7 @@ mod audit_read_tests;
 mod audit_tests;
 mod bootstrap_tests;
 mod bus_tests;
+mod cleanup_tests;
 mod closed_pool_tests;
 mod component_tests;
 mod downloads_tests;

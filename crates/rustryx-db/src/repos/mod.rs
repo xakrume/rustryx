@@ -6,6 +6,7 @@
 pub mod asset;
 pub mod blob;
 pub mod blob_store;
+pub mod cleanup;
 pub mod component;
 pub mod idp_mapping;
 pub mod immutability;
@@ -35,6 +36,7 @@ pub(crate) use common::{escape_like, notify};
 pub use asset::PgAssetRepo;
 pub use blob::PgBlobRepo;
 pub use blob_store::PgBlobStoreRepo;
+pub use cleanup::PgCleanupPolicyRepo;
 pub use component::PgComponentRepo;
 pub use idp_mapping::PgIdpMappingRepo;
 pub use immutability::PgImmutabilityRepo;

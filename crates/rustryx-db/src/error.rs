@@ -92,6 +92,7 @@ const CONSTRAINT_MESSAGES: &[(&str, &str)] = &[
     ("uq_job_leases_dedupe", "job is already queued or running"),
     ("uq_projects_name", "project name already exists"),
     ("uq_routing_rules_name", "routing rule name already exists"),
+    ("uq_cleanup_policies_name", "cleanup policy already exists"),
     (
         "ck_immutability_max_per_scope",
         "a scope has at most 15 immutability rules",

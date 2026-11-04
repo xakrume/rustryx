@@ -59,6 +59,7 @@ async fn the_foundation_creates_its_tables_and_nothing_of_the_streams() {
         "immutability_rules",
         "lifecycle_holds",
         "retention_policies",
+        "cleanup_policies",
         "lifecycle_runs",
         "lifecycle_run_items",
         "quotas",
@@ -72,7 +73,6 @@ async fn the_foundation_creates_its_tables_and_nothing_of_the_streams() {
     }
     // Owned by the streams, in their own migration ranges (design section 1.5).
     for foreign in [
-        "cleanup_policies",
         "scanners",
         "webhooks",
         "registries",
