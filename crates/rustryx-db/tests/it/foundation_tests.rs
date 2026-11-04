@@ -60,6 +60,7 @@ async fn the_foundation_creates_its_tables_and_nothing_of_the_streams() {
         "lifecycle_holds",
         "retention_policies",
         "cleanup_policies",
+        "blob_store_members",
         "lifecycle_runs",
         "lifecycle_run_items",
         "quotas",
@@ -76,7 +77,6 @@ async fn the_foundation_creates_its_tables_and_nothing_of_the_streams() {
         "scanners",
         "webhooks",
         "registries",
-        "blob_store_members",
         "asset_downloads_daily",
     ] {
         assert!(

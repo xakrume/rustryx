@@ -382,12 +382,13 @@ async fn a_blob_store_update_refuses_identity_changes_and_unstored_settings() {
     let err = store.blob_stores.create(&soft).await.unwrap_err();
     assert!(matches!(err, StoreError::Invalid(_)), "{err:?}");
 
-    // Kinds of the storage stream are mapped, and refused by the CHECK until its migration.
+    // The column check accepts azure and group. Membership rows are a separate table.
     for kind in [BlobStoreKind::Azure, BlobStoreKind::Group] {
         let mut def = blob_store(&unique("future"));
         def.kind = kind;
-        let err = store.blob_stores.create(&def).await.unwrap_err();
-        assert!(matches!(err, StoreError::Conflict(_)), "{kind:?}: {err:?}");
+        store.blob_stores.create(&def).await.unwrap();
+        let stored = store.blob_stores.get(def.id).await.unwrap().unwrap();
+        assert_eq!(stored.kind, kind);
     }
 }
 

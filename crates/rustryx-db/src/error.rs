@@ -209,6 +209,15 @@ const CONSTRAINT_MESSAGES: &[(&str, &str)] = &[
     ),
     ("uq_labels_system", "a label with that name already exists"),
     ("uq_labels_project", "a label with that name already exists"),
+    (
+        "uq_member_single_group",
+        "the store already belongs to a group",
+    ),
+    (
+        "uq_member_position",
+        "a group already has a member at that position",
+    ),
+    ("ck_member_not_self", "a store cannot be a member of itself"),
     ("ck_role_roles_not_self", "a role cannot contain itself"),
     (
         "ck_privileges_grant_shape",

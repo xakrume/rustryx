@@ -5,6 +5,7 @@
 
 pub mod asset;
 pub mod blob;
+pub mod blob_group;
 pub mod blob_store;
 pub mod cleanup;
 pub mod component;
@@ -35,6 +36,7 @@ pub(crate) use common::{escape_like, notify};
 
 pub use asset::PgAssetRepo;
 pub use blob::PgBlobRepo;
+pub use blob_group::PgBlobStoreMemberRepo;
 pub use blob_store::PgBlobStoreRepo;
 pub use cleanup::PgCleanupPolicyRepo;
 pub use component::PgComponentRepo;

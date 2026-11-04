@@ -47,10 +47,9 @@ struct Row {
     created_at: OffsetDateTime,
 }
 
-/// The stored text of a kind. The database CHECK still lists `local` and `s3` only (it widens
-/// with the storage stream, behind the `BlobGroupsAndAzure` gate), so a store of another kind
-/// is refused by the constraint until then. A kind this build does not know is an error, never
-/// a default: writing the wrong kind would send reads to the wrong backend.
+/// The stored text of a kind. The column check accepts `local`, `s3`, `azure` and `group`.
+/// A kind this build does not know is an error, never a default: writing the wrong kind
+/// would send reads to the wrong backend.
 fn kind_label(kind: BlobStoreKind) -> Result<&'static str, StoreError> {
     match kind {
         BlobStoreKind::Local => Ok("local"),

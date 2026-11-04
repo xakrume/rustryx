@@ -27,6 +27,7 @@ mod support;
 mod asset_tests;
 mod audit_read_tests;
 mod audit_tests;
+mod blob_group_tests;
 mod bootstrap_tests;
 mod bus_tests;
 mod cleanup_tests;
