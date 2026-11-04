@@ -34,6 +34,7 @@ mod disk;
 mod error;
 mod hashing;
 mod key;
+mod dedup;
 mod local;
 pub mod metrics;
 mod quota;
@@ -42,6 +43,7 @@ mod registry;
 mod s3;
 mod secrets;
 
+pub use dedup::{DedupReport, dedup_directory};
 pub use config::{
     BuildError, DEFAULT_MIN_FREE_PERCENT, DEFAULT_PART_BYTES, LocalConfig, MAX_PARTS,
     MAX_PRESIGN_TTL_SECS, MIN_PART_BYTES, PresignConfig, PresignSettings, S3Config, S3Settings,

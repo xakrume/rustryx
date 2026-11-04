@@ -31,6 +31,7 @@ mod bus;
 mod catalog;
 mod client_setup;
 mod database;
+mod dedup;
 mod formats;
 mod identity;
 pub mod maintenance;
@@ -416,6 +417,7 @@ fn route_modules(
                 url::Url::parse("http://127.0.0.1:8081").expect("fallback base url")
             }),
         )),
+        Arc::new(dedup::DedupModule::new(Arc::clone(&repos.blob_stores))),
     ]
 }
 

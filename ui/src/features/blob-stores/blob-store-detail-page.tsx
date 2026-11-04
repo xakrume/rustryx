@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { ArrowLeft } from 'lucide-react'
 import { ErrorPanel } from '@/components/error-panel'
@@ -8,11 +9,82 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useDelayedFlag } from '@/hooks/use-delayed-flag'
+import { getCsrfToken } from '@/api/csrf'
 import { t } from '@/i18n'
+import { toast } from '@/lib/toast-store'
 import { blobStoreQuery, blobStoreRepositoriesQuery } from './api'
 import { ConfigForm } from './blob-store-config-form'
 import { ConnectionCard, DeleteCard, RepositoriesCard, UsageCard } from './blob-store-sections'
 import { HealthBadge } from './usage-bar'
+
+type DedupView = {
+  status: string
+  links: number
+  bytes_saved: number
+  errors: number
+  error: string | null
+}
+
+async function readDedup(name: string, method: 'GET' | 'POST'): Promise<DedupView> {
+  const headers = new Headers({ Accept: 'application/json' })
+  if (method === 'POST') {
+    const csrf = getCsrfToken()
+    if (csrf) headers.set('x-csrf-token', csrf)
+  }
+  const response = await fetch(
+    `/api/v1/blob-stores/${encodeURIComponent(name)}/actions/dedup`,
+    { method, credentials: 'include', headers },
+  )
+  if (!response.ok) throw new Error(String(response.status))
+  return (await response.json()) as DedupView
+}
+
+function DedupCard({ name }: { name: string }) {
+  const [view, setView] = useState<DedupView | null>(null)
+  useEffect(() => {
+    let stop = false
+    const tick = () => {
+      readDedup(name, 'GET')
+        .then((next) => {
+          if (!stop) setView(next)
+        })
+        .catch(() => undefined)
+    }
+    tick()
+    const timer = window.setInterval(tick, 2000)
+    return () => {
+      stop = true
+      window.clearInterval(timer)
+    }
+  }, [name])
+  return (
+    <section className="space-y-3 rounded-lg border border-border bg-card p-4">
+      <h2 className="text-base font-semibold">{t('blobStores.dedup.title')}</h2>
+      <p className="text-sm text-muted-foreground">{t('blobStores.dedup.body')}</p>
+      <Button
+        variant="outline"
+        loading={view?.status === 'running'}
+        onClick={() => {
+          readDedup(name, 'POST')
+            .then(setView)
+            .catch(() => toast.apiError(new Error('dedup'), t('blobStores.dedup.failed')))
+        }}
+      >
+        {view?.status === 'running' ? t('blobStores.dedup.running') : t('blobStores.dedup.action')}
+      </Button>
+      {view && view.status !== 'idle' ? (
+        <p className="text-sm text-muted-foreground">
+          {t('blobStores.dedup.result', {
+            links: view.links,
+            bytes: view.bytes_saved,
+            errors: view.errors,
+          })}
+          {view.error ? ` ${view.error}` : ''}
+        </p>
+      ) : null}
+    </section>
+  )
+}
 
 /** `/admin/blob-stores/:name`: usage, configuration, connection test, repositories, delete. */
 export function BlobStoreDetailPage({ name }: { name: string }) {
@@ -64,6 +136,7 @@ export function BlobStoreDetailPage({ name }: { name: string }) {
           </div>
           <div className="space-y-4">
             <UsageCard view={stored.data} />
+            {stored.data.kind === 'local' ? <DedupCard name={name} /> : null}
             <ConnectionCard name={name} />
             <RepositoriesCard view={stored.data} />
             <DeleteCard

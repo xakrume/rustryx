@@ -9,6 +9,14 @@ export const blobStoresMessages = {
   createDescription:
     'The kind cannot change after creation. The store is checked with a probe object (write, read, delete) before it is saved.',
   backToList: 'Back to blob stores',
+  dedup: {
+    title: 'Deduplicate files',
+    body: 'Identical files in this local directory become one hardlink. S3 stores are already one object per hash.',
+    action: 'Deduplicate',
+    running: 'Deduplicating',
+    result: '{links} links, {bytes} bytes no longer stored twice. {errors} errors.',
+    failed: 'Deduplication could not finish',
+  },
   filters: {
     name: 'Name starts with',
     namePlaceholder: 'default, archive',
