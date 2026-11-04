@@ -98,6 +98,11 @@ const CONSTRAINT_MESSAGES: &[(&str, &str)] = &[
     ("uq_cve_allowlist_system", "the vulnerability is already allowed in this scope"),
     ("uq_cve_allowlist_project", "the vulnerability is already allowed in this scope"),
     ("uq_cve_allowlist_component", "the vulnerability is already allowed in this scope"),
+    ("uq_trust_material_name", "trust material already exists"),
+    ("uq_trust_material_fingerprint", "trust material already exists"),
+    ("uq_trust_policy_system", "the scope already has a policy"),
+    ("uq_trust_policy_project", "the scope already has a policy"),
+    ("uq_trust_policy_repo", "the scope already has a policy"),
     ("uq_routing_rules_name", "routing rule name already exists"),
     ("uq_cleanup_policies_name", "cleanup policy already exists"),
     (

@@ -13,7 +13,7 @@ use uuid::Uuid;
 use super::common::notify;
 use crate::error::{backend, map_err};
 
-/// Scan policies. Trust policies are not stored yet.
+/// Scan policies and the trust policy of a scope.
 #[derive(Clone)]
 pub struct PgScanPolicyRepo {
     pool: PgPool,
@@ -192,30 +192,21 @@ impl SecurityPolicyRepo for PgScanPolicyRepo {
 
     async fn upsert_trust_policy(
         &self,
-        _policy: &TrustPolicy,
-        _expected_version: Option<i64>,
+        policy: &TrustPolicy,
+        expected_version: Option<i64>,
     ) -> Result<(), StoreError> {
-        Err(StoreError::Invalid(
-            "trust policies are not stored yet".to_owned(),
-        ))
+        super::trust::upsert_policy(&self.pool, policy, expected_version).await
     }
 
-    async fn get_trust_policy(
-        &self,
-        _scope: PolicyScope,
-    ) -> Result<Option<TrustPolicy>, StoreError> {
-        Err(StoreError::Invalid(
-            "trust policies are not stored yet".to_owned(),
-        ))
+    async fn get_trust_policy(&self, scope: PolicyScope) -> Result<Option<TrustPolicy>, StoreError> {
+        super::trust::get_policy(&self.pool, scope).await
     }
 
     async fn effective_trust_for(
         &self,
-        _repository: RepositoryId,
+        repository: RepositoryId,
     ) -> Result<Option<TrustPolicy>, StoreError> {
-        Err(StoreError::Invalid(
-            "trust policies are not stored yet".to_owned(),
-        ))
+        super::trust::effective_policy(&self.pool, repository).await
     }
 }
 

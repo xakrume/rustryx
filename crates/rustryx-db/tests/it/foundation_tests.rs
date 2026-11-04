@@ -88,12 +88,14 @@ async fn the_foundation_creates_its_tables_and_nothing_of_the_streams() {
         "cve_allowlist",
         "gc_runs",
         "gc_samples",
+        "trust_material",
+        "trust_policies",
     ] {
         assert!(tables.iter().any(|t| t == expected), "missing {expected}");
     }
     // Owned by the streams, in their own migration ranges (design section 1.5).
     for foreign in [
-        "trust_policies",
+        "artifact_signatures",
     ] {
         assert!(
             !tables.iter().any(|t| t == foreign),

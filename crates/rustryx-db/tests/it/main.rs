@@ -65,4 +65,5 @@ mod robot_tests;
 mod routing_tests;
 mod system_config_tests;
 mod token_tests;
+mod trust_tests;
 mod user_tests;
