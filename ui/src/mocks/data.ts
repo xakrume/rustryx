@@ -120,6 +120,7 @@ function repository(
       size_bytes: Math.floor(next() * 40 * 1024 ** 3),
       as_of: FIXED_NOW,
     },
+    health: null,
     permissions: {
       browse: true,
       read: true,

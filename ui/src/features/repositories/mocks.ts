@@ -170,6 +170,7 @@ function buildView(body: RepositoryCreate): RepositoryView {
         }
       : null,
     stats: { component_count: 0, asset_count: 0, size_bytes: 0, as_of: now },
+    health: null,
     permissions: { browse: true, read: true, write: hosted, delete: true, admin: true },
     upstream: body.proxy
       ? {

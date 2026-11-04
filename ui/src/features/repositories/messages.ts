@@ -327,6 +327,11 @@ export const repositoriesMessages = {
       blocked: 'The upstream of {name} is blocked.',
       unblocked: 'The upstream of {name} is unblocked.',
       blockFailed: 'The upstream could not be changed',
+      sync: 'Synchronize',
+      syncing: 'Synchronizing',
+      syncProgress: '{fetched} fetched, {skipped} already stored, {failed} failed, of {total}',
+      syncDone: '{name} is synchronized.',
+      syncFailed: 'Synchronization failed',
     },
     danger: {
       title: 'Delete this repository',

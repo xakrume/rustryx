@@ -37,6 +37,7 @@ pub mod maintenance;
 mod compat;
 mod registry_login;
 mod repositories;
+mod rpm_sync;
 mod sso;
 mod store;
 
@@ -401,11 +402,19 @@ fn route_modules(
         Arc::new(ArtifactModule::new(
             formats.engine.clone(),
             Arc::clone(&repos.repositories),
-            base_url,
+            base_url.clone(),
             config.server.require_https,
             tokens,
             catalog,
             Some(Arc::clone(&identity.service) as Arc<dyn Authenticator>),
+        )),
+        Arc::new(rpm_sync::RpmSyncModule::new(
+            formats.engine.clone(),
+            Arc::clone(&repos.repositories),
+            Arc::clone(&repos.assets),
+            base_url.unwrap_or_else(|| {
+                url::Url::parse("http://127.0.0.1:8081").expect("fallback base url")
+            }),
         )),
     ]
 }

@@ -28,6 +28,7 @@ pub mod config;
 mod disposition;
 mod handler;
 pub mod listing;
+pub mod rpm_index;
 pub mod sidecar;
 pub mod target;
 mod write;

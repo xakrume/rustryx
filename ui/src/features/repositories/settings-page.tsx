@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { RelativeTime } from '@/components/relative-time'
 import { useUpdateResource } from '@/hooks/use-update-resource'
+import { getCsrfToken } from '@/api/csrf'
 import { t } from '@/i18n'
 import { toast } from '@/lib/toast-store'
 import {
@@ -57,10 +58,55 @@ function Locked({ repo }: { repo: RepositoryView }) {
   )
 }
 
+type SyncView = {
+  status: string
+  packages_total: number
+  packages_skipped: number
+  packages_fetched: number
+  packages_failed: number
+  error: string | null
+}
+
+async function readSync(name: string, method: 'GET' | 'POST'): Promise<SyncView> {
+  const headers = new Headers({ Accept: 'application/json' })
+  if (method === 'POST') {
+    const csrf = getCsrfToken()
+    if (csrf) headers.set('x-csrf-token', csrf)
+  }
+  const response = await fetch(`/api/v1/repositories/${encodeURIComponent(name)}/actions/sync`, {
+    method,
+    credentials: 'include',
+    headers,
+  })
+  if (!response.ok) {
+    throw new Error(String(response.status))
+  }
+  return (await response.json()) as SyncView
+}
+
 function UpstreamActions({ repo }: { repo: RepositoryView }) {
   const actions = useRepositoryAction(repo.name)
   const upstream = repo.upstream
   const blocked = upstream?.state === 'blocked'
+  const rpmProxy = repo.format === 'rpm' && repo.repo_type === 'proxy'
+  const [sync, setSync] = useState<SyncView | null>(null)
+  useEffect(() => {
+    if (!rpmProxy) return undefined
+    let stop = false
+    const tick = () => {
+      readSync(repo.name, 'GET')
+        .then((view) => {
+          if (!stop) setSync(view)
+        })
+        .catch(() => undefined)
+    }
+    tick()
+    const timer = window.setInterval(tick, 2000)
+    return () => {
+      stop = true
+      window.clearInterval(timer)
+    }
+  }, [repo.name, rpmProxy])
   return (
     <section className="space-y-3 rounded-lg border border-border bg-card p-4">
       <h2 className="text-base font-semibold">{t('repoForm.upstream.title')}</h2>
@@ -110,7 +156,36 @@ function UpstreamActions({ repo }: { repo: RepositoryView }) {
         >
           {blocked ? t('repoForm.upstream.unblock') : t('repoForm.upstream.block')}
         </Button>
+        {rpmProxy ? (
+          <Button
+            variant="outline"
+            loading={sync?.status === 'running'}
+            onClick={() => {
+              readSync(repo.name, 'POST')
+                .then((view) => {
+                  setSync(view)
+                  if (view.status === 'succeeded') {
+                    toast.success(t('repoForm.upstream.syncDone', { name: repo.name }))
+                  }
+                })
+                .catch(() => toast.apiError(new Error('sync'), t('repoForm.upstream.syncFailed')))
+            }}
+          >
+            {sync?.status === 'running' ? t('repoForm.upstream.syncing') : t('repoForm.upstream.sync')}
+          </Button>
+        ) : null}
       </div>
+      {rpmProxy && sync && sync.status !== 'idle' ? (
+        <p className="text-sm text-muted-foreground">
+          {t('repoForm.upstream.syncProgress', {
+            fetched: sync.packages_fetched,
+            skipped: sync.packages_skipped,
+            failed: sync.packages_failed,
+            total: sync.packages_total,
+          })}
+          {sync.error ? ` ${sync.error}` : ''}
+        </p>
+      ) : null}
     </section>
   )
 }
