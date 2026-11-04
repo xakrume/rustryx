@@ -50,6 +50,7 @@ mod login_tests;
 mod migrate_tests;
 mod outbox_tests;
 mod privilege_tests;
+mod promotion_tests;
 mod project_member_tests;
 mod publish_with_tests;
 mod quota_tests;
