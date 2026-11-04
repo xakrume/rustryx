@@ -21,6 +21,7 @@ mod foundation_tests;
 mod guard_tests;
 mod immutability_tests;
 mod lifecycle_hold_tests;
+mod lifecycle_run_tests;
 mod support;
 
 mod asset_tests;

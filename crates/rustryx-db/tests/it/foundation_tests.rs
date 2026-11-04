@@ -59,6 +59,8 @@ async fn the_foundation_creates_its_tables_and_nothing_of_the_streams() {
         "immutability_rules",
         "lifecycle_holds",
         "retention_policies",
+        "lifecycle_runs",
+        "lifecycle_run_items",
         "quotas",
         "quota_usage",
         "robot_tokens",
