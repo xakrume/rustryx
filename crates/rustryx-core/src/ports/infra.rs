@@ -232,6 +232,8 @@ pub struct AuditQuery {
     pub action_prefix: Option<String>,
     /// Only this target.
     pub target: Option<String>,
+    /// Events for one repository: `target` is the name, or `name:` plus a path.
+    pub repository: Option<String>,
     /// Only events scoped to this project.
     pub project_id: Option<ProjectId>,
     /// Only this outcome (`success` or `failure`).
@@ -293,7 +295,8 @@ mod tests {
         assert!(
             query.actor_id.is_none() && query.actor_name.is_none() && query.action_prefix.is_none()
         );
-        assert!(query.target.is_none() && query.project_id.is_none() && query.outcome.is_none());
+        assert!(query.target.is_none() && query.repository.is_none());
+        assert!(query.project_id.is_none() && query.outcome.is_none());
     }
 
     #[test]

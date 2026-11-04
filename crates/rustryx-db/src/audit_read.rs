@@ -157,6 +157,15 @@ fn push_filters(builder: &mut QueryBuilder<Postgres>, query: &AuditQuery) {
     if let Some(target) = &query.target {
         builder.push(" AND target = ").push_bind(target.clone());
     }
+    if let Some(repository) = &query.repository {
+        let prefix = format!("{}:%", escape_like(repository));
+        builder
+            .push(" AND (target = ")
+            .push_bind(repository.clone())
+            .push(" OR target LIKE ")
+            .push_bind(prefix)
+            .push(" ESCAPE '\\')");
+    }
     if let Some(project_id) = query.project_id {
         builder
             .push(" AND project_id = ")

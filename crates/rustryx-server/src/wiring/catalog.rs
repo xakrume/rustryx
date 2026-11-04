@@ -140,11 +140,6 @@ impl RouteModule for CatalogModule {
                 get(empty_page).with_state(state.clone()),
             )
             .route(
-                "/api/v1/audit-events",
-                Requires::Admin,
-                get(empty_page).with_state(state.clone()),
-            )
-            .route(
                 "/api/v1/anonymous-access",
                 Requires::Admin,
                 get(anonymous_access).with_state(state.clone()),

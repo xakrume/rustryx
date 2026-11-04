@@ -98,6 +98,11 @@ fn matches_query(event: &AuditEvent, query: &AuditQuery) -> bool {
             .target
             .as_ref()
             .is_none_or(|target| event.target.as_ref() == Some(target))
+        && query.repository.as_ref().is_none_or(|name| {
+            event.target.as_ref().is_some_and(|target| {
+                target == name || target.strip_prefix(name).is_some_and(|rest| rest.starts_with(':'))
+            })
+        })
         && query
             .project_id
             .is_none_or(|project| event.project_id == Some(project))

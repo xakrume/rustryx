@@ -13,10 +13,11 @@ use axum::response::{IntoResponse, Response};
 use futures::StreamExt;
 use http::{Method, StatusCode};
 use rustryx_api::{AdminGrant, ApiError, Authorized, Requires, RouteModule, RouteSet};
+use rustryx_core::audit::{AuditEvent, AuditKind};
 use rustryx_core::identity::Principal;
 use rustryx_core::model::{RepoFormat, RepoType};
 use rustryx_core::names::RepoName;
-use rustryx_core::ports::{AssetRepo, RepositoryRepo};
+use rustryx_core::ports::{AssetRepo, AuditSink, RepositoryRepo};
 use rustryx_format_core::{FormatEngine, RequestHead};
 use rustryx_format_raw::rpm_index::{self, IndexError, RpmIndex};
 use serde::Serialize;
@@ -30,6 +31,7 @@ struct SyncApi {
     engine: FormatEngine,
     repositories: Arc<dyn RepositoryRepo>,
     assets: Arc<dyn AssetRepo>,
+    audit: Arc<dyn AuditSink>,
     base_url: Url,
     runs: Arc<Mutex<std::collections::HashMap<String, SyncView>>>,
 }
@@ -47,6 +49,7 @@ impl RpmSyncModule {
         engine: FormatEngine,
         repositories: Arc<dyn RepositoryRepo>,
         assets: Arc<dyn AssetRepo>,
+        audit: Arc<dyn AuditSink>,
         base_url: Url,
     ) -> Self {
         Self {
@@ -54,6 +57,7 @@ impl RpmSyncModule {
                 engine,
                 repositories,
                 assets,
+                audit,
                 base_url,
                 runs: Arc::new(Mutex::new(std::collections::HashMap::new())),
             },
@@ -161,28 +165,47 @@ async fn sync_start(
     let repo = Arc::new(repository);
     let key = name.clone();
     tokio::spawn(async move {
-        let result = run_sync(&api_task, &key, repo, principal).await;
-        let mut runs = api_task
-            .runs
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        let view = runs.entry(key).or_insert_with(SyncView::running);
-        if view.status == "stopping" || view.status == "cancelled" {
-            view.status = "cancelled".to_owned();
-            view.error = None;
-            return;
-        }
-        match result {
-            Ok(()) if view.packages_failed == 0 => view.status = "succeeded".to_owned(),
-            Ok(()) => {
-                view.status = "failed".to_owned();
-                view.error = Some("Some packages could not be fetched".to_owned());
-            }
-            Err(error) => {
-                view.status = "failed".to_owned();
-                view.error = Some(error);
-            }
-        }
+        let result = run_sync(&api_task, &key, Arc::clone(&repo), principal.clone()).await;
+        let (outcome, detail) = {
+            let mut runs = api_task
+                .runs
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            let view = runs.entry(key).or_insert_with(SyncView::running);
+            let (outcome, error) = if view.status == "stopping" || view.status == "cancelled" {
+                view.status = "cancelled".to_owned();
+                view.error = None;
+                ("success", None)
+            } else {
+                match result {
+                    Ok(()) if view.packages_failed == 0 => {
+                        view.status = "succeeded".to_owned();
+                        ("success", None)
+                    }
+                    Ok(()) => {
+                        view.status = "failed".to_owned();
+                        view.error = Some("Some packages could not be fetched".to_owned());
+                        ("failure", view.error.clone())
+                    }
+                    Err(error) => {
+                        view.status = "failed".to_owned();
+                        view.error = Some(error);
+                        ("failure", view.error.clone())
+                    }
+                }
+            };
+            let detail = serde_json::json!({
+                "status": view.status,
+                "packages_total": view.packages_total,
+                "packages_skipped": view.packages_skipped,
+                "packages_fetched": view.packages_fetched,
+                "packages_failed": view.packages_failed,
+                "bytes_stored": view.bytes_stored,
+                "error": error,
+            });
+            (outcome, detail)
+        };
+        record_sync(&api_task, &principal, &repo, outcome, detail).await;
     });
     let view = {
         let runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -206,6 +229,29 @@ async fn sync_stop(
     Ok(Json(runs.get(&name).cloned().unwrap_or_else(SyncView::idle)))
 }
 
+async fn record_sync(
+    api: &SyncApi,
+    principal: &Principal,
+    repository: &rustryx_core::model::Repository,
+    outcome: &str,
+    detail: serde_json::Value,
+) {
+    let mut event = AuditEvent::new(
+        AuditKind::ContentChange,
+        principal.username.clone(),
+        "repository.sync",
+        outcome,
+    );
+    event.actor_id = principal.user_id;
+    event.actor_kind = principal.actor_kind();
+    event.target = Some(repository.name.to_string());
+    event.project_id = repository.project.as_ref().map(|project| project.id);
+    event.detail = detail;
+    if let Err(error) = api.audit.record(event).await {
+        tracing::error!(%error, "sync audit record failed");
+    }
+}
+
 fn stopping(api: &SyncApi, name: &str) -> bool {
     let runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
     runs.get(name)
@@ -224,6 +270,14 @@ async fn run_sync(
     repository: Arc<rustryx_core::model::Repository>,
     principal: Principal,
 ) -> Result<(), String> {
+    record_sync(
+        api,
+        &principal,
+        &repository,
+        "success",
+        serde_json::json!({ "status": "started" }),
+    )
+    .await;
     let repomd = read_path(api, &repository, &principal, name, "repodata/repomd.xml", INDEX_LIMIT).await?;
     let repomd_xml = String::from_utf8(repomd).map_err(|_| "repomd.xml is not UTF-8".to_owned())?;
     let metadata = rpm_index::metadata_paths(&repomd_xml).map_err(index_error)?;

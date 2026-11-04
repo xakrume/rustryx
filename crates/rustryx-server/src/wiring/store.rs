@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use rustryx_core::ports::{
-    AssetRepo, AuditSink, BlobRepo, BlobStoreRepo, Clock, ComponentRepo, IdpMappingRepo,
+    AssetRepo, AuditReadRepo, AuditSink, BlobRepo, BlobStoreRepo, Clock, ComponentRepo, IdpMappingRepo,
     LoginAttemptRepo, PrivilegeRepo, RepositoryRepo, RevokedTokenRepo, RoleRepo, RoutingRuleRepo,
     SelectorRepo, SystemClock, TokenRepo, UserRepo,
 };
@@ -34,6 +34,8 @@ pub struct Repos {
     pub revoked_tokens: Arc<dyn RevokedTokenRepo>,
     /// The audit trail.
     pub audit: Arc<dyn AuditSink>,
+    /// Audit log reads.
+    pub audit_read: Arc<dyn AuditReadRepo>,
     /// Repositories.
     pub repositories: Arc<dyn RepositoryRepo>,
     /// Blob store definitions.
@@ -64,6 +66,7 @@ impl Repos {
             login_attempts: Arc::new(store.login_attempts.clone()),
             revoked_tokens: Arc::new(store.revoked_tokens.clone()),
             audit: Arc::new(store.audit.clone()),
+            audit_read: Arc::new(store.audit_read.clone()),
             repositories: Arc::new(store.repositories.clone()),
             blob_stores: Arc::new(store.blob_stores.clone()),
             blobs: Arc::new(store.blobs.clone()),
@@ -90,6 +93,7 @@ impl Repos {
             login_attempts: Arc::new(store.clone()),
             revoked_tokens: Arc::new(store.clone()),
             audit: Arc::new(store.audit_sink()),
+            audit_read: Arc::new(store.clone()),
             repositories: Arc::new(store.clone()),
             blob_stores: Arc::new(store.clone()),
             blobs: Arc::new(store.clone()),

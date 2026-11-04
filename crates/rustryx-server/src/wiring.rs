@@ -28,6 +28,7 @@ mod blobs;
 pub mod bootstrap;
 mod browse;
 mod bus;
+mod audit_log;
 mod catalog;
 mod client_setup;
 mod database;
@@ -413,10 +414,12 @@ fn route_modules(
             formats.engine.clone(),
             Arc::clone(&repos.repositories),
             Arc::clone(&repos.assets),
+            Arc::clone(&repos.audit),
             base_url.unwrap_or_else(|| {
                 url::Url::parse("http://127.0.0.1:8081").expect("fallback base url")
             }),
         )),
+        Arc::new(audit_log::AuditLogModule::new(Arc::clone(&repos.audit_read))),
         Arc::new(dedup::DedupModule::new(Arc::clone(&repos.blob_stores))),
     ]
 }
