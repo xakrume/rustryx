@@ -23,6 +23,7 @@ mod scan_policy_tests;
 mod replication_tests;
 mod registry_tests;
 mod webhook_tests;
+mod webhook_delivery_tests;
 mod guard_tests;
 mod immutability_tests;
 mod lifecycle_hold_tests;

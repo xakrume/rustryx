@@ -32,6 +32,7 @@ pub mod selector;
 pub mod token;
 pub mod user;
 pub mod webhook;
+pub mod webhook_delivery;
 
 mod asset_write;
 mod common;
@@ -69,3 +70,4 @@ pub use selector::PgSelectorRepo;
 pub use token::PgTokenRepo;
 pub use user::PgUserRepo;
 pub use webhook::PgWebhookRepo;
+pub use webhook_delivery::PgWebhookDeliveryRepo;
