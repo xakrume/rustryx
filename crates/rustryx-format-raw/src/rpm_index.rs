@@ -8,6 +8,7 @@ use std::io::Read;
 use flate2::read::GzDecoder;
 use quick_xml::Reader;
 use quick_xml::events::Event;
+use rustryx_format_core::ComponentSpec;
 
 /// Why an index could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,6 +138,27 @@ fn push_href(
     Ok(())
 }
 
+/// Name, `version-release`, and architecture of an RPM file.
+///
+/// The filename is `{name}-{version}-{release}.{arch}.rpm`. The name may contain hyphens, so
+/// the split is from the right. A path that is not an RPM file returns `None`.
+#[must_use]
+pub fn component_from_path(path: &str) -> Option<ComponentSpec> {
+    let file = path.rsplit('/').next().unwrap_or(path);
+    let stem = file.strip_suffix(".rpm")?;
+    let (rest, arch) = stem.rsplit_once('.')?;
+    let (name_version, release) = rest.rsplit_once('-')?;
+    let (name, version) = name_version.rsplit_once('-')?;
+    if name.is_empty() || version.is_empty() || release.is_empty() || arch.is_empty() {
+        return None;
+    }
+    Some(ComponentSpec {
+        group: Some(arch.to_owned()),
+        name: name.to_owned(),
+        version: Some(format!("{version}-{release}")),
+    })
+}
+
 fn safe_path(href: &str) -> Option<String> {
     let href = href.trim().trim_start_matches('/');
     if href.is_empty() || href.contains('\\') || href.contains("://") {
@@ -169,6 +191,15 @@ mod tests {
     fn a_path_that_escapes_the_repository_is_refused() {
         assert_eq!(metadata_paths(REPOMD), Err(IndexError::Path));
         assert_eq!(package_paths(PRIMARY), Err(IndexError::Path));
+    }
+
+    #[test]
+    fn an_rpm_filename_is_a_component() {
+        let spec = component_from_path("gitlab-ee-18.5.1-ee.0.el9.x86_64.rpm").unwrap();
+        assert_eq!(spec.name, "gitlab-ee");
+        assert_eq!(spec.version.as_deref(), Some("18.5.1-ee.0.el9"));
+        assert_eq!(spec.group.as_deref(), Some("x86_64"));
+        assert!(component_from_path("repodata/repomd.xml").is_none());
     }
 
     #[test]

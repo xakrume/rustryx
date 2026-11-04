@@ -5,12 +5,12 @@ use rustryx_core::StoreError;
 use rustryx_core::audit::ActorRef;
 use rustryx_core::error::{MutationError, PolicyViolation};
 use rustryx_core::events::{EventDraft, EventKind};
-use rustryx_core::model::{PublishMode, WriteOptions, WritePolicy};
+use rustryx_core::model::{ProxyConfig, PublishMode, RepoType, WriteOptions, WritePolicy};
 use rustryx_core::ports::{AssetRepo, BlobRepo, QuotaRepo, RepositoryRepo};
 use rustryx_core::quota::QuotaScope;
 use tokio::task::JoinSet;
 
-use crate::fixtures::{blob, new_asset, seed_repository};
+use crate::fixtures::{blob, hosted_repository, new_asset, seed_repository, unique};
 use crate::support::TestDb;
 
 type EventRow = (
@@ -238,6 +238,21 @@ async fn the_write_policy_is_enforced_in_the_transaction() {
         store.blobs.get(denied.id).await.unwrap().is_none(),
         "refused before any write"
     );
+
+    // A proxy is created with deny so clients cannot upload. The cache fill still publishes.
+    let mut proxy = hosted_repository(&unique("proxy"), bs.id);
+    proxy.repo_type = RepoType::Proxy;
+    proxy.write_policy = WritePolicy::Deny;
+    proxy.proxy = Some(ProxyConfig::new("https://packages.example/rpm"));
+    store.repositories.create(&proxy).await.unwrap();
+    store
+        .assets
+        .publish_with(
+            &new_asset(proxy.id, "gitlab-ee-1-1.x86_64.rpm", blob(bs.id, 6)),
+            &WriteOptions::new(),
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]

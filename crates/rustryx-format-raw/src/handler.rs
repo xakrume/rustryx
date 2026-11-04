@@ -136,9 +136,13 @@ async fn read_file(
             // An upstream that announces `X-Checksum-*` headers gets its body verified before
             // a byte reaches the client; one that does not is streamed while it is cached.
             let source: Arc<dyn ChecksumSource> = Arc::new(StandardChecksumHeaders);
-            cx.proxy()
-                .fetch_artifact(ProxyFetch::new(req).checksum_source(source))
-                .await
+            let mut fetch = ProxyFetch::new(req).checksum_source(source);
+            if cx.repository().format == RepoFormat::Rpm
+                && let Some(component) = crate::rpm_index::component_from_path(req.path.as_str())
+            {
+                fetch = fetch.component(component);
+            }
+            cx.proxy().fetch_artifact(fetch).await
         }
         RepoType::Group => return cx.group().resolve(req).await,
     };

@@ -206,7 +206,14 @@ impl FillJob {
                     .insert(cx.repository().id, &plan.cache_path, plan.negative_ttl)
                     .await;
             }
-            FillOutcome::Failed(_) => {}
+            FillOutcome::Failed(failure) => {
+                tracing::warn!(
+                    repository = %cx.repository().name,
+                    path = %plan.cache_path,
+                    ?failure,
+                    "cache fill was not stored"
+                );
+            }
         }
         guard.complete(outcome);
     }

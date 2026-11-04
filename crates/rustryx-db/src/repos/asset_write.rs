@@ -17,13 +17,14 @@ use rustryx_core::StoreError;
 use rustryx_core::error::{MutationError, PolicyViolation};
 use rustryx_core::ids::{AssetId, BlobId, ProjectId, RepositoryId};
 use rustryx_core::model::{
-    BlobRecord, NewAsset, NewAssetLink, PublishMode, PublishOutcome, WriteOptions, WritePolicy,
+    BlobRecord, NewAsset, NewAssetLink, PublishMode, PublishOutcome, RepoType, WriteOptions,
+    WritePolicy,
 };
 use rustryx_core::quota::{QuotaExceeded, QuotaScope};
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
-use super::common::to_i64;
+use super::common::{corrupt, to_i64};
 use super::repository::parse_write_policy;
 use super::rows::{AssetRow, BlobRow, asset_select};
 use super::write;
@@ -34,6 +35,7 @@ const PUBLISH_ATTEMPTS: u32 = 5;
 
 /// What the repository row says about writing to it.
 struct RepositoryGuard {
+    repo_type: RepoType,
     write_policy: WritePolicy,
     quota_bytes: Option<i64>,
     blob_store_id: Uuid,
@@ -69,8 +71,8 @@ async fn lock_repository(
     conn: &mut PgConnection,
     repository_id: RepositoryId,
 ) -> Result<RepositoryGuard, MutationError> {
-    let row: Option<(String, Option<i64>, Uuid, Option<Uuid>, Option<i64>)> = sqlx::query_as(
-        "SELECT r.write_policy, r.quota_bytes, r.blob_store_id, r.project_id, q.limit_bytes \
+    let row: Option<(String, String, Option<i64>, Uuid, Option<Uuid>, Option<i64>)> = sqlx::query_as(
+        "SELECT r.repo_type, r.write_policy, r.quota_bytes, r.blob_store_id, r.project_id, q.limit_bytes \
          FROM repositories r \
          LEFT JOIN quotas q ON q.project_id = r.project_id \
          WHERE r.id = $1 FOR SHARE OF r",
@@ -79,9 +81,10 @@ async fn lock_repository(
     .fetch_optional(&mut *conn)
     .await
     .map_err(|e| map_mutation_err("lock repository", e))?;
-    let Some((policy, quota_bytes, blob_store_id, project_id, project_quota)) = row else {
+    let Some((repo_type, policy, quota_bytes, blob_store_id, project_id, project_quota)) = row else {
         return Err(StoreError::NotFound("repository".to_owned()).into());
     };
+    let repo_type = parse_repo_type(&repo_type)?;
     if quota_bytes.is_some() {
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
             .bind(format!("rustryx.repository_quota:{repository_id}"))
@@ -99,6 +102,7 @@ async fn lock_repository(
             .map_err(|e| map_mutation_err("lock project quota", e))?;
     }
     Ok(RepositoryGuard {
+        repo_type,
         write_policy: parse_write_policy(&policy)?,
         quota_bytes,
         blob_store_id,
@@ -107,27 +111,32 @@ async fn lock_repository(
     })
 }
 
+fn parse_repo_type(label: &str) -> Result<RepoType, MutationError> {
+    label
+        .parse()
+        .map_err(|_| MutationError::from(corrupt("read repository")))
+}
+
 /// The refusal of the write policy and the mode for a path that does or does not exist yet.
 ///
-/// `Deny` refuses everything, `PublishMode::CreateOnly` refuses an existing path (a proxy cache
-/// fill never replaces what was published meanwhile, across nodes: the existing row is read
-/// under its lock), `AllowOnce` refuses an existing path too. `CreateOnly` is checked first
-/// because it is the more specific answer for the one caller that sets it.
+/// The write policy applies to hosted repositories, where a client uploads. A proxy or a group
+/// is filled by the cache: `deny` there means a client cannot `PUT`, and the cache still stores
+/// what it fetched. `PublishMode::CreateOnly` still refuses an existing path, on every type, so
+/// a fill never replaces an artifact published meanwhile.
 fn check_policy(
+    repo_type: RepoType,
     policy: WritePolicy,
     mode: PublishMode,
     path_exists: bool,
 ) -> Result<(), PolicyViolation> {
-    if policy == WritePolicy::Deny {
+    if repo_type == RepoType::Hosted && policy == WritePolicy::Deny {
         return Err(PolicyViolation::WritePolicy(WritePolicy::Deny));
     }
-    if path_exists {
-        if mode == PublishMode::CreateOnly {
-            return Err(PolicyViolation::AlreadyExists);
-        }
-        if policy == WritePolicy::AllowOnce {
-            return Err(PolicyViolation::WritePolicy(WritePolicy::AllowOnce));
-        }
+    if path_exists && mode == PublishMode::CreateOnly {
+        return Err(PolicyViolation::AlreadyExists);
+    }
+    if repo_type == RepoType::Hosted && path_exists && policy == WritePolicy::AllowOnce {
+        return Err(PolicyViolation::WritePolicy(WritePolicy::AllowOnce));
     }
     Ok(())
 }
@@ -196,7 +205,7 @@ async fn switch_asset(
         .fetch_optional(&mut *conn)
         .await
         .map_err(|e| map_mutation_err("lock asset", e))?;
-        check_policy(guard.write_policy, mode, existing.is_some())?;
+        check_policy(guard.repo_type, guard.write_policy, mode, existing.is_some())?;
         if let Some(blob_id) = lock_link_blob {
             let (store, _) = lock_blob(conn, blob_id).await?;
             if store != guard.blob_store_id {
@@ -460,7 +469,12 @@ pub(super) async fn publish(
     let guard = lock_repository(&mut tx, new.repository_id).await?;
     // Refused before any write when the policy forbids every write; the existing path checks
     // run inside `switch_asset` under the asset lock.
-    check_policy(guard.write_policy, PublishMode::Upsert, false)?;
+    check_policy(
+        guard.repo_type,
+        guard.write_policy,
+        PublishMode::Upsert,
+        false,
+    )?;
     insert_blob(&mut tx, &new.blob).await?;
     let spec = Switch {
         repository_id: new.repository_id,
@@ -492,7 +506,12 @@ pub(super) async fn link(
     const CONTEXT: &str = "link asset";
     let mut tx = write::begin(pool, options, CONTEXT).await?;
     let guard = lock_repository(&mut tx, link.repository_id).await?;
-    check_policy(guard.write_policy, PublishMode::Upsert, false)?;
+    check_policy(
+        guard.repo_type,
+        guard.write_policy,
+        PublishMode::Upsert,
+        false,
+    )?;
     // The size is read under the blob lock inside the loop; `Switch` needs it for the quota
     // delta, so a first, unlocked read supplies it and the locked read in `switch_asset`
     // is the one that decides existence. A blob row is immutable, so the size cannot differ.
@@ -560,32 +579,43 @@ mod tests {
         use PolicyViolation::{AlreadyExists, WritePolicy as Wp};
         let upsert = PublishMode::Upsert;
         let create = PublishMode::CreateOnly;
+        let hosted = RepoType::Hosted;
+        let proxy = RepoType::Proxy;
         // Allow: only create only refuses, and only an existing path.
-        assert_eq!(check_policy(WritePolicy::Allow, upsert, true), Ok(()));
-        assert_eq!(check_policy(WritePolicy::Allow, upsert, false), Ok(()));
+        assert_eq!(check_policy(hosted, WritePolicy::Allow, upsert, true), Ok(()));
+        assert_eq!(check_policy(hosted, WritePolicy::Allow, upsert, false), Ok(()));
         assert_eq!(
-            check_policy(WritePolicy::Allow, create, true),
+            check_policy(hosted, WritePolicy::Allow, create, true),
             Err(AlreadyExists)
         );
-        assert_eq!(check_policy(WritePolicy::Allow, create, false), Ok(()));
+        assert_eq!(check_policy(hosted, WritePolicy::Allow, create, false), Ok(()));
         // AllowOnce: an existing path is refused in both modes, CreateOnly names itself.
         assert_eq!(
-            check_policy(WritePolicy::AllowOnce, upsert, true),
+            check_policy(hosted, WritePolicy::AllowOnce, upsert, true),
             Err(Wp(WritePolicy::AllowOnce))
         );
         assert_eq!(
-            check_policy(WritePolicy::AllowOnce, create, true),
+            check_policy(hosted, WritePolicy::AllowOnce, create, true),
             Err(AlreadyExists)
         );
-        assert_eq!(check_policy(WritePolicy::AllowOnce, upsert, false), Ok(()));
-        // Deny refuses everything.
+        assert_eq!(
+            check_policy(hosted, WritePolicy::AllowOnce, upsert, false),
+            Ok(())
+        );
+        // Deny refuses every client upload. A proxy cache ignores that setting, and create
+        // only still refuses a path that already exists.
         for mode in [upsert, create] {
             for exists in [true, false] {
                 assert_eq!(
-                    check_policy(WritePolicy::Deny, mode, exists),
+                    check_policy(hosted, WritePolicy::Deny, mode, exists),
                     Err(Wp(WritePolicy::Deny))
                 );
             }
         }
+        assert_eq!(check_policy(proxy, WritePolicy::Deny, upsert, false), Ok(()));
+        assert_eq!(
+            check_policy(proxy, WritePolicy::Deny, create, true),
+            Err(AlreadyExists)
+        );
     }
 }
