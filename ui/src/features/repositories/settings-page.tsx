@@ -8,6 +8,7 @@ import { ErrorPanel } from '@/components/error-panel'
 import { Form, useZodForm } from '@/components/form/form'
 import { UnsavedChangesGuard } from '@/components/form/unsaved-changes-guard'
 import { Alert } from '@/components/ui/alert'
+import { BytesText } from '@/components/bytes-text'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { RelativeTime } from '@/components/relative-time'
@@ -64,6 +65,7 @@ type SyncView = {
   packages_skipped: number
   packages_fetched: number
   packages_failed: number
+  bytes_stored: number
   error: string | null
 }
 
@@ -203,7 +205,8 @@ function UpstreamActions({ repo }: { repo: RepositoryView }) {
             skipped: sync.packages_skipped,
             failed: sync.packages_failed,
             total: sync.packages_total,
-          })}
+          })}{' '}
+          <BytesText bytes={sync.bytes_stored} /> {t('repoForm.upstream.syncStored')}
           {sync.error ? ` ${sync.error}` : ''}
         </p>
       ) : null}

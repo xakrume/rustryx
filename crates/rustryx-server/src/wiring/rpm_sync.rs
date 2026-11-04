@@ -86,6 +86,8 @@ struct SyncView {
     packages_skipped: u64,
     packages_fetched: u64,
     packages_failed: u64,
+    /// Bytes written while this run read package and metadata bodies.
+    bytes_stored: u64,
     error: Option<String>,
 }
 
@@ -97,6 +99,7 @@ impl SyncView {
             packages_skipped: 0,
             packages_fetched: 0,
             packages_failed: 0,
+            bytes_stored: 0,
             error: None,
         }
     }
@@ -221,13 +224,13 @@ async fn run_sync(
     repository: Arc<rustryx_core::model::Repository>,
     principal: Principal,
 ) -> Result<(), String> {
-    let repomd = read_path(api, &repository, &principal, "repodata/repomd.xml", INDEX_LIMIT).await?;
+    let repomd = read_path(api, &repository, &principal, name, "repodata/repomd.xml", INDEX_LIMIT).await?;
     let repomd_xml = String::from_utf8(repomd).map_err(|_| "repomd.xml is not UTF-8".to_owned())?;
     let metadata = rpm_index::metadata_paths(&repomd_xml).map_err(index_error)?;
     let primary = rpm_index::primary_path(&metadata)
         .ok_or_else(|| "repomd has no primary index".to_owned())?
         .to_owned();
-    let primary_bytes = read_path(api, &repository, &principal, &primary, INDEX_LIMIT).await?;
+    let primary_bytes = read_path(api, &repository, &principal, name, &primary, INDEX_LIMIT).await?;
     let primary_xml = String::from_utf8(rpm_index::inflate(&primary_bytes).map_err(index_error)?)
         .map_err(|_| "primary index is not UTF-8".to_owned())?;
     let index = RpmIndex {
@@ -241,7 +244,7 @@ async fn run_sync(
         if path == "repodata/repomd.xml" || path == &primary {
             continue;
         }
-        if read_path(api, &repository, &principal, path, INDEX_LIMIT)
+        if read_path(api, &repository, &principal, name, path, INDEX_LIMIT)
             .await
             .is_err()
         {
@@ -277,7 +280,7 @@ async fn run_sync(
             let path = path.clone();
             let name = name.to_owned();
             work.push(async move {
-                match fetch_package(&api, &repository, &principal, &path).await {
+                match fetch_package(&api, &repository, &principal, &name, &path).await {
                     Ok(()) => note_fetched(&api, &name),
                     Err(_) => note_failure(&api, &name),
                 }
@@ -309,23 +312,35 @@ fn note_failure(api: &SyncApi, name: &str) {
     }
 }
 
+fn note_bytes(api: &SyncApi, name: &str, bytes: u64) {
+    if bytes == 0 {
+        return;
+    }
+    let mut runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
+    if let Some(view) = runs.get_mut(name) {
+        view.bytes_stored = view.bytes_stored.saturating_add(bytes);
+    }
+}
+
 async fn fetch_package(
     api: &SyncApi,
     repository: &Arc<rustryx_core::model::Repository>,
     principal: &Principal,
+    name: &str,
     path: &str,
 ) -> Result<(), String> {
     let response = serve(api, repository, principal, path).await;
     if !response.status().is_success() {
         return Err(format!("status {}", response.status().as_u16()));
     }
-    drain(response.into_body()).await
+    count_body(api, name, response.into_body()).await
 }
 
 async fn read_path(
     api: &SyncApi,
     repository: &Arc<rustryx_core::model::Repository>,
     principal: &Principal,
+    name: &str,
     path: &str,
     limit: usize,
 ) -> Result<Vec<u8>, String> {
@@ -340,6 +355,7 @@ async fn read_path(
         if body.len().saturating_add(chunk.len()) > limit {
             return Err(format!("{path} is larger than the index limit"));
         }
+        note_bytes(api, name, u64::try_from(chunk.len()).unwrap_or(u64::MAX));
         body.extend_from_slice(&chunk);
     }
     Ok(body)
@@ -362,10 +378,11 @@ async fn serve(
         .await
 }
 
-async fn drain(body: Body) -> Result<(), String> {
+async fn count_body(api: &SyncApi, name: &str, body: Body) -> Result<(), String> {
     let mut stream = body.into_data_stream();
     while let Some(chunk) = stream.next().await {
-        chunk.map_err(|_| "the package body could not be read".to_owned())?;
+        let chunk = chunk.map_err(|_| "the package body could not be read".to_owned())?;
+        note_bytes(api, name, u64::try_from(chunk.len()).unwrap_or(u64::MAX));
     }
     Ok(())
 }
