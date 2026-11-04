@@ -40,6 +40,7 @@ mod cleanup_tests;
 mod closed_pool_tests;
 mod component_tests;
 mod downloads_tests;
+mod notification_tests;
 mod error_tests;
 mod label_tests;
 mod lease_tests;
