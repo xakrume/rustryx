@@ -27,6 +27,7 @@ pub mod routing_rule;
 pub mod selector;
 pub mod token;
 pub mod user;
+pub mod webhook;
 
 mod asset_write;
 mod common;
@@ -59,3 +60,4 @@ pub use routing_rule::PgRoutingRuleRepo;
 pub use selector::PgSelectorRepo;
 pub use token::PgTokenRepo;
 pub use user::PgUserRepo;
+pub use webhook::PgWebhookRepo;
