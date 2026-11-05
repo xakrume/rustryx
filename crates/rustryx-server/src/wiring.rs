@@ -38,6 +38,7 @@ mod identity;
 pub mod maintenance;
 mod compat;
 mod registry_login;
+mod ops;
 mod repositories;
 mod rpm_sync;
 mod sso;
@@ -289,7 +290,13 @@ pub async fn assemble(config: &AppConfig, metrics: &MetricsHandle) -> anyhow::Re
         tokens,
         catalog,
     );
-    modules.extend(management_modules(config, &repos, &rbac, base_url)?);
+    modules.extend(management_modules(
+        config,
+        &repos,
+        &rbac,
+        base_url,
+        pool.clone(),
+    )?);
 
     let sessions = session_manager(config, &identity, &repos, &cookie_key, Arc::new(bus))?;
     let finalizers = shutdown_finalizers(
@@ -338,6 +345,7 @@ fn management_modules(
     repos: &Repos,
     rbac: &Arc<Rbac>,
     base_url: Option<url::Url>,
+    pool: sqlx::PgPool,
 ) -> anyhow::Result<Vec<Arc<dyn RouteModule>>> {
     Ok(vec![
         repository_module(config, repos, rbac, base_url.clone())?,
@@ -369,6 +377,11 @@ fn management_modules(
             components: Arc::clone(&repos.components),
             clock: Arc::clone(&repos.clock),
             anonymous_enabled: config.auth.anonymous_enabled,
+        })),
+        Arc::new(ops::OpsModule::new(ops::OpsDeps {
+            pool,
+            repositories: Arc::clone(&repos.repositories),
+            clock: Arc::clone(&repos.clock),
         })),
     ])
 }

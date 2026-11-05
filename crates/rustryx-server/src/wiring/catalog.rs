@@ -130,16 +130,6 @@ impl RouteModule for CatalogModule {
                 get(routing_rules).with_state(state.clone()),
             )
             .route(
-                "/api/v1/cleanup-policies",
-                Requires::Admin,
-                get(empty_page).with_state(state.clone()),
-            )
-            .route(
-                "/api/v1/tasks",
-                Requires::Admin,
-                get(empty_page).with_state(state.clone()),
-            )
-            .route(
                 "/api/v1/anonymous-access",
                 Requires::Admin,
                 get(anonymous_access).with_state(state.clone()),

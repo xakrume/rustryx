@@ -11,7 +11,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::header::{ETAG, HOST, LOCATION};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use http::HeaderMap;
 use rustryx_api::{
     AdminGrant, ApiError, ApiJson, ApiPath, ApiQuery, Authorized, RequestPrincipal, Requires,
@@ -146,7 +146,22 @@ impl RouteModule for RepositoriesModule {
             .route(
                 "/api/v1/blob-stores/{name}/usage",
                 Requires::Admin,
-                get(get_store_usage).with_state(state),
+                get(get_store_usage).with_state(state.clone()),
+            )
+            .route(
+                "/api/v1/blob-stores",
+                Requires::Admin,
+                post(create_store).with_state(state.clone()),
+            )
+            .route(
+                "/api/v1/blob-stores/{name}",
+                Requires::Admin,
+                patch(patch_store).delete(delete_store).with_state(state.clone()),
+            )
+            .route(
+                "/api/v1/blob-stores/{name}/actions/test-connection",
+                Requires::Admin,
+                post(test_store).with_state(state),
             )
     }
 }
@@ -526,6 +541,216 @@ async fn get_store_usage(
         .await
         .ok_or_else(ApiError::route_not_found)?;
     Ok(Json(usage))
+}
+
+#[derive(Debug, Deserialize)]
+struct StoreCreate {
+    name: String,
+    kind: BlobStoreKind,
+    config: serde_json::Value,
+    #[serde(default)]
+    quota_bytes: Option<u64>,
+}
+
+fn store_tag(store: &BlobStoreDef) -> String {
+    format!("\"{}\"", store.created_at.unix_timestamp())
+}
+
+fn require_store_match(headers: &HeaderMap, store: &BlobStoreDef) -> Result<(), ApiError> {
+    let raw = headers
+        .get("if-match")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .trim()
+        .trim_matches('"');
+    if raw == store.created_at.unix_timestamp().to_string() {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            http::StatusCode::PRECONDITION_FAILED,
+            "precondition_failed",
+            "The blob store changed. Reload it and try again",
+        ))
+    }
+}
+
+fn check_store_config(kind: BlobStoreKind, config: &serde_json::Value) -> Result<(), ApiError> {
+    if !matches!(kind, BlobStoreKind::Local | BlobStoreKind::S3) {
+        return Err(ApiError::bad_request(
+            "invalid_input",
+            "Only local and s3 blob stores can be created",
+        ));
+    }
+    let Some(object) = config.as_object() else {
+        return Err(ApiError::bad_request(
+            "invalid_input",
+            "config must be an object",
+        ));
+    };
+    if kind == BlobStoreKind::Local {
+        let path = object.get("path").and_then(serde_json::Value::as_str).unwrap_or("");
+        if !path.starts_with('/') || path.contains('\0') {
+            return Err(ApiError::bad_request(
+                "invalid_input",
+                "A local blob store needs an absolute path",
+            ));
+        }
+    }
+    if kind == BlobStoreKind::S3 && object.get("bucket").and_then(serde_json::Value::as_str).unwrap_or("").is_empty()
+    {
+        return Err(ApiError::bad_request(
+            "invalid_input",
+            "An S3 blob store needs a bucket",
+        ));
+    }
+    Ok(())
+}
+
+async fn store_response(api: &RepoApi, store: &BlobStoreDef, status: http::StatusCode) -> Result<Response, ApiError> {
+    let repos = api.repositories.list().await?;
+    let body = store_view(api, store, &repos, api.clock.now()).await;
+    let mut response = (status, Json(body)).into_response();
+    if let Ok(value) = http::HeaderValue::from_str(&store_tag(store)) {
+        response.headers_mut().insert(ETAG, value);
+    }
+    Ok(response)
+}
+
+async fn create_store(
+    State(api): State<RepoApi>,
+    _proof: Authorized<AdminGrant>,
+    ApiJson(body): ApiJson<StoreCreate>,
+) -> Result<Response, ApiError> {
+    let name = body.name.trim();
+    if name.is_empty() || name.len() > 128 || name.contains('/') {
+        return Err(ApiError::bad_request("invalid_input", "The blob store name is not valid"));
+    }
+    check_store_config(body.kind, &body.config)?;
+    if body.kind == BlobStoreKind::Local {
+        let path = body.config["path"].as_str().unwrap_or("");
+        std::fs::create_dir_all(path).map_err(|_| {
+            ApiError::bad_request("invalid_input", "The blob store path cannot be created")
+        })?;
+    }
+    let mut store = BlobStoreDef::new(
+        BlobStoreId::generate(),
+        name,
+        body.kind,
+        body.config,
+        api.clock.now(),
+    );
+    store.quota_bytes = body.quota_bytes;
+    match api.blob_stores.create(&store).await {
+        Ok(()) => {}
+        Err(StoreError::Conflict(_)) => {
+            return Err(ApiError::new(
+                http::StatusCode::CONFLICT,
+                "already_exists",
+                "A blob store with this name already exists",
+            ));
+        }
+        Err(error) => return Err(error.into()),
+    }
+    store_response(&api, &store, http::StatusCode::CREATED).await
+}
+
+async fn patch_store(
+    State(api): State<RepoApi>,
+    _proof: Authorized<AdminGrant>,
+    headers: HeaderMap,
+    ApiPath(path): ApiPath<StorePath>,
+    ApiJson(body): ApiJson<serde_json::Value>,
+) -> Result<Response, ApiError> {
+    let mut store = load_store(&api, &path.name).await?;
+    require_store_match(&headers, &store)?;
+    let repos = api.repositories.list().await?;
+    let used = repos.iter().any(|repo| repo.blob_store_id == store.id);
+    if let Some(config) = body.get("config") {
+        let mut merged = store.config.as_object().cloned().unwrap_or_default();
+        let patch = config.as_object().ok_or_else(|| {
+            ApiError::bad_request("invalid_input", "config must be an object")
+        })?;
+        for (key, value) in patch {
+            if used && matches!(key.as_str(), "path" | "bucket" | "endpoint") {
+                let current = store.config.get(key);
+                if current != Some(value) {
+                    return Err(ApiError::new(
+                        http::StatusCode::CONFLICT,
+                        "in_use",
+                        "path, bucket and endpoint cannot change while repositories use the store",
+                    ));
+                }
+            }
+            if value.is_null() {
+                merged.remove(key);
+            } else {
+                merged.insert(key.clone(), value.clone());
+            }
+        }
+        store.config = serde_json::Value::Object(merged);
+        check_store_config(store.kind, &store.config)?;
+    }
+    if body.get("quota_bytes").is_some() {
+        store.quota_bytes = match &body["quota_bytes"] {
+            serde_json::Value::Null => None,
+            serde_json::Value::Number(number) => Some(number.as_u64().ok_or_else(|| {
+                ApiError::bad_request("invalid_input", "quota_bytes is out of range")
+            })?),
+            _ => {
+                return Err(ApiError::bad_request(
+                    "invalid_input",
+                    "quota_bytes must be a number or null",
+                ));
+            }
+        };
+    }
+    api.blob_stores.update(&store).await?;
+    store_response(&api, &store, http::StatusCode::OK).await
+}
+
+async fn delete_store(
+    State(api): State<RepoApi>,
+    _proof: Authorized<AdminGrant>,
+    headers: HeaderMap,
+    ApiPath(path): ApiPath<StorePath>,
+) -> Result<http::StatusCode, ApiError> {
+    let store = load_store(&api, &path.name).await?;
+    if headers.get("if-match").is_some() {
+        require_store_match(&headers, &store)?;
+    }
+    match api.blob_stores.delete(store.id).await {
+        Ok(()) => Ok(http::StatusCode::NO_CONTENT),
+        Err(StoreError::Conflict(_)) => Err(ApiError::new(
+            http::StatusCode::CONFLICT,
+            "in_use",
+            "A repository still uses this blob store",
+        )),
+        Err(error) => Err(error.into()),
+    }
+}
+
+async fn test_store(
+    State(api): State<RepoApi>,
+    _proof: Authorized<AdminGrant>,
+    ApiPath(path): ApiPath<StorePath>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let store = load_store(&api, &path.name).await?;
+    if store.kind != BlobStoreKind::Local {
+        return Ok(Json(serde_json::json!({
+            "ok": false,
+            "latency_ms": null,
+            "error_code": "blob_store_unavailable"
+        })));
+    }
+    let path = store.config.get("path").and_then(|value| value.as_str()).unwrap_or("");
+    let started = std::time::Instant::now();
+    let probe = std::path::Path::new(path).join(".rustryx-probe");
+    let ok = std::fs::write(&probe, b"ok").and_then(|_| std::fs::remove_file(&probe)).is_ok();
+    Ok(Json(serde_json::json!({
+        "ok": ok,
+        "latency_ms": i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX),
+        "error_code": if ok { serde_json::Value::Null } else { serde_json::json!("blob_store_unavailable") }
+    })))
 }
 
 fn wants_stats(query: &ListQuery) -> bool {
