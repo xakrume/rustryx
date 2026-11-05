@@ -1,8 +1,8 @@
 name: ci
 
-# Pipeline of Rustryx: lint, test, code-security, build, image-security, publish,
-# sign, provenance, verify. Reading guide and the way to turn observation gates
-# into blocking ones: docs/ci-and-release.md.
+# Pipeline of Rustryx: lint, ui, test, code-security, build, image-security,
+# publish, sign, provenance, verify. Reading guide and the way to turn observation
+# gates into blocking ones: docs/ci-and-release.md.
 #
 # Rules this file follows, each for a reason:
 #  - Every third-party action is pinned by commit SHA (the tag is in a comment).
@@ -164,6 +164,30 @@ jobs:
           fi
         env:
           EVENT: ${{ github.event_name }}
+
+  # Web UI: same gates as `make ui-check` and `make ui-build` (typecheck, lint,
+  # vitest, licence allowlist, production build). Node 22 matches ui/package.json
+  # engines. Playwright e2e stays local; it needs a browser and is not in `check`.
+  ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Install UI dependencies
+        run: npm ci --prefix ui
+      - name: UI check (typecheck, lint, unit tests, licences)
+        run: npm --prefix ui run check
+      - name: UI production build
+        run: npm --prefix ui run build
 
   test:
     runs-on: ubuntu-24.04
@@ -568,7 +592,7 @@ jobs:
   # sha-<short>-<variant>, both immutable here: an existing tag that points at a
   # different digest fails the job. `latest` is never written, a guard enforces it.
   publish:
-    needs: [meta, lint, test, fixtures, code-security, build, image-security]
+    needs: [meta, lint, ui, test, fixtures, code-security, build, image-security]
     if: needs.meta.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20

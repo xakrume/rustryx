@@ -32,6 +32,8 @@ workflow:
 variables:
   # Same digests as the Dockerfiles; ci/check-toolchain-pin.sh keeps them equal.
   RUST_IMAGE: rust:1.99.0-trixie@sha256:81015672d6939b0265f09adf96d5de125482bb1330106076956b0518e74edc90
+  # Node 22 for the UI job (ui/package.json engines). Pin by digest like the rest.
+  NODE_IMAGE: node:22-bookworm@sha256:e273cf2a19c7334c03f52e2ca933ecdfc3fbfaad49db7b8bc8c3edd9ac34e9c7
   TOOLS_IMAGE: alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
   DOCKER_CLI_IMAGE: docker:29.7-cli@sha256:3f4743208d2338c934d7b8bcfbe1bb54c0b2355c510ad5e0f31c0c4a54bd704e
   DOCKER_DIND_IMAGE: docker:29.7-dind@sha256:3ef33f2e220b79ed3ef3b99d81746f06f306cd6340e2cb7331d17ae996e74cb6
@@ -108,6 +110,16 @@ architecture:
       else
         easement check
       fi
+
+# Same gates as `make ui-check` and `make ui-build`. Playwright e2e stays local.
+ui:
+  stage: lint
+  image: $NODE_IMAGE
+  interruptible: true
+  script:
+    - npm ci --prefix ui
+    - npm --prefix ui run check
+    - npm --prefix ui run build
 
 # ---------------------------------------------------------------- test
 # Integration tests start their dependencies with testcontainers, so the job needs

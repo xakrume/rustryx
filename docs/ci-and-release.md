@@ -11,7 +11,7 @@ the developer environment in [local-development.md](local-development.md).
 
 | File | Purpose |
 |---|---|
-| `.github/workflows/ci.yml` | lint, test, code-security, build, image-security, publish, sign, provenance, verify |
+| `.github/workflows/ci.yml` | lint, ui, test, code-security, build, image-security, publish, sign, provenance, verify |
 | `.github/workflows/nightly.yml` | nightly `cargo audit`, expiry of exceptions, `cargo fuzz` (10 minutes per target) |
 | `.github/dependabot.yml` | keeps the SHA pins of actions and base images current, with a 14 day cooldown |
 | `.gitlab-ci.yml` | the same pipeline for GitLab |
@@ -25,6 +25,8 @@ the developer environment in [local-development.md](local-development.md).
 ```
 meta
  |-- lint --------------+
+ |-- ui                 |
+ |-- architecture       |
  |-- test (+coverage)   |
  |-- fixtures           |-- build (glibc and musl, amd64 and arm64: 4 jobs)
  |-- code-security      |      pushes untagged digests (main and tags only)
@@ -39,10 +41,10 @@ meta
                       verify   cosign verify, verify-attestation, slsa-verifier
 ```
 
-Pull requests run `lint`, `test`, `fixtures`, `code-security` and `build` (the
-image is built, loaded and tested, nothing is pushed). Pushes to `main` and tags
-`vX.Y.Z` run the whole chain. A run of `workflow_dispatch` on another branch
-builds but does not publish.
+Pull requests run `lint`, `ui`, `architecture`, `test`, `fixtures`, `code-security`
+and `build` (the image is built, loaded and tested, nothing is pushed). Pushes to
+`main` and tags `vX.Y.Z` run the whole chain. A run of `workflow_dispatch` on
+another branch builds but does not publish.
 
 A new push to a pull request cancels the older run (`concurrency` with
 `cancel-in-progress` for `pull_request` events only). Runs of `main` and of tags
@@ -53,6 +55,8 @@ are never cancelled: cancelling one could leave a tag without an image.
 | Job | What it checks | Mode |
 |---|---|---|
 | `lint` | `cargo fmt`, `clippy -D warnings --locked`, hadolint, yamllint, actionlint, shellcheck, the Python tests of `ci/`, compiler and base image pins, `ci/release-check.sh` on tags | blocking |
+| `ui` | `npm ci` in `ui/`, then `npm run check` (typecheck, lint, vitest, licences) and `npm run build`; same as `make ui-check` / `make ui-build` | blocking |
+| `architecture` | `easement check` (full on `main`, `--diff origin/main` on pull requests) | blocking |
 | `test` | unit and integration tests (nextest, `RUSTRYX_IT=1`), doc tests, JUnit, Cobertura | blocking |
 | `test`, coverage step | 80% workspace, 90% for `rustryx-auth`, `rustryx-rbac` and the format parser crates, no drop against main | observation |
 | `fixtures` | `ci/verify-fixtures.sh`: realm and LDIF behave as README 8.6 needs | blocking |
@@ -145,10 +149,14 @@ No secret is needed: registry access uses the job token. These are variables
 | `RUSTRYX_MINIO_IMAGE` | MinIO image for the S3 integration test (see below) |
 | `ENABLE_SEMGREP` | `true` turns the Semgrep job on |
 
-Also set: required status checks `lint`, `test`, `fixtures`, `code-security`,
-`build` on `main`; protected tags `v*` created by the release role only; the
-package `ghcr.io/<owner>/rustryx` public after the first publish (a new GHCR
-package is private).
+Also set: required status checks `lint`, `ui`, `architecture`, `test`,
+`fixtures`, `code-security`, `build` on `main`; protected tags `v*` created by
+the release role only; the package `ghcr.io/<owner>/rustryx` public after the
+first publish (a new GHCR package is private).
+
+Branch protection / rulesets need GitHub Pro on a private repository (or a public
+repo). Until that is available, the `ci` workflow still runs and reports checks on
+every pull request and every push to `main`; they are not merge-blocking yet.
 
 `RUSTRYX_MINIO_IMAGE`: the community MinIO image is no longer published, so the
 default image candidates of the S3 test may not pull. Set the variable to an image
@@ -302,6 +310,7 @@ are releases older than two weeks at the time of writing.
 | Action | Version |
 |---|---|
 | `actions/checkout` | v7.0.1 |
+| `actions/setup-node` | v6.5.0 |
 | `actions/upload-artifact` | v7.0.2 |
 | `actions/download-artifact` | v8.0.2 |
 | `actions/cache` (restore, save) | v6.1.0 |
@@ -316,9 +325,10 @@ are releases older than two weeks at the time of writing.
 
 Not installed by an action, pinned by SHA-256 in `ci/tools.lock`: hadolint,
 actionlint, gitleaks (and trivy, cosign for GitLab). Python tools: hash-pinned in
-`ci/requirements-lint.txt`. Container images (Semgrep, Docker, Alpine, builders,
-distroless) by digest. To update, take the Dependabot pull request or repeat the
-resolution by hand and run `ci/check-toolchain-pin.sh`.
+`ci/requirements-lint.txt`. Container images (Semgrep, Docker, Alpine, Node 22 for
+the GitLab `ui` job, builders, distroless) by digest. To update, take the
+Dependabot pull request or repeat the resolution by hand and run
+`ci/check-toolchain-pin.sh`.
 
 ## GitLab option
 
