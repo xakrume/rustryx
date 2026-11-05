@@ -6,12 +6,12 @@ export function Switch({ className, ...props }: ComponentProps<typeof SwitchPrim
   return (
     <SwitchPrimitive.Root
       className={cn(
-        'peer inline-flex h-5 w-9 shrink-0 items-center rounded-full border-2 border-input bg-muted transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-accent data-[state=checked]:bg-accent',
+        'peer inline-flex h-6 w-10 shrink-0 items-center rounded-full border border-transparent bg-input transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 data-[state=checked]:bg-accent',
         className,
       )}
       {...props}
     >
-      <SwitchPrimitive.Thumb className="pointer-events-none block size-3 translate-x-0.5 rounded-full bg-foreground transition-transform duration-150 data-[state=checked]:translate-x-[1.1rem] data-[state=checked]:bg-on-accent" />
+      <SwitchPrimitive.Thumb className="pointer-events-none block size-5 translate-x-px rounded-full bg-on-accent shadow-md transition-transform duration-200 ease-standard data-[state=checked]:translate-x-[1.0625rem]" />
     </SwitchPrimitive.Root>
   )
 }

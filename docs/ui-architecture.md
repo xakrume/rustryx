@@ -20,7 +20,7 @@ The UI is a React single page application in `ui/`. It builds to static files in
 | API client | openapi-typescript (types), openapi-fetch (client) | 7.13.0, 0.17.0 |
 | Mock | MSW | 2.15.0 |
 | Tests | Vitest, Testing Library, jest-axe, Playwright with `@axe-core/playwright` | vitest 3.2.7, playwright 1.64.1 |
-| Fonts | Fira Sans and Fira Code through fontsource, self hosted | no CDN at runtime |
+| Fonts | system face first (SF Pro, Segoe UI), Fira Sans and Fira Code through fontsource, self hosted, as fallback | no CDN at runtime; a browser downloads a fallback face only when it uses it |
 
 Versions are pinned exactly in `package.json` and `package-lock.json`. The shadcn/ui components are copied into `src/components/ui` and adapted (see section 10 for why some Radix packages are deliberately not used).
 
@@ -131,11 +131,11 @@ Tokens live in `src/styles/tokens.css` and nowhere else. The light set is the `@
 
 - `data-theme` on `<html>` is always the resolved `light` or `dark`; "system" is resolved in JavaScript. `public/theme-init.js` sets it (and `data-density`) before first paint from the same localStorage keys the app uses (a test fails if they drift); `ThemeProvider` takes over, follows the OS while the preference is "system", syncs other tabs, and never throws when storage is blocked.
 - **Contrast is proven, not claimed.** `scripts/check-contrast.mjs` (part of `npm run lint`) computes the WCAG ratio of every foreground and background pair in both themes (122 pair checks: 4.5:1 for text, 3:1 for control boundaries, the focus ring and graphics; chart series are held to 4.5:1 because they color the direct labels) and fails on any miss. Every token must appear in a checked pair or be exempt with a written reason, so a new token cannot skip the proof. Lowest ratios today: light 3.95, dark 3.29, both for non text graphics. Playwright additionally runs axe in a real browser on the main pages in both themes.
-- The light accent is green-700 (`#15803d`), not `#22C55E`: that green is only 2.3:1 on white. The dark theme keeps the MASTER set.
+- The accent is Apple blue `#0071e3` in both themes (4.6:1 with white text). Links are `#0066cc` in light and `#2997ff` in dark. Green is the success state only.
 - `--color-border` is a decorative separator below 3:1 on purpose (WCAG exempts it); the edge of a control uses `--color-input`.
 - Density: `data-density="compact"` (default) or `comfortable` re-points `--control-h-base`, `--row-h-base`, `--cell-px` and the table text size. On coarse pointers `--control-h` and `--row-h` are raised to at least 44px whatever the density says.
 - Motion: `prefers-reduced-motion` turns animations into 0.01 ms (Radix waits for `animationend`) and transitions off. Hover changes opacity only, never layout.
-- Fonts: Fira Sans 400 to 700 (latin, latin-ext, cyrillic) and Fira Code Variable (same subsets) as woff2 from `@fontsource`, declared in `fonts.css` with the vendor's `unicode-range`, so the browser downloads only the subsets a page needs. Fira Code is for technical values only (coordinates, digests, paths, commands, logs).
+- Fonts: the stack starts with the system face (`-apple-system`, SF Pro, Segoe UI) and the system monospace; the self-hosted fallback is Fira Sans 400 to 700 (latin, latin-ext, cyrillic) and Fira Code Variable (same subsets) as woff2 from `@fontsource`, declared in `fonts.css` with the vendor's `unicode-range`, so the browser downloads only the subsets a page needs. Fira Code is for technical values only (coordinates, digests, paths, commands, logs).
 
 To add a token: add it to BOTH blocks, then run `npm run lint:contrast`; add a pair to `PAIRS` in `scripts/contrast-lib.mjs` (or an exemption with a reason).
 
@@ -304,7 +304,7 @@ Suggested CI steps for the `ui` job: `npm ci`, `npm run check` (typecheck, lint 
 
 | Topic | Decision | Reason |
 |---|---|---|
-| Light accent | green-700 `#15803d` with white text, dark theme keeps `#22C55E` | `#22C55E` is 2.3:1 on white; derived and proven |
+| Accent | Apple blue `#0071e3` with white text in both themes | 4.6:1 with white text; proven by the contrast check |
 | Dialog, menu, select, toast | custom Dialog on Radix primitives, non modal menus, native select, Radix Toast | the stock components inject `<style>` at runtime, which `style-src 'self'` blocks |
 | TypeScript 5.9, ESLint 9, Vitest 3, Table 8 | not the newest majors | typescript-eslint and eslint-plugin-jsx-a11y do not support TypeScript 6 and ESLint 10 yet; TanStack Table 9 has a different API |
 | `validateSearch` hand written | no zod in route files | the router needs it on the critical path; zod would be in the entry bundle |

@@ -22,7 +22,7 @@ const LARGE_PLAN = 1000
 
 function Stat({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-border bg-card px-4 py-3">
+    <div className="rounded-xl border border-transparent bg-card dark:border-border/60 px-4 py-3">
       <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
       <dd className="mt-1 text-2xl font-semibold tabular-nums">{children}</dd>
     </div>

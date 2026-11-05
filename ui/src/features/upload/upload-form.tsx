@@ -123,7 +123,7 @@ export function UploadForm({ schema, state, errors, disabled, onChange }: Upload
       {componentFields.length > 0 ? (
         <section
           aria-labelledby="upload-fields-title"
-          className="space-y-4 rounded-lg border border-border bg-card p-4"
+          className="space-y-4 rounded-xl border border-transparent bg-card dark:border-border/60 p-4"
         >
           <h2 id="upload-fields-title" className="text-base font-semibold">
             {t('upload.detailsTitle')}
@@ -147,7 +147,7 @@ export function UploadForm({ schema, state, errors, disabled, onChange }: Upload
 
       <section
         aria-labelledby="upload-files-title"
-        className="space-y-3 rounded-lg border border-border bg-card p-4"
+        className="space-y-3 rounded-xl border border-transparent bg-card dark:border-border/60 p-4"
       >
         <h2 id="upload-files-title" className="text-base font-semibold">
           {schema.multi_file ? t('upload.filesTitle') : t('upload.fileTitle')}

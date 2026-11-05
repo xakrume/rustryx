@@ -32,7 +32,7 @@ export function AppShell() {
     <CommandPaletteProvider>
       <div className="flex h-dvh bg-background">
         <aside
-          className="hidden shrink-0 border-r border-border bg-card transition-[width] duration-200 md:block"
+          className="hidden shrink-0 border-r border-border/70 bg-background transition-[width] duration-300 ease-standard md:block"
           style={{ width: collapsed ? 'var(--sidebar-w-collapsed)' : 'var(--sidebar-w)' }}
         >
           <SidebarNav collapsed={collapsed} onToggleCollapsed={toggle} />
@@ -45,7 +45,7 @@ export function AppShell() {
             tabIndex={-1}
             className="min-h-0 flex-1 overflow-y-auto outline-none"
           >
-            <div className="mx-auto w-full max-w-[100rem] p-4 md:p-6">
+            <div className="mx-auto w-full max-w-[90rem] px-4 py-6 md:px-8 md:py-8 xl:px-12">
               <ProtectedRoute>
                 <Outlet />
               </ProtectedRoute>
@@ -54,8 +54,8 @@ export function AppShell() {
         </div>
       </div>
       <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
-        <SheetContent side="left" className="bg-card" hideCloseButton={false}>
-          <SheetTitle className="border-b border-border px-4 py-3 text-base font-semibold">
+        <SheetContent side="left" className="bg-background" hideCloseButton={false}>
+          <SheetTitle className="px-5 pt-5 pb-2 text-lg font-semibold tracking-[-0.02em]">
             {t('common.appName')}
           </SheetTitle>
           <SheetDescription className="sr-only">{t('a11y.mainNavigation')}</SheetDescription>

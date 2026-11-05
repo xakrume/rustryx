@@ -31,10 +31,11 @@ async function readDedup(name: string, method: 'GET' | 'POST'): Promise<DedupVie
     const csrf = getCsrfToken()
     if (csrf) headers.set('x-csrf-token', csrf)
   }
-  const response = await fetch(
-    `/api/v1/blob-stores/${encodeURIComponent(name)}/actions/dedup`,
-    { method, credentials: 'include', headers },
-  )
+  const response = await fetch(`/api/v1/blob-stores/${encodeURIComponent(name)}/actions/dedup`, {
+    method,
+    credentials: 'include',
+    headers,
+  })
   if (!response.ok) throw new Error(String(response.status))
   return (await response.json()) as DedupView
 }
@@ -58,7 +59,7 @@ function DedupCard({ name }: { name: string }) {
     }
   }, [name])
   return (
-    <section className="space-y-3 rounded-lg border border-border bg-card p-4">
+    <section className="space-y-3 rounded-xl border border-transparent bg-card dark:border-border/60 p-4">
       <h2 className="text-base font-semibold">{t('blobStores.dedup.title')}</h2>
       <p className="text-sm text-muted-foreground">{t('blobStores.dedup.body')}</p>
       <Button

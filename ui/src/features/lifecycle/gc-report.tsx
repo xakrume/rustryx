@@ -101,7 +101,7 @@ export function GcReport({ runId }: { runId: string }) {
         </Alert>
       ) : null}
       <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <div className="rounded-lg border border-border bg-card px-4 py-3">
+        <div className="rounded-xl border border-transparent bg-card dark:border-border/60 px-4 py-3">
           <dt className="text-xs font-medium text-muted-foreground">
             {t('lifecycle.report.gc.stats.blobs')}
           </dt>
@@ -109,7 +109,7 @@ export function GcReport({ runId }: { runId: string }) {
             {run.candidate_blobs?.toLocaleString() ?? '-'}
           </dd>
         </div>
-        <div className="rounded-lg border border-border bg-card px-4 py-3">
+        <div className="rounded-xl border border-transparent bg-card dark:border-border/60 px-4 py-3">
           <dt className="text-xs font-medium text-muted-foreground">
             {t('lifecycle.report.gc.stats.bytes')}
           </dt>

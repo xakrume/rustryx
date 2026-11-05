@@ -172,7 +172,10 @@ function EngineerJobs() {
       : []),
   ]
   return (
-    <section aria-labelledby="engineer-jobs" className="mb-6 rounded-lg border border-border p-4">
+    <section
+      aria-labelledby="engineer-jobs"
+      className="mb-8 rounded-xl border border-transparent bg-card p-5 md:p-6 dark:border-border/60"
+    >
       <h2 id="engineer-jobs" className="text-base font-semibold">
         {t('dashboard.jobs.title')}
       </h2>

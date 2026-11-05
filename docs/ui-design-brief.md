@@ -13,8 +13,8 @@ reviewed by hand. If this brief and MASTER.md disagree, this brief wins.
 | API contract | UI talks only to the native API `/api/v1/*` described by `docs/openapi/rustryx-api-v1.yaml`; the TypeScript client is generated from it | backend and UI are built in parallel against one contract |
 | Auth in UI | Keycloak code flow with PKCE through the server (cookie session, SameSite=Lax, CSRF token on mutations); local login form for break-glass; no tokens in localStorage | README 8.3 |
 | Style | Minimalism and Swiss style, dark and light themes, density 8 (dashboard), subtle motion (150 to 300 ms) | professional tool, long sessions |
-| Palette | slate neutrals, green accent `#22C55E` for status and primary actions, destructive red `#EF4444`; both themes defined as semantic tokens (`--color-*`), never raw hex in components | MASTER.md has the dark set; the light set must be derived and checked |
-| Type | Fira Sans for UI text and headings, Fira Code for coordinates, digests, paths, commands, logs | MASTER.md proposes Fira Code for headings; for a data-dense admin UI that hurts readability, so code font is limited to technical values |
+| Palette | Apple-style quiet neutrals (`#f5f5f7` page, white cards, `#1d1d1f` ink; true black and graphite in dark), one action blue `#0071e3`, green only for success, red for destruction; both themes defined as semantic tokens (`--color-*`), never raw hex in components | every pair is proven by `scripts/check-contrast.mjs` |
+| Type | the system face (SF Pro on Apple platforms, Segoe UI on Windows, self-hosted Fira Sans as fallback) for UI text and headings; the system monospace (SF Mono, Menlo) then Fira Code for coordinates, digests, paths, commands, logs | code font is limited to technical values; headings use tight negative tracking |
 | Icons | Lucide SVG only, no emoji; icon-only buttons carry an accessible label | skill rule |
 
 ## Rules every screen must satisfy

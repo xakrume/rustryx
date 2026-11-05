@@ -1,8 +1,8 @@
 /*
  * Design tokens: light and dark themes as CSS variables.
  *
- * Sources: design-system/rustryx/MASTER.md (dark palette, spacing density 8, shadows) and
- * docs/ui-design-brief.md (which wins on conflicts). The light palette is derived here.
+ * Direction: Apple-style minimalism (DESIGN.md). Quiet neutrals, one blue for action, soft
+ * radii, no decoration. docs/ui-design-brief.md still wins on accessibility rules.
  *
  * Invariants (held by scripts/check-contrast.mjs, which runs in `npm run lint`):
  * - The light set is the `@theme` block, the dark set is `:root[data-theme='dark']`. Both
@@ -24,71 +24,75 @@
   /* Drop Tailwind's default palette: a stray bg-blue-500 must fail to compile. */
   --color-*: initial;
 
-  /* ---- Light theme (default) ---- */
-  --color-background: #f8fafc;
-  --color-foreground: #0f172a;
+  /* ---- Light theme (default): Apple-like neutrals, one blue for action ---- */
+  --color-background: #f5f5f7;
+  --color-foreground: #1d1d1f;
   --color-card: #ffffff;
-  --color-card-foreground: #0f172a;
+  --color-card-foreground: #1d1d1f;
   --color-popover: #ffffff;
-  --color-popover-foreground: #0f172a;
-  --color-primary: #1e293b;
+  --color-popover-foreground: #1d1d1f;
+  --color-primary: #1d1d1f;
   --color-on-primary: #ffffff;
-  --color-secondary: #e2e8f0;
-  --color-on-secondary: #0f172a;
-  /* The light accent is green-700, not #22C55E: that green is only 2.3:1 on white. */
-  --color-accent: #15803d;
+  --color-secondary: #e8e8ed;
+  --color-on-secondary: #1d1d1f;
+  /* Action blue: 4.6:1 with white text, and the same blue in both themes. */
+  --color-accent: #0071e3;
   --color-on-accent: #ffffff;
-  --color-muted: #f1f5f9;
-  --color-muted-foreground: #475569;
-  --color-border: #e2e8f0;
-  --color-input: #64748b;
-  --color-ring: #0f172a;
-  --color-link: #1d4ed8;
-  --color-destructive: #dc2626;
+  --color-muted: #f5f5f7;
+  --color-muted-foreground: #6e6e73;
+  --color-border: #d2d2d7;
+  --color-input: #86868b;
+  --color-ring: #0071e3;
+  --color-link: #0066cc;
+  --color-destructive: #d70015;
   --color-on-destructive: #ffffff;
-  --color-destructive-subtle: #fee2e2;
-  --color-destructive-text: #b91c1c;
-  --color-success: #15803d;
-  --color-success-subtle: #dcfce7;
-  --color-success-text: #166534;
-  --color-warning: #b45309;
-  --color-warning-subtle: #fef3c7;
-  --color-warning-text: #92400e;
-  --color-info: #2563eb;
-  --color-info-subtle: #dbeafe;
-  --color-info-text: #1e40af;
-  --color-overlay: rgb(15 23 42 / 0.5);
-  --color-chart-grid: #e2e8f0;
-  --color-chart-1: #0369a1;
-  --color-chart-2: #b45309;
-  --color-chart-3: #047857;
-  --color-chart-4: #be185d;
-  --color-chart-5: #6d28d9;
+  --color-destructive-subtle: #fff0f0;
+  --color-destructive-text: #b0000f;
+  --color-success: #1e7f3a;
+  --color-success-subtle: #eaf7ee;
+  --color-success-text: #17672e;
+  --color-warning: #b25000;
+  --color-warning-subtle: #fff4e5;
+  --color-warning-text: #8f4000;
+  --color-info: #0071e3;
+  --color-info-subtle: #ebf4ff;
+  --color-info-text: #0058b0;
+  --color-overlay: rgb(0 0 0 / 0.32);
+  --color-chart-grid: #e8e8ed;
+  --color-chart-1: #0066cc;
+  --color-chart-2: #b25000;
+  --color-chart-3: #1e7f3a;
+  --color-chart-4: #c0185d;
+  --color-chart-5: #7a3fc8;
   --color-chart-6: #c2410c;
 
   /* ---- Typography ---- */
+  /* SF Pro where the OS has it (Apple's own face), then the closest native face, then the
+     self-hosted Fira Sans. A browser only downloads a @font-face that it actually uses. */
   --font-sans:
-    'Fira Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
-    Arial, sans-serif;
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Segoe UI Variable Text',
+    'Segoe UI', 'Fira Sans', 'Helvetica Neue', Arial, sans-serif;
   /* Code font only for technical values (coordinates, digests, paths, commands, logs). */
   --font-mono:
-    'Fira Code Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono',
-    monospace;
+    ui-monospace, 'SF Mono', SFMono-Regular, Menlo, 'Fira Code Variable', Consolas,
+    'Liberation Mono', monospace;
 
   /* ---- Radius ---- */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 12px;
+  /* Soft, continuous corners: controls 10px, panels 14px, sheets and dialogs 20px. */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-2xl: 28px;
 
-  /* ---- Shadows (MASTER.md) ---- */
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.05);
-  --shadow-md: 0 4px 6px rgb(0 0 0 / 0.1);
-  --shadow-lg: 0 10px 15px rgb(0 0 0 / 0.1);
-  --shadow-xl: 0 20px 25px rgb(0 0 0 / 0.15);
+  /* ---- Shadows: soft and wide, only for things that float ---- */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.04);
+  --shadow-md: 0 4px 14px rgb(0 0 0 / 0.08);
+  --shadow-lg: 0 12px 32px rgb(0 0 0 / 0.12), 0 1px 3px rgb(0 0 0 / 0.06);
+  --shadow-xl: 0 24px 64px rgb(0 0 0 / 0.18), 0 2px 6px rgb(0 0 0 / 0.08);
 
   /* ---- Motion ---- */
-  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-standard: cubic-bezier(0.25, 0.1, 0.25, 1);
   --animate-fade-in: fade-in var(--duration-base) var(--ease-standard);
   --animate-fade-out: fade-out var(--duration-fast) var(--ease-standard);
   --animate-slide-in-left: slide-in-left var(--duration-slow) var(--ease-standard);
@@ -151,47 +155,47 @@
   }
 }
 
-/* ---- Dark theme: MASTER.md set plus the tokens it does not name ---- */
+/* ---- Dark theme: true black ground, raised graphite surfaces ---- */
 :root[data-theme='dark'] {
-  --color-background: #0f172a;
-  --color-foreground: #f8fafc;
-  --color-card: #1b2336;
-  --color-card-foreground: #f8fafc;
-  --color-popover: #1b2336;
-  --color-popover-foreground: #f8fafc;
-  --color-primary: #1e293b;
-  --color-on-primary: #ffffff;
-  --color-secondary: #334155;
-  --color-on-secondary: #ffffff;
-  --color-accent: #22c55e;
-  --color-on-accent: #0f172a;
-  --color-muted: #272f42;
-  --color-muted-foreground: #94a3b8;
-  --color-border: #475569;
-  --color-input: #64748b;
-  --color-ring: #ffffff;
-  --color-link: #60a5fa;
-  --color-destructive: #ef4444;
+  --color-background: #000000;
+  --color-foreground: #f5f5f7;
+  --color-card: #1c1c1e;
+  --color-card-foreground: #f5f5f7;
+  --color-popover: #2c2c2e;
+  --color-popover-foreground: #f5f5f7;
+  --color-primary: #f5f5f7;
+  --color-on-primary: #1d1d1f;
+  --color-secondary: #3a3a3c;
+  --color-on-secondary: #f5f5f7;
+  --color-accent: #0071e3;
+  --color-on-accent: #ffffff;
+  --color-muted: #2c2c2e;
+  --color-muted-foreground: #a1a1a6;
+  --color-border: #38383a;
+  --color-input: #8e8e93;
+  --color-ring: #2997ff;
+  --color-link: #2997ff;
+  --color-destructive: #ff453a;
   --color-on-destructive: #000000;
-  --color-destructive-subtle: #3b1214;
-  --color-destructive-text: #f87171;
-  --color-success: #22c55e;
-  --color-success-subtle: #0b2e1c;
-  --color-success-text: #4ade80;
-  --color-warning: #f59e0b;
-  --color-warning-subtle: #33260a;
-  --color-warning-text: #fbbf24;
-  --color-info: #3b82f6;
-  --color-info-subtle: #0f2547;
-  --color-info-text: #60a5fa;
+  --color-destructive-subtle: #3a1715;
+  --color-destructive-text: #ff6961;
+  --color-success: #30d158;
+  --color-success-subtle: #0f2e18;
+  --color-success-text: #4cd964;
+  --color-warning: #ff9f0a;
+  --color-warning-subtle: #33240a;
+  --color-warning-text: #ffb340;
+  --color-info: #2997ff;
+  --color-info-subtle: #0b2440;
+  --color-info-text: #64b0ff;
   --color-overlay: rgb(0 0 0 / 0.6);
-  --color-chart-grid: #334155;
-  --color-chart-1: #38bdf8;
-  --color-chart-2: #fbbf24;
-  --color-chart-3: #34d399;
-  --color-chart-4: #f472b6;
-  --color-chart-5: #a78bfa;
-  --color-chart-6: #fb923c;
+  --color-chart-grid: #38383a;
+  --color-chart-1: #64b0ff;
+  --color-chart-2: #ffb340;
+  --color-chart-3: #4cd964;
+  --color-chart-4: #ff6b9d;
+  --color-chart-5: #bf8bff;
+  --color-chart-6: #ff8a50;
 
   color-scheme: dark;
 }
@@ -216,25 +220,25 @@
   --duration-slow: 300ms;
 
   /* Layout */
-  --sidebar-w: 15rem;
-  --sidebar-w-collapsed: 3.5rem;
-  --topbar-h: 3rem;
+  --sidebar-w: 15.5rem;
+  --sidebar-w-collapsed: 3.75rem;
+  --topbar-h: 3.25rem;
 
   /* Density: compact is the default (dashboard density 8). The base values are replaced
      below for comfortable and raised to the 44px touch minimum on coarse pointers. */
-  --control-h-base: 2rem;
-  --row-h-base: 2rem;
+  --control-h-base: 2.125rem;
+  --row-h-base: 2.25rem;
   --control-h: var(--control-h-base);
   --row-h: var(--row-h-base);
-  --cell-px: 0.75rem;
+  --cell-px: 1rem;
   --text-table: 0.8125rem;
   --text-table-line: 1.25rem;
 }
 
 :root[data-density='comfortable'] {
   --control-h-base: 2.5rem;
-  --row-h-base: 2.75rem;
-  --cell-px: 1rem;
+  --row-h-base: 2.875rem;
+  --cell-px: 1.25rem;
   --text-table: 0.875rem;
   --text-table-line: 1.375rem;
 }

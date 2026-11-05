@@ -40,7 +40,7 @@ export function CommandDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         hideCloseButton
-        className="top-[15%] max-h-[70dvh] max-w-xl translate-y-0 gap-0 overflow-hidden p-0"
+        className="top-[15%] max-h-[70dvh] max-w-2xl translate-y-0 gap-0 overflow-hidden bg-popover/95 p-0 backdrop-blur-2xl"
       >
         <DialogTitle className="sr-only">{title}</DialogTitle>
         <DialogDescription className="sr-only">{description}</DialogDescription>
@@ -61,11 +61,11 @@ export function CommandInput({
   ...props
 }: ComponentProps<typeof CommandPrimitive.Input>) {
   return (
-    <div className="flex items-center gap-2 border-b border-border px-3">
-      <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+    <div className="flex items-center gap-3 border-b border-border/70 px-4">
+      <Search className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
       <CommandPrimitive.Input
         className={cn(
-          'h-11 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground',
+          'h-14 w-full bg-transparent text-lg tracking-[-0.01em] outline-none placeholder:text-muted-foreground',
           className,
         )}
         {...props}
@@ -77,7 +77,7 @@ export function CommandInput({
 export function CommandList({ className, ...props }: ComponentProps<typeof CommandPrimitive.List>) {
   return (
     <CommandPrimitive.List
-      className={cn('max-h-[50dvh] overflow-x-hidden overflow-y-auto p-1', className)}
+      className={cn('max-h-[50dvh] overflow-x-hidden overflow-y-auto p-2', className)}
       {...props}
     />
   )
@@ -102,7 +102,7 @@ export function CommandItem({ className, ...props }: ComponentProps<typeof Comma
   return (
     <CommandPrimitive.Item
       className={cn(
-        'flex min-h-(--control-h) cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-[selected=true]:bg-muted [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground',
+        'flex min-h-(--control-h) cursor-pointer items-center gap-2.5 rounded-md px-3 py-1.5 text-sm select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-40 data-[selected=true]:bg-accent data-[selected=true]:text-on-accent [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground data-[selected=true]:**:text-on-accent',
         className,
       )}
       {...props}

@@ -47,7 +47,7 @@ export function TreeSection() {
       description="Arrow keys, Home and End, Right and Left to expand and collapse, type a letter to jump. Folders load lazily."
     >
       <div className="grid gap-3 md:grid-cols-2">
-        <div className="rounded-lg border border-border bg-card p-2">
+        <div className="rounded-xl border border-transparent bg-card dark:border-border/60 p-2">
           <Tree
             label="Repository content"
             roots={ROOTS}

@@ -17,7 +17,7 @@ function shortcutLabel(): string {
 export function TopBar({ onOpenMenu }: { onOpenMenu: () => void }) {
   const palette = useCommandPalette()
   return (
-    <header className="flex min-h-(--topbar-h) items-center gap-2 border-b border-border bg-card px-2 md:px-4">
+    <header className="relative z-20 flex min-h-(--topbar-h) items-center gap-1 border-b border-border/70 bg-background/80 px-2 backdrop-blur-xl backdrop-saturate-150 md:px-5">
       <Button
         variant="ghost"
         size="icon"
@@ -32,7 +32,7 @@ export function TopBar({ onOpenMenu }: { onOpenMenu: () => void }) {
       </div>
       <Button
         variant="outline"
-        className="hidden w-64 justify-start gap-2 text-muted-foreground lg:inline-flex"
+        className="mr-1 hidden w-64 justify-start gap-2 border-transparent bg-secondary/70 font-normal text-muted-foreground hover:bg-secondary lg:inline-flex dark:hover:bg-secondary"
         aria-label={t('shell.search.open')}
         aria-keyshortcuts="Control+K Meta+K"
         onClick={() => palette.setOpen(true)}

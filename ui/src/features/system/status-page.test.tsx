@@ -20,7 +20,7 @@ beforeEach(() => window.sessionStorage.removeItem('ryx-mock-status'))
 
 async function readiness() {
   const card = (await screen.findByRole('heading', { name: 'Readiness of this node' })).closest(
-    'div.rounded-lg',
+    'div.rounded-xl',
   ) as HTMLElement
   return within(card)
 }
@@ -41,7 +41,7 @@ describe('system status page', () => {
     renderApp('/admin/system/status', { user: 'admin' })
     expect(await screen.findByText('Some checks need attention')).toBeInTheDocument()
     const checksHeading = screen.getByRole('heading', { name: 'Checks' })
-    const list = checksHeading.closest('div.rounded-lg')!.querySelector('ul')!
+    const list = checksHeading.closest('div.rounded-xl')!.querySelector('ul')!
     const first = within(list).getAllByRole('listitem')[0]!
     // Worst first: a warning before the healthy ones.
     expect(within(first).getAllByText('Warning').length).toBeGreaterThan(0)

@@ -17,7 +17,7 @@ export function ForbiddenPanel({ privilege, className }: ForbiddenPanelProps) {
     <section
       aria-labelledby="forbidden-title"
       className={cn(
-        'mx-auto flex max-w-lg flex-col items-center gap-2 rounded-lg border border-border bg-card px-6 py-10 text-center',
+        'mx-auto flex max-w-lg flex-col items-center gap-2 rounded-xl border border-transparent bg-card dark:border-border/60 px-6 py-10 text-center',
         className,
       )}
     >

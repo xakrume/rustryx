@@ -133,7 +133,7 @@ type Placement = 'center' | 'left' | 'right'
 
 const placementClasses: Record<Placement, string> = {
   center:
-    'left-1/2 top-1/2 max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border',
+    'left-1/2 top-1/2 max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-border/60',
   left: 'inset-y-0 left-0 h-dvh w-72 max-w-[85vw] border-r border-border data-[state=open]:animate-slide-in-left data-[state=closed]:animate-slide-out-left',
   right: 'inset-y-0 right-0 h-dvh w-96 max-w-[90vw] border-l border-border',
 }
@@ -200,7 +200,7 @@ export function DialogContent({
             // Radix switches pointer events off on <body> while a modal layer is open; the
             // overlay must stay clickable so a click on it dismisses the dialog.
             style={{ pointerEvents: 'auto' }}
-            className="fixed inset-0 z-50 bg-overlay data-[state=open]:animate-fade-in data-[state=closed]:animate-fade-out"
+            className="fixed inset-0 z-50 bg-overlay backdrop-blur-sm data-[state=open]:animate-fade-in data-[state=closed]:animate-fade-out"
           />
         </Portal>
       </Presence>
@@ -236,7 +236,7 @@ export function DialogContent({
                 onFocusOutside={(event) => event.preventDefault()}
                 onDismiss={() => ctx.setOpen(false)}
                 className={cn(
-                  'fixed z-50 flex flex-col overflow-y-auto bg-popover p-4 text-popover-foreground shadow-xl data-[state=open]:animate-fade-in data-[state=closed]:animate-fade-out',
+                  'fixed z-50 flex flex-col overflow-y-auto bg-popover p-6 text-popover-foreground shadow-xl data-[state=open]:animate-fade-in data-[state=closed]:animate-fade-out',
                   placementClasses[placement],
                   className,
                 )}
@@ -247,7 +247,7 @@ export function DialogContent({
                 {dismissible && !hideCloseButton ? (
                   <DialogClose
                     aria-label={t('common.close')}
-                    className="absolute top-2 right-2 inline-flex size-(--control-h) items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                    className="absolute top-3 right-3 inline-flex size-(--control-h) items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
                   >
                     <X className="size-4" aria-hidden="true" />
                   </DialogClose>
@@ -268,7 +268,7 @@ export function DialogHeader({ className, ...props }: ComponentProps<'div'>) {
 export function DialogFooter({ className, ...props }: ComponentProps<'div'>) {
   return (
     <div
-      className={cn('mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end', className)}
+      className={cn('mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end', className)}
       {...props}
     />
   )
@@ -280,7 +280,10 @@ export function DialogTitle({ className, ...props }: ComponentProps<'h2'>) {
     // eslint-disable-next-line jsx-a11y/heading-has-content -- the content is the children in props
     <h2
       id={ctx.titleId}
-      className={cn('text-lg leading-6 font-semibold text-foreground', className)}
+      className={cn(
+        'text-xl leading-7 font-semibold tracking-[-0.02em] text-foreground',
+        className,
+      )}
       {...props}
     />
   )

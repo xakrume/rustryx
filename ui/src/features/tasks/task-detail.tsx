@@ -232,7 +232,7 @@ function RunHistory({ task }: { task: Task }) {
         />
       }
       emptyState={
-        <p className="rounded-lg border border-dashed border-input p-8 text-center text-sm text-muted-foreground">
+        <p className="rounded-xl border border-transparent bg-card p-10 dark:border-border/60 text-center text-sm text-muted-foreground">
           {t('tasks.detail.historyEmpty')}
         </p>
       }

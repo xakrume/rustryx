@@ -31,7 +31,7 @@ export function ToastRoot({ className, ...props }: ComponentProps<typeof ToastPr
   return (
     <ToastPrimitive.Root
       className={cn(
-        'relative flex items-start gap-3 rounded-lg border border-border border-l-4 bg-popover p-3 pr-10 text-sm text-popover-foreground shadow-lg data-[state=closed]:animate-toast-out data-[state=open]:animate-toast-in',
+        'relative flex items-start gap-3 rounded-xl border border-border/60 border-l-4 bg-popover/95 p-4 pr-10 backdrop-blur-xl text-sm text-popover-foreground shadow-lg data-[state=closed]:animate-toast-out data-[state=open]:animate-toast-in',
         className,
       )}
       {...props}
@@ -48,7 +48,7 @@ export function ToastClose({ className, ...props }: ComponentProps<typeof ToastP
     <ToastPrimitive.Close
       aria-label={t('toast.dismiss')}
       className={cn(
-        'absolute top-1.5 right-1.5 inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground',
+        'absolute top-1.5 right-1.5 inline-flex size-7 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground',
         className,
       )}
       {...props}

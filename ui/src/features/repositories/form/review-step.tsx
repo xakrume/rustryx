@@ -35,7 +35,7 @@ export function ReviewStep({
   const nameOf = (list: readonly { id: string; name: string }[], id: string): string =>
     list.find((item) => item.id === id)?.name ?? id
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
+    <section className="rounded-xl border border-transparent bg-card dark:border-border/60 p-4">
       <h2 className="text-base font-semibold">{t('repoForm.review.title')}</h2>
       <p className="text-sm text-muted-foreground">{t('repoForm.review.body')}</p>
       <dl className="mt-2 divide-y divide-border text-sm">

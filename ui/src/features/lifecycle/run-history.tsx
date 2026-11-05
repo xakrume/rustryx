@@ -273,7 +273,7 @@ export function RunHistory({
       onPageSizeChange={setPageSize}
       toolbar={toolbar}
       emptyState={
-        <p className="rounded-lg border border-dashed border-input p-8 text-center text-sm text-muted-foreground">
+        <p className="rounded-xl border border-transparent bg-card p-10 dark:border-border/60 text-center text-sm text-muted-foreground">
           <span className="block text-base font-semibold text-foreground">
             {t('lifecycle.empty.title')}
           </span>
@@ -301,7 +301,7 @@ export function RunHistory({
       onPageSizeChange={setPageSize}
       toolbar={toolbar}
       emptyState={
-        <p className="rounded-lg border border-dashed border-input p-8 text-center text-sm text-muted-foreground">
+        <p className="rounded-xl border border-transparent bg-card p-10 dark:border-border/60 text-center text-sm text-muted-foreground">
           {t('lifecycle.empty.gc')}
         </p>
       }

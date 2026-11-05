@@ -52,7 +52,7 @@ export function RepositoriesCard({ summary }: { summary: DashboardSummary['repos
         <CardTitle>{t('dashboard.repositories')}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
-        <p className="text-2xl font-semibold tabular">
+        <p className="text-[2.5rem] leading-none font-semibold tracking-[-0.03em] tabular">
           <Link to="/repositories" className="underline-offset-2 hover:underline">
             {t('dashboard.repositoriesTotal', { count: summary.total })}
           </Link>

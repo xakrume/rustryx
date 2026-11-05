@@ -254,7 +254,12 @@ export function TimeSeriesChart({
   const showDots = rows.length <= 31
 
   return (
-    <figure className={cn('rounded-lg border border-border bg-card p-3', className)}>
+    <figure
+      className={cn(
+        'rounded-xl border border-transparent bg-card dark:border-border/60 p-3',
+        className,
+      )}
+    >
       <figcaption className="mb-2 flex items-center justify-between gap-2">
         <span className="text-sm font-semibold">{title}</span>
         <Button

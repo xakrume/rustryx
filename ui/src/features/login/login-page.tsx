@@ -89,22 +89,22 @@ export function LoginPage({ search }: { search: LoginSearch }) {
       <div className="absolute top-3 right-3">
         <ThemeMenu />
       </div>
-      <Card className="w-full max-w-sm">
-        <CardHeader className="pb-4">
-          <p className="flex items-center gap-2 font-mono text-sm font-semibold text-accent">
-            <Package className="size-4" aria-hidden="true" />
+      <Card className="w-full max-w-sm shadow-md dark:shadow-none">
+        <CardHeader className="gap-1.5 px-6 pt-8 pb-4 md:px-8 md:pt-10">
+          <p className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+            <Package className="size-5 text-accent" aria-hidden="true" />
             {t('common.appName')}
           </p>
           <h1
             data-page-title=""
             tabIndex={-1}
-            className="text-xl leading-7 font-semibold outline-none"
+            className="text-2xl leading-8 font-semibold tracking-[-0.025em] outline-none"
           >
             {t('auth.login.title')}
           </h1>
           <p className="text-sm text-muted-foreground">{t('auth.login.subtitle')}</p>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-4 px-6 pb-8 md:px-8 md:pb-10">
           {search.reason === 'expired' ? (
             <Alert variant="info">{t('shell.session.expired')}</Alert>
           ) : null}

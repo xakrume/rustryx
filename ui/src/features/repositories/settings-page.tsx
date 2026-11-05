@@ -37,7 +37,7 @@ import { FormatBadge, RepoTypeBadge, UpstreamBadge } from './repo-meta'
 
 function Locked({ repo }: { repo: RepositoryView }) {
   return (
-    <section className="space-y-2 rounded-lg border border-border bg-card p-4">
+    <section className="space-y-2 rounded-xl border border-transparent bg-card dark:border-border/60 p-4">
       <h2 className="flex items-center gap-2 text-base font-semibold">
         <Lock className="size-4 text-muted-foreground" aria-hidden="true" />
         {t('repoForm.locked.title')}
@@ -112,7 +112,7 @@ function UpstreamActions({ repo }: { repo: RepositoryView }) {
     }
   }, [repo.name, mirrorProxy])
   return (
-    <section className="space-y-3 rounded-lg border border-border bg-card p-4">
+    <section className="space-y-3 rounded-xl border border-transparent bg-card dark:border-border/60 p-4">
       <h2 className="text-base font-semibold">{t('repoForm.upstream.title')}</h2>
       {upstream ? (
         <p className="flex flex-wrap items-center gap-2 text-sm">

@@ -35,10 +35,13 @@ function NavLink({
       activeOptions={{ exact: item.exact === true }}
       aria-label={collapsed ? label : undefined}
       onClick={onNavigate}
-      className="group relative flex min-h-(--control-h) items-center gap-2 rounded-md px-3 text-sm font-medium text-foreground transition-colors duration-150 hover:bg-muted data-[status=active]:bg-secondary data-[status=active]:text-on-secondary data-[status=active]:before:absolute data-[status=active]:before:inset-y-1.5 data-[status=active]:before:left-0 data-[status=active]:before:w-1 data-[status=active]:before:rounded-full data-[status=active]:before:bg-accent"
+      className="group relative flex min-h-(--control-h) items-center gap-2.5 rounded-md px-3 text-sm text-foreground transition-colors duration-150 hover:bg-foreground/[0.05] data-[status=active]:bg-secondary data-[status=active]:font-medium data-[status=active]:text-on-secondary dark:hover:bg-foreground/[0.08]"
       activeProps={{ 'aria-current': 'page' }}
     >
-      <Icon className="size-4 shrink-0" aria-hidden="true" />
+      <Icon
+        className="size-4 shrink-0 text-muted-foreground group-data-[status=active]:text-accent dark:group-data-[status=active]:text-link"
+        aria-hidden="true"
+      />
       {collapsed ? null : <span className="truncate">{label}</span>}
     </Link>
   )
@@ -78,7 +81,7 @@ function Section({
   const heading = section.labelKey ? t(section.labelKey) : null
   const showItems = collapsed || !section.collapsible || open
   return (
-    <div className={cn(collapsed && heading && 'border-t border-border pt-2')}>
+    <div className={cn(collapsed && heading && 'border-t border-border/70 pt-3')}>
       {heading && !collapsed ? (
         section.collapsible ? (
           <h2 className="mb-0.5">
@@ -87,19 +90,17 @@ function Section({
               aria-expanded={open}
               aria-controls={listId}
               onClick={() => setOpen((v) => !v)}
-              className="flex min-h-8 w-full items-center justify-between rounded-md px-3 text-xs font-semibold tracking-wide text-muted-foreground uppercase hover:text-foreground"
+              className="flex min-h-8 w-full items-center justify-between rounded-md px-3 text-xs font-semibold text-muted-foreground hover:text-foreground"
             >
               <span>{heading}</span>
               <ChevronDown
-                className={cn('size-4 transition-transform duration-150', !open && '-rotate-90')}
+                className={cn('size-3.5 transition-transform duration-200', !open && '-rotate-90')}
                 aria-hidden="true"
               />
             </button>
           </h2>
         ) : (
-          <h2 className="px-3 pb-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-            {heading}
-          </h2>
+          <h2 className="px-3 pb-1 text-xs font-semibold text-muted-foreground">{heading}</h2>
         )
       ) : null}
       {showItems ? (
@@ -154,7 +155,7 @@ export function SidebarNav({ collapsed = false, onNavigate, onToggleCollapsed }:
       <nav
         aria-label={t('a11y.mainNavigation')}
         onKeyDown={onKeyDown}
-        className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-2"
+        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-3 py-4"
       >
         {sections.map(({ section, items }) => (
           <Section
@@ -167,10 +168,10 @@ export function SidebarNav({ collapsed = false, onNavigate, onToggleCollapsed }:
         ))}
       </nav>
       {onToggleCollapsed ? (
-        <div className="border-t border-border p-2">
+        <div className="border-t border-border/70 p-3">
           <Button
             variant="ghost"
-            className="w-full justify-start"
+            className="w-full justify-start rounded-md font-normal text-muted-foreground"
             size={collapsed ? 'icon' : 'default'}
             aria-label={collapsed ? t('nav.expand') : t('nav.collapse')}
             aria-expanded={!collapsed}

@@ -39,7 +39,7 @@ export function ProgressPanel({ files, progress, onCancel }: ProgressPanelProps)
     <section
       aria-label={t('upload.progressTitle')}
       aria-busy="true"
-      className="space-y-3 rounded-lg border border-border bg-card p-4"
+      className="space-y-3 rounded-xl border border-transparent bg-card dark:border-border/60 p-4"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-base font-semibold">{t('upload.progressTitle')}</h2>

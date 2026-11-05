@@ -22,7 +22,7 @@ export function Table({ className, label, containerClassName, ...props }: TableP
       // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- keyboard users must be able to scroll the region
       tabIndex={0}
       className={cn(
-        'relative w-full overflow-auto rounded-lg border border-border',
+        'relative w-full overflow-auto rounded-lg border border-border/70 bg-card',
         containerClassName,
       )}
     >
@@ -38,7 +38,7 @@ export function Table({ className, label, containerClassName, ...props }: TableP
 }
 
 export function TableHeader({ className, ...props }: ComponentProps<'thead'>) {
-  return <thead className={cn('bg-muted [&_tr]:border-b', className)} {...props} />
+  return <thead className={cn('bg-card [&_tr]:border-b', className)} {...props} />
 }
 
 export function TableBody({ className, ...props }: ComponentProps<'tbody'>) {
@@ -49,7 +49,7 @@ export function TableRow({ className, ...props }: ComponentProps<'tr'>) {
   return (
     <tr
       className={cn(
-        'h-(--row-h) border-b border-border transition-colors duration-150 hover:bg-muted data-[state=selected]:bg-muted',
+        'h-(--row-h) border-b border-border/70 transition-colors duration-150 hover:bg-muted data-[state=selected]:bg-info-subtle',
         className,
       )}
       {...props}
@@ -62,7 +62,7 @@ export function TableHead({ className, ...props }: ComponentProps<'th'>) {
     <th
       className={cn(
         // Sticky on the th, not the thead: that is the form every browser honours.
-        'sticky top-0 z-10 bg-muted px-(--cell-px) text-left align-middle font-medium whitespace-nowrap text-muted-foreground',
+        'sticky top-0 z-10 bg-card px-(--cell-px) text-left align-middle text-xs font-medium whitespace-nowrap text-muted-foreground',
         className,
       )}
       {...props}

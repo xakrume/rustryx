@@ -43,7 +43,10 @@ export function ErrorPanel({ error, onRetry, title, className }: ErrorPanelProps
   return (
     <div
       role="alert"
-      className={cn('flex gap-3 rounded-lg border border-border bg-card p-4 text-sm', className)}
+      className={cn(
+        'flex gap-3 rounded-xl border border-transparent bg-card dark:border-border/60 p-4 text-sm',
+        className,
+      )}
     >
       <Icon className="mt-0.5 size-5 shrink-0 text-destructive-text" aria-hidden="true" />
       <div className="min-w-0 flex-1 space-y-2">

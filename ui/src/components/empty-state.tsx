@@ -16,12 +16,18 @@ export function EmptyState({ title, description, icon: Icon, action, className }
   return (
     <div
       className={cn(
-        'flex flex-col items-center gap-2 rounded-lg border border-dashed border-input px-4 py-10 text-center',
+        'flex flex-col items-center gap-2 rounded-xl border border-transparent bg-card px-6 py-14 text-center dark:border-border/60',
         className,
       )}
     >
-      {Icon ? <Icon className="size-8 text-muted-foreground" aria-hidden="true" /> : null}
-      <h2 className="text-base font-semibold">{title}</h2>
+      {Icon ? (
+        <Icon
+          className="mb-1 size-10 text-muted-foreground"
+          strokeWidth={1.25}
+          aria-hidden="true"
+        />
+      ) : null}
+      <h2 className="text-lg font-semibold">{title}</h2>
       {description ? <p className="max-w-md text-sm text-muted-foreground">{description}</p> : null}
       {action ? <div className="mt-2">{action}</div> : null}
     </div>

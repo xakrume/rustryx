@@ -21,7 +21,7 @@ export const DropdownMenuGroup = MenuPrimitive.Group
 export const DropdownMenuRadioGroup = MenuPrimitive.RadioGroup
 
 const itemBase =
-  'relative flex min-h-(--control-h) cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-muted [&_svg]:size-4 [&_svg]:shrink-0'
+  'relative flex min-h-(--control-h) cursor-pointer items-center gap-2 rounded-sm px-2.5 py-1.5 text-sm outline-none select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-40 data-[highlighted]:bg-accent data-[highlighted]:text-on-accent data-[highlighted]:**:text-on-accent [&_svg]:size-4 [&_svg]:shrink-0'
 
 export function DropdownMenuContent({
   className,
@@ -35,7 +35,7 @@ export function DropdownMenuContent({
         sideOffset={sideOffset}
         align={align}
         className={cn(
-          'z-50 min-w-48 overflow-y-auto rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg data-[state=closed]:animate-fade-out data-[state=open]:animate-fade-in',
+          'z-50 min-w-52 overflow-y-auto rounded-lg border border-border/60 bg-popover/95 p-1.5 text-popover-foreground shadow-lg backdrop-blur-xl data-[state=closed]:animate-fade-out data-[state=open]:animate-fade-in',
           className,
         )}
         {...props}
@@ -102,6 +102,9 @@ export function DropdownMenuSeparator({
   ...props
 }: ComponentProps<typeof MenuPrimitive.Separator>) {
   return (
-    <MenuPrimitive.Separator className={cn('-mx-1 my-1 h-px bg-border', className)} {...props} />
+    <MenuPrimitive.Separator
+      className={cn('-mx-1.5 my-1.5 h-px bg-border/70', className)}
+      {...props}
+    />
   )
 }

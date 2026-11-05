@@ -232,7 +232,7 @@ export function BrowsePage() {
         />
         <PathTrail repository={name} path={path} onSelect={(next) => setSearch({ path: next })} />
         <div
-          className="max-h-[60dvh] overflow-auto rounded-lg border border-border bg-card p-1 lg:max-h-[calc(100dvh-16rem)]"
+          className="max-h-[60dvh] overflow-auto rounded-xl border border-transparent bg-card dark:border-border/60 p-1 lg:max-h-[calc(100dvh-16rem)]"
           aria-busy={root.isPending}
         >
           {root.isPending ? (
@@ -264,7 +264,7 @@ export function BrowsePage() {
       <section
         ref={paneRef}
         aria-label={t('browse.detailsLabel')}
-        className="min-w-0 rounded-lg border border-border bg-card p-4"
+        className="min-w-0 rounded-xl border border-transparent bg-card dark:border-border/60 p-4"
       >
         <DetailPane
           repository={name}

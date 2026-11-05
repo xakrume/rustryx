@@ -38,8 +38,8 @@ describe('design tokens', () => {
   })
 
   it('must_not_pass_a_low_contrast_pair', () => {
-    // The old light accent #22c55e with white text is 2.3:1: the checker has to reject it.
-    const broken = tokensCss.replace('--color-accent: #15803d;', '--color-accent: #22c55e;')
+    // A light blue such as #5eb0ff with white text is about 2.2:1: the checker has to reject it.
+    const broken = tokensCss.replace('--color-accent: #0071e3;', '--color-accent: #5eb0ff;')
     const { results } = evaluate(broken)
     const bad = results.filter((r) => !r.pass && r.theme === 'light' && r.fg === 'on-accent')
     expect(bad).toHaveLength(1)
@@ -49,15 +49,15 @@ describe('design tokens', () => {
     const extra = tokensCss
       .replace('@theme {', '@theme {\n  --color-mystery: #123456;')
       .replace(
-        '--color-background: #0f172a;',
-        '--color-background: #0f172a;\n  --color-mystery: #654321;',
+        '--color-background: #000000;',
+        '--color-background: #000000;\n  --color-mystery: #654321;',
       )
     const { errors } = evaluate(extra)
     expect(errors.some((e) => e.includes('--color-mystery'))).toBe(true)
   })
 
   it('must_not_accept_a_theme_that_misses_a_token', () => {
-    const broken = tokensCss.replace(/ {2}--color-chart-6: #fb923c;\n/, '')
+    const broken = tokensCss.replace(/ {2}--color-chart-6: #ff8a50;\n/, '')
     const { errors } = evaluate(broken)
     expect(errors.some((e) => e.includes('--color-chart-6'))).toBe(true)
   })
