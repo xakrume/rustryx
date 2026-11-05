@@ -35,6 +35,7 @@ import { useUrlTableState } from '@/hooks/use-url-table-state'
 import { t } from '@/i18n'
 import { repositoryListConfig, type RepositoryView } from './api'
 import { DeleteRepositoryDialog } from './delete-repository-dialog'
+import { HealthCell } from './health-cell'
 import { FormatBadge, OnlineBadge, RepoTypeBadge, UpstreamBadge, formatLabel } from './repo-meta'
 
 const FILTER_IDS = ['q', 'format', 'repo_type', 'online'] as const
@@ -183,22 +184,7 @@ function buildColumns(actions: RowActions): AnyColumnDef<RepositoryView>[] {
       id: 'health',
       header: t('repos.columns.health'),
       meta: { label: t('repos.columns.health'), showFrom: '6xl' },
-      cell: ({ row }) => {
-        const health = row.original.health
-        if (!health?.scanned) {
-          return <span className="text-muted-foreground">{t('repos.health.notScanned')}</span>
-        }
-        const checked =
-          health.component_count === 0
-            ? '0'
-            : `${health.scanned_components}/${health.component_count}`
-        return (
-          <span title={health.scanned_at ?? undefined}>
-            {health.critical} / {health.severe} / {health.moderate}
-            <span className="ml-2 text-muted-foreground">{checked}</span>
-          </span>
-        )
-      },
+      cell: ({ row }) => <HealthCell health={row.original.health} />,
     },
     {
       id: 'url',

@@ -71,6 +71,49 @@ function uuid(n: number): string {
   return `0192f6c4-5a1e-7000-8000-${n.toString(16).padStart(12, '0')}`
 }
 
+/**
+ * Vulnerability totals for some hosted repositories, so the list shows every state of the
+ * column: findings, a clean scan, a partial scan, and not scanned. Derived from the index
+ * only, so the seeded random sequence of the other fields does not move.
+ */
+function mockHealth(index: number) {
+  const base = { licenses: { copyleft: 0, non_standard: 0, other: 0 }, scanned_at: FIXED_NOW }
+  switch (index % 4) {
+    case 0:
+      return {
+        ...base,
+        scanned: true,
+        component_count: 6,
+        scanned_components: 6,
+        critical: 2,
+        severe: 63,
+        moderate: 102,
+      }
+    case 1:
+      return {
+        ...base,
+        scanned: true,
+        component_count: 1,
+        scanned_components: 1,
+        critical: 0,
+        severe: 0,
+        moderate: 0,
+      }
+    case 2:
+      return {
+        ...base,
+        scanned: true,
+        component_count: 52,
+        scanned_components: 40,
+        critical: 0,
+        severe: 4,
+        moderate: 11,
+      }
+    default:
+      return null
+  }
+}
+
 function repository(
   index: number,
   name: string,
@@ -120,7 +163,7 @@ function repository(
       size_bytes: Math.floor(next() * 40 * 1024 ** 3),
       as_of: FIXED_NOW,
     },
-    health: null,
+    health: type === 'hosted' ? mockHealth(index) : null,
     permissions: {
       browse: true,
       read: true,
