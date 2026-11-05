@@ -24,6 +24,8 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod accept;
+pub mod apk_index;
+pub mod apt_index;
 pub mod config;
 mod disposition;
 mod handler;

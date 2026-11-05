@@ -124,6 +124,18 @@ impl FormatHandler for RawHandler {
     }
 }
 
+fn cached_component(
+    format: RepoFormat,
+    path: &str,
+) -> Option<rustryx_format_core::ComponentSpec> {
+    match format {
+        RepoFormat::Rpm => crate::rpm_index::component_from_path(path),
+        RepoFormat::Apt => crate::apt_index::component_from_path(path),
+        RepoFormat::Apk => crate::apk_index::component_from_path(path),
+        _ => None,
+    }
+}
+
 /// A file read on a hosted, proxy or group repository, with the computed checksum side files
 /// as the fallback for a path nothing is stored under.
 async fn read_file(
@@ -137,9 +149,7 @@ async fn read_file(
             // a byte reaches the client; one that does not is streamed while it is cached.
             let source: Arc<dyn ChecksumSource> = Arc::new(StandardChecksumHeaders);
             let mut fetch = ProxyFetch::new(req).checksum_source(source);
-            if cx.repository().format == RepoFormat::Rpm
-                && let Some(component) = crate::rpm_index::component_from_path(req.path.as_str())
-            {
+            if let Some(component) = cached_component(cx.repository().format, req.path.as_str()) {
                 fetch = fetch.component(component);
             }
             cx.proxy().fetch_artifact(fetch).await

@@ -90,10 +90,12 @@ function UpstreamActions({ repo }: { repo: RepositoryView }) {
   const actions = useRepositoryAction(repo.name)
   const upstream = repo.upstream
   const blocked = upstream?.state === 'blocked'
-  const rpmProxy = repo.format === 'rpm' && repo.repo_type === 'proxy'
+  const mirrorProxy =
+    repo.repo_type === 'proxy' &&
+    (repo.format === 'rpm' || repo.format === 'apt' || repo.format === 'apk')
   const [sync, setSync] = useState<SyncView | null>(null)
   useEffect(() => {
-    if (!rpmProxy) return undefined
+    if (!mirrorProxy) return undefined
     let stop = false
     const tick = () => {
       readSync(repo.name, 'GET')
@@ -108,7 +110,7 @@ function UpstreamActions({ repo }: { repo: RepositoryView }) {
       stop = true
       window.clearInterval(timer)
     }
-  }, [repo.name, rpmProxy])
+  }, [repo.name, mirrorProxy])
   return (
     <section className="space-y-3 rounded-lg border border-border bg-card p-4">
       <h2 className="text-base font-semibold">{t('repoForm.upstream.title')}</h2>
@@ -158,7 +160,7 @@ function UpstreamActions({ repo }: { repo: RepositoryView }) {
         >
           {blocked ? t('repoForm.upstream.unblock') : t('repoForm.upstream.block')}
         </Button>
-        {rpmProxy ? (
+        {mirrorProxy ? (
           <Button
             variant="outline"
             loading={sync?.status === 'running' || sync?.status === 'stopping'}
@@ -179,7 +181,7 @@ function UpstreamActions({ repo }: { repo: RepositoryView }) {
               : t('repoForm.upstream.sync')}
           </Button>
         ) : null}
-        {rpmProxy && (sync?.status === 'running' || sync?.status === 'stopping') ? (
+        {mirrorProxy && (sync?.status === 'running' || sync?.status === 'stopping') ? (
           <Button
             variant="outline"
             disabled={sync.status === 'stopping'}
@@ -198,7 +200,7 @@ function UpstreamActions({ repo }: { repo: RepositoryView }) {
           </Button>
         ) : null}
       </div>
-      {rpmProxy && sync && sync.status !== 'idle' ? (
+      {mirrorProxy && sync && sync.status !== 'idle' ? (
         <p className="text-sm text-muted-foreground">
           {t('repoForm.upstream.syncProgress', {
             fetched: sync.packages_fetched,

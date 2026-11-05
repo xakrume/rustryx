@@ -1,4 +1,4 @@
-//! Synchronize an RPM proxy: metadata first, then packages that are not cached yet.
+//! Synchronize an RPM, APT, or APK proxy: metadata first, then packages that are not cached yet.
 //!
 //! `POST /api/v1/repositories/{name}/actions/sync` starts one run. A second post while
 //! that run is in progress returns the same progress. `DELETE` on the same path asks the
@@ -19,7 +19,9 @@ use rustryx_core::model::{RepoFormat, RepoType};
 use rustryx_core::names::RepoName;
 use rustryx_core::ports::{AssetRepo, AuditSink, RepositoryRepo};
 use rustryx_format_core::{FormatEngine, RequestHead};
-use rustryx_format_raw::rpm_index::{self, IndexError, RpmIndex};
+use rustryx_format_raw::apk_index;
+use rustryx_format_raw::apt_index;
+use rustryx_format_raw::rpm_index::{self, IndexError};
 use serde::Serialize;
 use url::Url;
 
@@ -36,7 +38,7 @@ struct SyncApi {
     runs: Arc<Mutex<std::collections::HashMap<String, SyncView>>>,
 }
 
-/// Routes that start and read an RPM sync.
+/// Routes that start and read a repository sync.
 pub struct RpmSyncModule {
     state: SyncApi,
 }
@@ -143,10 +145,10 @@ async fn sync_start(
                 "The repository was not found",
             )
         })?;
-    if repository.format != RepoFormat::Rpm || repository.repo_type != RepoType::Proxy {
+    if repository.repo_type != RepoType::Proxy || !syncable(repository.format) {
         return Err(ApiError::bad_request(
             "format_not_syncable",
-            "Only an RPM proxy repository can be synchronized",
+            "Only an RPM, APT, or APK proxy repository can be synchronized",
         ));
     }
     {
@@ -252,6 +254,10 @@ async fn record_sync(
     }
 }
 
+fn syncable(format: RepoFormat) -> bool {
+    matches!(format, RepoFormat::Rpm | RepoFormat::Apt | RepoFormat::Apk)
+}
+
 fn stopping(api: &SyncApi, name: &str) -> bool {
     let runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
     runs.get(name)
@@ -278,40 +284,22 @@ async fn run_sync(
         serde_json::json!({ "status": "started" }),
     )
     .await;
-    let repomd = read_path(api, &repository, &principal, name, "repodata/repomd.xml", INDEX_LIMIT).await?;
-    let repomd_xml = String::from_utf8(repomd).map_err(|_| "repomd.xml is not UTF-8".to_owned())?;
-    let metadata = rpm_index::metadata_paths(&repomd_xml).map_err(index_error)?;
-    let primary = rpm_index::primary_path(&metadata)
-        .ok_or_else(|| "repomd has no primary index".to_owned())?
-        .to_owned();
-    let primary_bytes = read_path(api, &repository, &principal, name, &primary, INDEX_LIMIT).await?;
-    let primary_xml = String::from_utf8(rpm_index::inflate(&primary_bytes).map_err(index_error)?)
-        .map_err(|_| "primary index is not UTF-8".to_owned())?;
-    let index = RpmIndex {
-        metadata,
-        packages: rpm_index::package_paths(&primary_xml).map_err(index_error)?,
+    let packages = match repository.format {
+        RepoFormat::Rpm => rpm_packages(api, &repository, &principal, name).await?,
+        RepoFormat::Apt => apt_packages(api, &repository, &principal, name).await?,
+        RepoFormat::Apk => apk_packages(api, &repository, &principal, name).await?,
+        _ => return Err("this repository cannot be synchronized".to_owned()),
     };
-    for path in &index.metadata {
-        if stopping(api, name) {
-            return Ok(());
-        }
-        if path == "repodata/repomd.xml" || path == &primary {
-            continue;
-        }
-        if read_path(api, &repository, &principal, name, path, INDEX_LIMIT)
-            .await
-            .is_err()
-        {
-            note_failure(api, name);
-        }
+    if stopping(api, name) {
+        return Ok(());
     }
     {
         let mut runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
         if let Some(view) = runs.get_mut(name) {
-            view.packages_total = u64::try_from(index.packages.len()).unwrap_or(u64::MAX);
+            view.packages_total = u64::try_from(packages.len()).unwrap_or(u64::MAX);
         }
     }
-    for chunk in index.packages.chunks(PARALLEL) {
+    for chunk in packages.chunks(PARALLEL) {
         if stopping(api, name) {
             return Ok(());
         }
@@ -439,6 +427,175 @@ async fn count_body(api: &SyncApi, name: &str, body: Body) -> Result<(), String>
         note_bytes(api, name, u64::try_from(chunk.len()).unwrap_or(u64::MAX));
     }
     Ok(())
+}
+
+async fn rpm_packages(
+    api: &SyncApi,
+    repository: &Arc<rustryx_core::model::Repository>,
+    principal: &Principal,
+    name: &str,
+) -> Result<Vec<String>, String> {
+    let repomd = read_path(
+        api,
+        repository,
+        principal,
+        name,
+        "repodata/repomd.xml",
+        INDEX_LIMIT,
+    )
+    .await?;
+    let repomd_xml = String::from_utf8(repomd).map_err(|_| "repomd.xml is not UTF-8".to_owned())?;
+    let metadata = rpm_index::metadata_paths(&repomd_xml).map_err(index_error)?;
+    let primary = rpm_index::primary_path(&metadata)
+        .ok_or_else(|| "repomd has no primary index".to_owned())?
+        .to_owned();
+    let primary_bytes = read_path(api, repository, principal, name, &primary, INDEX_LIMIT).await?;
+    let primary_xml = String::from_utf8(rpm_index::inflate(&primary_bytes).map_err(index_error)?)
+        .map_err(|_| "primary index is not UTF-8".to_owned())?;
+    let packages = rpm_index::package_paths(&primary_xml).map_err(index_error)?;
+    for path in &metadata {
+        if stopping(api, name) {
+            return Ok(Vec::new());
+        }
+        if path == "repodata/repomd.xml" || path == &primary {
+            continue;
+        }
+        if read_path(api, repository, principal, name, path, INDEX_LIMIT)
+            .await
+            .is_err()
+        {
+            note_failure(api, name);
+        }
+    }
+    Ok(packages)
+}
+
+async fn apt_packages(
+    api: &SyncApi,
+    repository: &Arc<rustryx_core::model::Repository>,
+    principal: &Principal,
+    name: &str,
+) -> Result<Vec<String>, String> {
+    let scope = mirror_scope(repository, &["amd64".to_owned()]);
+    let mut packages = Vec::new();
+    for distribution in &scope.distributions {
+        if stopping(api, name) {
+            return Ok(Vec::new());
+        }
+        let release_path = format!("dists/{distribution}/Release");
+        let release_bytes = read_path(
+            api,
+            repository,
+            principal,
+            name,
+            &release_path,
+            INDEX_LIMIT,
+        )
+        .await?;
+        let release = String::from_utf8(release_bytes)
+            .map_err(|_| format!("{release_path} is not UTF-8"))?;
+        let indexes = apt_index::package_indexes(&release, &scope.components, &scope.architectures)
+            .map_err(apt_error)?;
+        for index in indexes {
+            if stopping(api, name) {
+                return Ok(Vec::new());
+            }
+            let path = format!("dists/{distribution}/{index}");
+            let bytes = read_path(api, repository, principal, name, &path, INDEX_LIMIT).await?;
+            let text = String::from_utf8(apt_index::inflate(&bytes).map_err(apt_error)?)
+                .map_err(|_| format!("{path} is not UTF-8"))?;
+            packages.extend(apt_index::package_paths(&text).map_err(apt_error)?);
+        }
+    }
+    Ok(packages)
+}
+
+async fn apk_packages(
+    api: &SyncApi,
+    repository: &Arc<rustryx_core::model::Repository>,
+    principal: &Principal,
+    name: &str,
+) -> Result<Vec<String>, String> {
+    let scope = mirror_scope(repository, &["x86_64".to_owned()]);
+    let mut packages = Vec::new();
+    for arch in &scope.architectures {
+        if stopping(api, name) {
+            return Ok(Vec::new());
+        }
+        let index_path = format!("{arch}/APKINDEX.tar.gz");
+        let bytes = read_path(api, repository, principal, name, &index_path, INDEX_LIMIT).await?;
+        let text = apk_index::apkindex_text(&bytes).map_err(apk_error)?;
+        for file in apk_index::package_filenames(&text).map_err(apk_error)? {
+            packages.push(format!("{arch}/{file}"));
+        }
+    }
+    Ok(packages)
+}
+
+struct MirrorScope {
+    distributions: Vec<String>,
+    components: Vec<String>,
+    architectures: Vec<String>,
+}
+
+fn mirror_scope(
+    repository: &rustryx_core::model::Repository,
+    default_architectures: &[String],
+) -> MirrorScope {
+    let config = &repository.format_config;
+    let distributions = string_list(config, "distributions").unwrap_or_else(|| {
+        string_list(config, "distribution").unwrap_or_else(|| default_distributions(repository))
+    });
+    let components = string_list(config, "components").unwrap_or_default();
+    let architectures =
+        string_list(config, "architectures").unwrap_or_else(|| default_architectures.to_vec());
+    MirrorScope {
+        distributions,
+        components,
+        architectures,
+    }
+}
+
+fn default_distributions(repository: &rustryx_core::model::Repository) -> Vec<String> {
+    let name = repository.name.as_str();
+    if name.contains("ubuntu") {
+        vec!["resolute".to_owned()]
+    } else if name.contains("security") {
+        vec!["stable-security".to_owned()]
+    } else {
+        vec!["stable".to_owned()]
+    }
+}
+
+fn string_list(config: &serde_json::Value, key: &str) -> Option<Vec<String>> {
+    let value = config.get(key)?;
+    if let Some(text) = value.as_str() {
+        let text = text.trim();
+        return (!text.is_empty()).then(|| vec![text.to_owned()]);
+    }
+    let list = value.as_array()?;
+    let items: Vec<String> = list
+        .iter()
+        .filter_map(|item| item.as_str())
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    (!items.is_empty()).then_some(items)
+}
+
+fn apt_error(error: apt_index::IndexError) -> String {
+    match error {
+        apt_index::IndexError::Syntax => "the APT index is not valid".to_owned(),
+        apt_index::IndexError::Path => "the APT index contains a path outside the repository".to_owned(),
+    }
+}
+
+fn apk_error(error: apk_index::IndexError) -> String {
+    match error {
+        apk_index::IndexError::Syntax => "the APK index is not valid".to_owned(),
+        apk_index::IndexError::Path => "the APK index contains a path outside the repository".to_owned(),
+    }
 }
 
 fn index_error(error: IndexError) -> String {
