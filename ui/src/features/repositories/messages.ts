@@ -331,11 +331,22 @@ export const repositoriesMessages = {
       syncing: 'Synchronizing',
       syncStop: 'Stop',
       syncStopping: 'Stopping',
-      syncProgress: '{fetched} fetched, {skipped} already stored, {failed} failed, of {total}.',
+      syncProgress:
+        '{fetched} fetched, {skipped} already stored, {excluded} excluded, {failed} failed, of {total}.',
       syncStored: 'on disk',
       syncDone: '{name} is synchronized.',
       syncStopped: 'Synchronization of {name} was stopped.',
       syncFailed: 'Synchronization failed',
+      filterTitle: 'Sync filter',
+      filterBody:
+        'One pattern per line. * and ? stay inside a path segment, ** crosses slashes. A pattern with no slash also matches the file name. Include limits packages. Exclude skips packages and metadata. Deleting a cached file adds its path to Exclude.',
+      filterInclude: 'Include',
+      filterExclude: 'Exclude',
+      filterIncludePlaceholder: '*.rpm',
+      filterExcludePlaceholder: '*debuginfo*',
+      filterSave: 'Save filter',
+      filterSaved: 'Sync filter for {name} saved.',
+      filterFailed: 'The sync filter could not be saved',
     },
     danger: {
       title: 'Delete this repository',

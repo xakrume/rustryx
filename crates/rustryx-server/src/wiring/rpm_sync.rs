@@ -15,6 +15,8 @@ use http::{Method, StatusCode};
 use rustryx_api::{AdminGrant, ApiError, Authorized, Requires, RouteModule, RouteSet};
 use rustryx_core::audit::{AuditEvent, AuditKind};
 use rustryx_core::identity::Principal;
+use rustryx_core::error::StoreError;
+use rustryx_core::ids::RepositoryId;
 use rustryx_core::model::{RepoFormat, RepoType};
 use rustryx_core::names::RepoName;
 use rustryx_core::ports::{AssetRepo, AuditSink, RepositoryRepo};
@@ -22,7 +24,7 @@ use rustryx_format_core::{FormatEngine, RequestHead};
 use rustryx_format_raw::apk_index;
 use rustryx_format_raw::apt_index;
 use rustryx_format_raw::rpm_index::{self, IndexError};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 const INDEX_LIMIT: usize = 200 * 1024 * 1024;
@@ -74,14 +76,22 @@ impl RouteModule for RpmSyncModule {
 
     fn mount_api(&self, routes: RouteSet) -> RouteSet {
         let state = self.state.clone();
-        routes.route(
-            "/api/v1/repositories/{name}/actions/sync",
-            Requires::Admin,
-            axum::routing::get(sync_status)
-                .post(sync_start)
-                .delete(sync_stop)
-                .with_state(state),
-        )
+        routes
+            .route(
+                "/api/v1/repositories/{name}/actions/sync",
+                Requires::Admin,
+                axum::routing::get(sync_status)
+                    .post(sync_start)
+                    .delete(sync_stop)
+                    .with_state(state.clone()),
+            )
+            .route(
+                "/api/v1/repositories/{name}/actions/sync-filter",
+                Requires::Admin,
+                axum::routing::get(filter_get)
+                    .put(filter_put)
+                    .with_state(state),
+            )
     }
 }
 
@@ -92,6 +102,8 @@ struct SyncView {
     packages_skipped: u64,
     packages_fetched: u64,
     packages_failed: u64,
+    /// Paths left out by an include mask or an exclude pattern.
+    packages_excluded: u64,
     /// Bytes written while this run read package and metadata bodies.
     bytes_stored: u64,
     error: Option<String>,
@@ -105,6 +117,7 @@ impl SyncView {
             packages_skipped: 0,
             packages_fetched: 0,
             packages_failed: 0,
+            packages_excluded: 0,
             bytes_stored: 0,
             error: None,
         }
@@ -202,6 +215,7 @@ async fn sync_start(
                 "packages_skipped": view.packages_skipped,
                 "packages_fetched": view.packages_fetched,
                 "packages_failed": view.packages_failed,
+                "packages_excluded": view.packages_excluded,
                 "bytes_stored": view.bytes_stored,
                 "error": error,
             });
@@ -229,6 +243,82 @@ async fn sync_stop(
         view.status = "stopping".to_owned();
     }
     Ok(Json(runs.get(&name).cloned().unwrap_or_else(SyncView::idle)))
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SyncFilterBody {
+    #[serde(default)]
+    include: Vec<String>,
+    #[serde(default)]
+    exclude: Vec<String>,
+}
+
+async fn load_syncable(
+    api: &SyncApi,
+    name: &str,
+) -> Result<rustryx_core::model::Repository, ApiError> {
+    let repo_name = parse_name(name)?;
+    let repository = api
+        .repositories
+        .get_by_name(&repo_name)
+        .await?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "The repository was not found",
+            )
+        })?;
+    if repository.repo_type != RepoType::Proxy || !syncable(repository.format) {
+        return Err(ApiError::bad_request(
+            "format_not_syncable",
+            "Only an RPM, APT, or APK proxy repository can be synchronized",
+        ));
+    }
+    Ok(repository)
+}
+
+async fn filter_get(
+    State(api): State<SyncApi>,
+    _proof: Authorized<AdminGrant>,
+    Path(name): Path<String>,
+) -> Result<Json<SyncFilterBody>, ApiError> {
+    let repository = load_syncable(&api, &name).await?;
+    let (include, exclude) = pattern_lists(&repository.format_config);
+    Ok(Json(SyncFilterBody { include, exclude }))
+}
+
+async fn filter_put(
+    State(api): State<SyncApi>,
+    _proof: Authorized<AdminGrant>,
+    Path(name): Path<String>,
+    Json(body): Json<SyncFilterBody>,
+) -> Result<Json<SyncFilterBody>, ApiError> {
+    let mut repository = load_syncable(&api, &name).await?;
+    let include = clean_patterns(&body.include)?;
+    let exclude = clean_patterns(&body.exclude)?;
+    write_patterns(&mut repository.format_config, &include, &exclude);
+    api.repositories.update(&repository).await?;
+    Ok(Json(SyncFilterBody { include, exclude }))
+}
+
+/// After a cached file is deleted, keep its path out of the next synchronization.
+/// A repository that is not an RPM, APT, or APK proxy is left unchanged.
+pub(super) async fn remember_sync_exclusion(
+    repositories: &dyn RepositoryRepo,
+    id: RepositoryId,
+    path: &str,
+) -> Result<(), StoreError> {
+    let Some(mut repository) = repositories.get(id).await? else {
+        return Ok(());
+    };
+    if repository.repo_type != RepoType::Proxy || !syncable(repository.format) {
+        return Ok(());
+    }
+    if !push_exclusion(&mut repository.format_config, path) {
+        return Ok(());
+    }
+    repositories.update(&repository).await
 }
 
 async fn record_sync(
@@ -284,7 +374,7 @@ async fn run_sync(
         serde_json::json!({ "status": "started" }),
     )
     .await;
-    let packages = match repository.format {
+    let mut packages = match repository.format {
         RepoFormat::Rpm => rpm_packages(api, &repository, &principal, name).await?,
         RepoFormat::Apt => apt_packages(api, &repository, &principal, name).await?,
         RepoFormat::Apk => apk_packages(api, &repository, &principal, name).await?,
@@ -293,9 +383,16 @@ async fn run_sync(
     if stopping(api, name) {
         return Ok(());
     }
+    let (include, exclude) = pattern_lists(&repository.format_config);
+    let excluded = packages
+        .iter()
+        .filter(|path| !path_selected(path, &include, &exclude))
+        .count();
+    packages.retain(|path| path_selected(path, &include, &exclude));
     {
         let mut runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
         if let Some(view) = runs.get_mut(name) {
+            view.packages_excluded = u64::try_from(excluded).unwrap_or(u64::MAX);
             view.packages_total = u64::try_from(packages.len()).unwrap_or(u64::MAX);
         }
     }
@@ -435,6 +532,9 @@ async fn rpm_packages(
     principal: &Principal,
     name: &str,
 ) -> Result<Vec<String>, String> {
+    if path_excluded(&repository.format_config, "repodata/repomd.xml") {
+        return Err("repodata/repomd.xml is excluded".to_owned());
+    }
     let repomd = read_path(
         api,
         repository,
@@ -449,6 +549,9 @@ async fn rpm_packages(
     let primary = rpm_index::primary_path(&metadata)
         .ok_or_else(|| "repomd has no primary index".to_owned())?
         .to_owned();
+    if path_excluded(&repository.format_config, &primary) {
+        return Err(format!("{primary} is excluded"));
+    }
     let primary_bytes = read_path(api, repository, principal, name, &primary, INDEX_LIMIT).await?;
     let primary_xml = String::from_utf8(rpm_index::inflate(&primary_bytes).map_err(index_error)?)
         .map_err(|_| "primary index is not UTF-8".to_owned())?;
@@ -458,6 +561,9 @@ async fn rpm_packages(
             return Ok(Vec::new());
         }
         if path == "repodata/repomd.xml" || path == &primary {
+            continue;
+        }
+        if path_excluded(&repository.format_config, path) {
             continue;
         }
         if read_path(api, repository, principal, name, path, INDEX_LIMIT)
@@ -483,6 +589,9 @@ async fn apt_packages(
             return Ok(Vec::new());
         }
         let release_path = format!("dists/{distribution}/Release");
+        if path_excluded(&repository.format_config, &release_path) {
+            return Err(format!("{release_path} is excluded"));
+        }
         let release_bytes = read_path(
             api,
             repository,
@@ -501,6 +610,9 @@ async fn apt_packages(
                 return Ok(Vec::new());
             }
             let path = format!("dists/{distribution}/{index}");
+            if path_excluded(&repository.format_config, &path) {
+                continue;
+            }
             let bytes = read_path(api, repository, principal, name, &path, INDEX_LIMIT).await?;
             let text = String::from_utf8(apt_index::inflate(&bytes).map_err(apt_error)?)
                 .map_err(|_| format!("{path} is not UTF-8"))?;
@@ -523,6 +635,9 @@ async fn apk_packages(
             return Ok(Vec::new());
         }
         let index_path = format!("{arch}/APKINDEX.tar.gz");
+        if path_excluded(&repository.format_config, &index_path) {
+            return Err(format!("{index_path} is excluded"));
+        }
         let bytes = read_path(api, repository, principal, name, &index_path, INDEX_LIMIT).await?;
         let text = apk_index::apkindex_text(&bytes).map_err(apk_error)?;
         for file in apk_index::package_filenames(&text).map_err(apk_error)? {
@@ -567,6 +682,126 @@ fn default_distributions(repository: &rustryx_core::model::Repository) -> Vec<St
     }
 }
 
+const PATTERN_LIMIT: usize = 200;
+const PATTERN_LEN: usize = 256;
+
+fn pattern_lists(config: &serde_json::Value) -> (Vec<String>, Vec<String>) {
+    (
+        string_list(config, "sync_include").unwrap_or_default(),
+        string_list(config, "sync_exclude").unwrap_or_default(),
+    )
+}
+
+fn path_excluded(config: &serde_json::Value, path: &str) -> bool {
+    let (_, exclude) = pattern_lists(config);
+    exclude.iter().any(|pattern| glob_match(pattern, path))
+}
+
+/// An empty include list keeps every path. A pattern with no `/` also matches the file name.
+fn path_selected(path: &str, include: &[String], exclude: &[String]) -> bool {
+    let included = include.is_empty() || include.iter().any(|pattern| glob_match(pattern, path));
+    included && !exclude.iter().any(|pattern| glob_match(pattern, path))
+}
+
+fn glob_match(pattern: &str, path: &str) -> bool {
+    if pattern.contains('/') {
+        return glob_bytes(pattern.as_bytes(), path.as_bytes());
+    }
+    let name = path.rsplit('/').next().unwrap_or(path);
+    glob_bytes(pattern.as_bytes(), path.as_bytes())
+        || glob_bytes(pattern.as_bytes(), name.as_bytes())
+}
+
+fn glob_bytes(pattern: &[u8], text: &[u8]) -> bool {
+    fn rec(pattern: &[u8], text: &[u8]) -> bool {
+        if pattern.is_empty() {
+            return text.is_empty();
+        }
+        if pattern[0] == b'*' {
+            let rest = if pattern.len() > 1 && pattern[1] == b'*' {
+                &pattern[2..]
+            } else {
+                &pattern[1..]
+            };
+            let double = pattern.len() > 1 && pattern[1] == b'*';
+            if rec(rest, text) {
+                return true;
+            }
+            if text.is_empty() {
+                return false;
+            }
+            if !double && text[0] == b'/' {
+                return false;
+            }
+            return rec(pattern, &text[1..]);
+        }
+        if text.is_empty() {
+            return false;
+        }
+        if pattern[0] == b'?' {
+            return text[0] != b'/' && rec(&pattern[1..], &text[1..]);
+        }
+        pattern[0] == text[0] && rec(&pattern[1..], &text[1..])
+    }
+    rec(pattern, text)
+}
+
+fn clean_patterns(patterns: &[String]) -> Result<Vec<String>, ApiError> {
+    if patterns.len() > PATTERN_LIMIT {
+        return Err(ApiError::bad_request(
+            "invalid_input",
+            "At most 200 sync patterns are allowed",
+        ));
+    }
+    let mut cleaned = Vec::with_capacity(patterns.len());
+    for pattern in patterns {
+        let pattern = pattern.trim();
+        if pattern.is_empty() || pattern.len() > PATTERN_LEN || pattern.chars().any(char::is_control)
+        {
+            return Err(ApiError::bad_request(
+                "invalid_input",
+                "A sync pattern must be 1 to 256 characters without control characters",
+            ));
+        }
+        if !cleaned.iter().any(|existing: &String| existing == pattern) {
+            cleaned.push(pattern.to_owned());
+        }
+    }
+    Ok(cleaned)
+}
+
+fn write_patterns(config: &mut serde_json::Value, include: &[String], exclude: &[String]) {
+    if !config.is_object() {
+        *config = serde_json::json!({});
+    }
+    let object = config.as_object_mut().expect("format_config is an object");
+    object.insert(
+        "sync_include".to_owned(),
+        serde_json::Value::from(include.to_vec()),
+    );
+    object.insert(
+        "sync_exclude".to_owned(),
+        serde_json::Value::from(exclude.to_vec()),
+    );
+}
+
+/// Returns whether `path` was newly stored. A path already covered by a pattern is not repeated.
+fn push_exclusion(config: &mut serde_json::Value, path: &str) -> bool {
+    let path = path.trim().trim_start_matches('/');
+    if path.is_empty() || path.len() > PATTERN_LEN || path.chars().any(char::is_control) {
+        return false;
+    }
+    let (_, exclude) = pattern_lists(config);
+    if exclude.iter().any(|pattern| glob_match(pattern, path)) {
+        return false;
+    }
+    let mut exclude = exclude;
+    exclude.push(path.to_owned());
+    let (include, _) = pattern_lists(config);
+    write_patterns(config, &include, &exclude);
+    true
+}
+
 fn string_list(config: &serde_json::Value, key: &str) -> Option<Vec<String>> {
     let value = config.get(key)?;
     if let Some(text) = value.as_str() {
@@ -595,6 +830,46 @@ fn apk_error(error: apk_index::IndexError) -> String {
     match error {
         apk_index::IndexError::Syntax => "the APK index is not valid".to_owned(),
         apk_index::IndexError::Path => "the APK index contains a path outside the repository".to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_mask_without_a_slash_matches_the_file_name() {
+        assert!(glob_match("*.rpm", "Packages/gitlab-ee.rpm"));
+        assert!(!glob_match("*.rpm", "Packages/gitlab-ee.deb"));
+        assert!(glob_match("*debuginfo*", "x86_64/foo-debuginfo-1.rpm"));
+        assert!(glob_match("repodata/*", "repodata/repomd.xml"));
+        assert!(!glob_match("repodata/*", "repodata/nested/file.xml"));
+        assert!(glob_match("**/*.rpm", "a/b/c.rpm"));
+        assert!(glob_match("foo?.rpm", "foox.rpm"));
+        assert!(!glob_match("foo?.rpm", "foo/x.rpm"));
+    }
+
+    #[test]
+    fn include_and_exclude_narrow_the_package_list() {
+        let include = vec!["*.rpm".to_owned()];
+        let exclude = vec!["*debuginfo*".to_owned()];
+        assert!(path_selected("a/foo.rpm", &include, &exclude));
+        assert!(!path_selected("a/foo-debuginfo.rpm", &include, &exclude));
+        assert!(!path_selected("a/foo.deb", &include, &exclude));
+        assert!(path_selected("a/foo.deb", &[], &[]));
+    }
+
+    #[test]
+    fn a_deleted_path_is_stored_once_and_a_covered_path_is_not_repeated() {
+        let mut config = serde_json::json!({ "distribution": "stable" });
+        assert!(push_exclusion(&mut config, "/x86_64/foo.rpm"));
+        assert!(!push_exclusion(&mut config, "x86_64/foo.rpm"));
+        assert!(push_exclusion(&mut config, "x86_64/bar.rpm"));
+        let patterns = config.get("sync_exclude").unwrap().as_array().unwrap();
+        assert_eq!(patterns.len(), 2);
+        assert_eq!(config.get("distribution").unwrap(), "stable");
+        let mut covered = serde_json::json!({ "sync_exclude": ["*.rpm"] });
+        assert!(!push_exclusion(&mut covered, "a/b.rpm"));
     }
 }
 

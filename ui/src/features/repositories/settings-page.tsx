@@ -10,6 +10,7 @@ import { UnsavedChangesGuard } from '@/components/form/unsaved-changes-guard'
 import { Alert } from '@/components/ui/alert'
 import { BytesText } from '@/components/bytes-text'
 import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { RelativeTime } from '@/components/relative-time'
 import { useUpdateResource } from '@/hooks/use-update-resource'
@@ -65,6 +66,7 @@ type SyncView = {
   packages_skipped: number
   packages_fetched: number
   packages_failed: number
+  packages_excluded: number
   bytes_stored: number
   error: string | null
 }
@@ -206,13 +208,104 @@ function UpstreamActions({ repo }: { repo: RepositoryView }) {
             fetched: sync.packages_fetched,
             skipped: sync.packages_skipped,
             failed: sync.packages_failed,
+            excluded: sync.packages_excluded ?? 0,
             total: sync.packages_total,
           })}{' '}
           <BytesText bytes={sync.bytes_stored} /> {t('repoForm.upstream.syncStored')}
           {sync.error ? ` ${sync.error}` : ''}
         </p>
       ) : null}
+      {mirrorProxy ? <SyncFilterEditor name={repo.name} /> : null}
     </section>
+  )
+}
+
+type SyncFilter = { include: string[]; exclude: string[] }
+
+async function readFilter(name: string, method: 'GET' | 'PUT', body?: SyncFilter): Promise<SyncFilter> {
+  const headers = new Headers({ Accept: 'application/json' })
+  if (method !== 'GET') {
+    headers.set('Content-Type', 'application/json')
+    const csrf = getCsrfToken()
+    if (csrf) headers.set('x-csrf-token', csrf)
+  }
+  const response = await fetch(
+    `/api/v1/repositories/${encodeURIComponent(name)}/actions/sync-filter`,
+    {
+      method,
+      credentials: 'include',
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    },
+  )
+  if (!response.ok) throw new Error(String(response.status))
+  return (await response.json()) as SyncFilter
+}
+
+function lines(value: string): string[] {
+  return value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+}
+
+function SyncFilterEditor({ name }: { name: string }) {
+  const [include, setInclude] = useState('')
+  const [exclude, setExclude] = useState('')
+  const [saving, setSaving] = useState(false)
+  useEffect(() => {
+    let stop = false
+    readFilter(name, 'GET')
+      .then((filter) => {
+        if (stop) return
+        setInclude(filter.include.join('\n'))
+        setExclude(filter.exclude.join('\n'))
+      })
+      .catch(() => undefined)
+    return () => {
+      stop = true
+    }
+  }, [name])
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-semibold">{t('repoForm.upstream.filterTitle')}</h3>
+      <p className="text-sm text-muted-foreground">{t('repoForm.upstream.filterBody')}</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="space-y-1 text-sm">
+          <span className="font-medium">{t('repoForm.upstream.filterInclude')}</span>
+          <Textarea
+            value={include}
+            placeholder={t('repoForm.upstream.filterIncludePlaceholder')}
+            onChange={(event) => setInclude(event.target.value)}
+          />
+        </label>
+        <label className="space-y-1 text-sm">
+          <span className="font-medium">{t('repoForm.upstream.filterExclude')}</span>
+          <Textarea
+            value={exclude}
+            placeholder={t('repoForm.upstream.filterExcludePlaceholder')}
+            onChange={(event) => setExclude(event.target.value)}
+          />
+        </label>
+      </div>
+      <Button
+        variant="outline"
+        loading={saving}
+        onClick={() => {
+          setSaving(true)
+          readFilter(name, 'PUT', { include: lines(include), exclude: lines(exclude) })
+            .then((filter) => {
+              setInclude(filter.include.join('\n'))
+              setExclude(filter.exclude.join('\n'))
+              toast.success(t('repoForm.upstream.filterSaved', { name }))
+            })
+            .catch(() => toast.apiError(new Error('filter'), t('repoForm.upstream.filterFailed')))
+            .finally(() => setSaving(false))
+        }}
+      >
+        {t('repoForm.upstream.filterSave')}
+      </Button>
+    </div>
   )
 }
 
