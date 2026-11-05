@@ -329,7 +329,8 @@ fn repository_module(
             anonymous_enabled: config.auth.anonymous_enabled,
             upstream: formats::url_policy(&config.upstream)?,
         },
-    )))
+    )
+    .with_blobs(Arc::clone(&repos.blobs))))
 }
 
 fn management_modules(

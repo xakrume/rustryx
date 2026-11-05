@@ -281,6 +281,12 @@ impl BlobRepo for MemStore {
         Ok(total)
     }
 
+    async fn count_by_store(&self, id: BlobStoreId) -> Result<u64, StoreError> {
+        let state = self.tables()?;
+        let count = state.blobs.values().filter(|b| b.blob_store_id == id).count();
+        Ok(u64::try_from(count).unwrap_or(u64::MAX))
+    }
+
     async fn list_unreferenced(
         &self,
         older_than: OffsetDateTime,

@@ -68,6 +68,17 @@ impl BlobRepo for PgBlobRepo {
         to_u64(total, "sum store usage")
     }
 
+    async fn count_by_store(&self, id: BlobStoreId) -> Result<u64, StoreError> {
+        let total: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM blobs WHERE blob_store_id = $1",
+        )
+        .bind(id.as_uuid())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| map_err("count store blobs", e))?;
+        to_u64(total, "count store blobs")
+    }
+
     /// Age is measured from the moment the blob lost its last reference (`orphaned_at`),
     /// falling back to its creation time for a blob that was never referenced. A replaced
     /// blob may still be streaming to a client; its own, older creation time says nothing

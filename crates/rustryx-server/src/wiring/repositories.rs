@@ -26,13 +26,18 @@ use rustryx_core::model::{
 };
 use rustryx_core::names::RepoName;
 use rustryx_core::ports::{
-    BlobStoreRepo, Clock, Decision, RbacChecker, RepositoryRepo, ResourceRef, ScanRepo,
+    AuditSink, BlobRepo, BlobStoreRepo, Clock, Decision, RbacChecker, RepositoryRepo, ResourceRef,
+    ScanRepo,
 };
 use rustryx_core::scan::{LicenseBuckets, RepositoryHealth};
+use rustryx_blob::DiskProbe;
 use rustryx_format_core::proxy::ssrf::UpstreamUrlPolicy;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use url::Url;
+
+#[path = "vulnerabilities.rs"]
+pub mod vulnerabilities;
 
 /// Public URL and upstream rules the repository routes need.
 pub struct RepoHttp {
@@ -72,8 +77,24 @@ impl RepositoriesModule {
                 anonymous_enabled: http.anonymous_enabled,
                 upstream: http.upstream,
                 scans: None,
+                blobs: None,
+                audit: None,
             },
         }
+    }
+
+    /// Keeps the audit sink the composition root passes in.
+    #[must_use]
+    pub fn with_audit(mut self, audit: Arc<dyn AuditSink>) -> Self {
+        self.state.audit = Some(audit);
+        self
+    }
+
+    /// Fills blob store usage from blob rows and, for a local store, the file system.
+    #[must_use]
+    pub fn with_blobs(mut self, blobs: Arc<dyn BlobRepo>) -> Self {
+        self.state.blobs = Some(blobs);
+        self
     }
 
     /// Counts repository health from stored findings. Without this, `include=stats` still
@@ -115,7 +136,17 @@ impl RouteModule for RepositoriesModule {
             .route(
                 "/api/v1/blob-stores",
                 Requires::Admin,
-                get(list_stores).with_state(state),
+                get(list_stores).with_state(state.clone()),
+            )
+            .route(
+                "/api/v1/blob-stores/{name}",
+                Requires::Admin,
+                get(get_store).with_state(state.clone()),
+            )
+            .route(
+                "/api/v1/blob-stores/{name}/usage",
+                Requires::Admin,
+                get(get_store_usage).with_state(state),
             )
     }
 }
@@ -131,6 +162,9 @@ struct RepoApi {
     anonymous_enabled: bool,
     upstream: UpstreamUrlPolicy,
     scans: Option<Arc<dyn ScanRepo>>,
+    blobs: Option<Arc<dyn BlobRepo>>,
+    #[allow(dead_code, reason = "wired by the composition root for later repository events")]
+    audit: Option<Arc<dyn AuditSink>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -331,10 +365,20 @@ struct StoreView {
     quota_bytes: Option<u64>,
     #[serde(with = "rustryx_core::rfc3339")]
     created_at: OffsetDateTime,
-    usage: Option<Stats>,
+    usage: Option<StoreUsage>,
     health: Health,
     repository_count: u64,
     credentials: Option<RedactedAuth>,
+}
+
+#[derive(Serialize)]
+struct StoreUsage {
+    used_bytes: u64,
+    blob_count: u64,
+    available_bytes: Option<u64>,
+    total_bytes: Option<u64>,
+    #[serde(with = "rustryx_core::rfc3339")]
+    as_of: OffsetDateTime,
 }
 
 #[derive(Serialize)]
@@ -437,11 +481,51 @@ async fn list_stores(
     stores.retain(|store| store_matches(store, &query));
     stores.sort_by(|left, right| left.name.cmp(&right.name));
     let now = api.clock.now();
-    let items = stores
-        .iter()
-        .map(|store| store_view(store, &repos, now))
-        .collect();
+    let mut items = Vec::with_capacity(stores.len());
+    for store in &stores {
+        items.push(store_view(&api, store, &repos, now).await);
+    }
     Ok(Json(Page { items, next: None }))
+}
+
+#[derive(Debug, Deserialize)]
+struct StorePath {
+    name: String,
+}
+
+async fn load_store(api: &RepoApi, name: &str) -> Result<BlobStoreDef, ApiError> {
+    api.blob_stores
+        .get_by_name(name)
+        .await?
+        .ok_or_else(ApiError::route_not_found)
+}
+
+async fn get_store(
+    State(api): State<RepoApi>,
+    _proof: Authorized<AdminGrant>,
+    ApiPath(path): ApiPath<StorePath>,
+) -> Result<Response, ApiError> {
+    let store = load_store(&api, &path.name).await?;
+    let repos = api.repositories.list().await?;
+    let body = store_view(&api, &store, &repos, api.clock.now()).await;
+    let mut response = Json(body).into_response();
+    let etag = format!("\"{}\"", store.created_at.unix_timestamp());
+    if let Ok(value) = http::HeaderValue::from_str(&etag) {
+        response.headers_mut().insert(ETAG, value);
+    }
+    Ok(response)
+}
+
+async fn get_store_usage(
+    State(api): State<RepoApi>,
+    _proof: Authorized<AdminGrant>,
+    ApiPath(path): ApiPath<StorePath>,
+) -> Result<Json<StoreUsage>, ApiError> {
+    let store = load_store(&api, &path.name).await?;
+    let usage = store_usage(&api, &store, api.clock.now())
+        .await
+        .ok_or_else(ApiError::route_not_found)?;
+    Ok(Json(usage))
 }
 
 fn wants_stats(query: &ListQuery) -> bool {
@@ -805,7 +889,12 @@ fn proxy_view(proxy: &ProxyConfig) -> ProxyView {
     }
 }
 
-fn store_view(store: &BlobStoreDef, repositories: &[Repository], now: OffsetDateTime) -> StoreView {
+async fn store_view(
+    api: &RepoApi,
+    store: &BlobStoreDef,
+    repositories: &[Repository],
+    now: OffsetDateTime,
+) -> StoreView {
     let repository_count = repositories
         .iter()
         .filter(|repository| repository.blob_store_id == store.id)
@@ -817,7 +906,7 @@ fn store_view(store: &BlobStoreDef, repositories: &[Repository], now: OffsetDate
         config: store.config.clone(),
         quota_bytes: store.quota_bytes,
         created_at: store.created_at,
-        usage: None,
+        usage: store_usage(api, store, now).await,
         health: Health {
             state: "ok",
             checked_at: now,
@@ -826,6 +915,31 @@ fn store_view(store: &BlobStoreDef, repositories: &[Repository], now: OffsetDate
         repository_count,
         credentials: None,
     }
+}
+
+async fn store_usage(api: &RepoApi, store: &BlobStoreDef, now: OffsetDateTime) -> Option<StoreUsage> {
+    let blobs = api.blobs.as_ref()?;
+    let used_bytes = blobs.used_bytes_by_store(store.id).await.ok()?;
+    let blob_count = blobs.count_by_store(store.id).await.unwrap_or(0);
+    let disk = local_disk(store).await;
+    Some(StoreUsage {
+        used_bytes,
+        blob_count,
+        available_bytes: disk.map(|disk| disk.free_bytes),
+        total_bytes: disk.map(|disk| disk.total_bytes),
+        as_of: now,
+    })
+}
+
+async fn local_disk(store: &BlobStoreDef) -> Option<rustryx_blob::DiskUsage> {
+    if store.kind != BlobStoreKind::Local {
+        return None;
+    }
+    let path = store.config.get("path")?.as_str()?.to_owned();
+    tokio::task::spawn_blocking(move || rustryx_blob::StatvfsProbe.usage(std::path::Path::new(&path)))
+        .await
+        .ok()?
+        .ok()
 }
 
 fn store_matches(store: &BlobStoreDef, query: &ListQuery) -> bool {

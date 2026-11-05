@@ -116,6 +116,11 @@ pub trait BlobRepo: Send + Sync {
     async fn used_bytes_by_repository(&self, id: RepositoryId) -> Result<u64, StoreError>;
     /// Sum of `size_bytes` of all blobs in the store (a group resolves to its members).
     async fn used_bytes_by_store(&self, id: BlobStoreId) -> Result<u64, StoreError>;
+    /// How many blob rows the store has. The default is zero for a store that does not count.
+    async fn count_by_store(&self, id: BlobStoreId) -> Result<u64, StoreError> {
+        let _ = id;
+        Ok(0)
+    }
     /// Blobs not referenced by any asset and older than `older_than`, oldest first.
     async fn list_unreferenced(
         &self,
