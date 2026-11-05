@@ -206,6 +206,35 @@ describe('DataTable', () => {
     })
   })
 
+  describe('responsive columns', () => {
+    const responsiveColumns: AnyColumnDef<Row>[] = [
+      { accessorKey: 'name', header: 'Name', meta: { label: 'Name', hideable: false } },
+      { accessorKey: 'size', header: 'Size', meta: { label: 'Size', showFrom: '3xl' } },
+      { id: 'url', header: 'URL', cell: () => 'https://repo', meta: { label: 'URL', fluid: true } },
+    ]
+
+    it('measures its own width, not the viewport, so a sidebar does not break the layout', () => {
+      const { container } = setup({ columns: responsiveColumns })
+      expect(container.querySelector('.\\@container')).not.toBeNull()
+    })
+
+    it('hides a low priority column below its table width, header and cells alike', () => {
+      setup({ columns: responsiveColumns })
+      const header = screen.getByRole('columnheader', { name: 'Size' })
+      expect(header).toHaveClass('hidden', '@3xl:table-cell')
+      const cell = screen.getByRole('cell', { name: '20' })
+      expect(cell).toHaveClass('hidden', '@3xl:table-cell')
+      expect(screen.getByRole('columnheader', { name: 'Name' })).not.toHaveClass('hidden')
+    })
+
+    it('lets a fluid column take the free width and truncate instead of widening the table', () => {
+      setup({ columns: responsiveColumns })
+      const cells = screen.getAllByRole('cell', { name: 'https://repo' })
+      expect(cells[0]).toHaveClass('w-full', 'max-w-0')
+      expect(cells[0]?.firstElementChild ?? cells[0]).toHaveClass('truncate')
+    })
+  })
+
   describe('column visibility', () => {
     it('hides a column, remembers it per table, and never offers to hide a pinned column', async () => {
       const user = userEvent.setup()

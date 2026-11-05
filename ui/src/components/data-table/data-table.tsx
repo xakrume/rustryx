@@ -28,7 +28,7 @@ import { t } from '@/i18n'
 import { PAGE_SIZES } from '@/lib/constants'
 import { cn } from '@/lib/utils'
 import { ColumnMenu } from './column-menu'
-import './types'
+import type { ContainerSize } from './types'
 import { useTablePrefs } from './use-table-prefs'
 
 /**
@@ -86,6 +86,31 @@ export interface DataTableProps<T> {
   className?: string
 }
 
+/** Literal class names, so Tailwind finds every container query variant at build time. */
+const SHOW_FROM: Record<ContainerSize, string> = {
+  sm: 'hidden @sm:table-cell',
+  md: 'hidden @md:table-cell',
+  lg: 'hidden @lg:table-cell',
+  xl: 'hidden @xl:table-cell',
+  '2xl': 'hidden @2xl:table-cell',
+  '3xl': 'hidden @3xl:table-cell',
+  '4xl': 'hidden @4xl:table-cell',
+  '5xl': 'hidden @5xl:table-cell',
+  '6xl': 'hidden @6xl:table-cell',
+  '7xl': 'hidden @7xl:table-cell',
+}
+
+type Meta = AnyColumnDef<unknown>['meta']
+
+/** Classes a column's meta puts on both its th and its td. */
+function columnClasses(meta: Meta): string {
+  return cn(
+    meta?.showFrom !== undefined && SHOW_FROM[meta.showFrom],
+    meta?.fluid && 'w-full max-w-0',
+    meta?.className,
+  )
+}
+
 /** Skeleton rows show only after this long, so a fast answer never flashes one (inventory, 5). */
 const SKELETON_DELAY_MS = 150
 const SKELETON_ROWS = 8
@@ -94,8 +119,9 @@ const SKELETON_ROWS = 8
  * The table every list page uses. Data, filters, sort and paging are server side (keyset
  * pagination, "load more"); this component only presents them: sortable headers with
  * aria-sort, sticky header, column chooser, row selection with a bulk action bar,
- * delayed loading skeleton, empty / filtered / error states, and a keyboard focusable
- * horizontal scroll region for narrow screens.
+ * delayed loading skeleton, empty / filtered / error states. Columns with meta.showFrom hide
+ * when the table is narrower than that, and a meta.fluid column truncates, so the table fits
+ * its width; the keyboard focusable scroll region stays as the fallback for the rest.
  *
  * Stale rows stay on screen while a refresh or a "load more" fails: the error shows above
  * them with a Retry, nothing the user could still read disappears.
@@ -181,7 +207,6 @@ export function DataTable<T>({
   })
 
   const selectedRows = table.getSelectedRowModel().rows.map((r) => r.original)
-  const visibleColumnCount = table.getVisibleLeafColumns().length
   const hasRows = rows.length > 0
   const firstLoad = isLoading && !hasRows
 
@@ -201,8 +226,8 @@ export function DataTable<T>({
     body = showSkeleton
       ? Array.from({ length: SKELETON_ROWS }, (_, i) => (
           <TableRow key={`skeleton-${i}`}>
-            {Array.from({ length: visibleColumnCount }, (_, c) => (
-              <TableCell key={c}>
+            {table.getVisibleLeafColumns().map((column) => (
+              <TableCell key={column.id} className={columnClasses(column.columnDef.meta)}>
                 <Skeleton className="h-4 w-full max-w-48" />
               </TableCell>
             ))}
@@ -220,10 +245,16 @@ export function DataTable<T>({
               // names such as maven-releases at their hyphens. A column may opt out via meta.className.
               'whitespace-nowrap',
               cell.column.columnDef.meta?.align === 'right' && 'text-right tabular-nums',
-              cell.column.columnDef.meta?.className,
+              columnClasses(cell.column.columnDef.meta),
             )}
           >
-            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+            {cell.column.columnDef.meta?.fluid ? (
+              <div className="truncate">
+                {flexRender(cell.column.columnDef.cell, cell.getContext())}
+              </div>
+            ) : (
+              flexRender(cell.column.columnDef.cell, cell.getContext())
+            )}
           </TableCell>
         ))}
       </TableRow>
@@ -235,7 +266,8 @@ export function DataTable<T>({
   const showInlineError = error !== undefined && error !== null && hasRows
 
   return (
-    <div className={cn('space-y-3', className)}>
+    // The container query root: columns hide by the table's own width (meta.showFrom).
+    <div className={cn('@container space-y-3', className)}>
       {toolbar}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-h-8 items-center gap-2">
@@ -305,7 +337,7 @@ export function DataTable<T>({
                         key={header.id}
                         scope="col"
                         aria-sort={sorted}
-                        className={cn(meta?.align === 'right' && 'text-right', meta?.className)}
+                        className={cn(meta?.align === 'right' && 'text-right', columnClasses(meta))}
                       >
                         {sortKey !== undefined && onSortChange ? (
                           <button

@@ -230,7 +230,7 @@
   --row-h-base: 2.25rem;
   --control-h: var(--control-h-base);
   --row-h: var(--row-h-base);
-  --cell-px: 1rem;
+  --cell-px: 0.75rem;
   --text-table: 0.8125rem;
   --text-table-line: 1.25rem;
 }

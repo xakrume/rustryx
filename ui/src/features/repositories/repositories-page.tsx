@@ -127,7 +127,9 @@ function buildColumns(actions: RowActions): AnyColumnDef<RepositoryView>[] {
         <Link
           to="/repositories/$name"
           params={{ name: row.original.name }}
-          className="font-mono text-link underline-offset-2 hover:underline"
+          title={row.original.name}
+          // On a phone the name gives way (truncates) to the status and the row menu.
+          className="inline-block max-w-[calc(100cqw-13rem)] truncate align-middle font-mono text-link underline-offset-2 hover:underline"
         >
           {row.original.name}
         </Link>
@@ -136,13 +138,13 @@ function buildColumns(actions: RowActions): AnyColumnDef<RepositoryView>[] {
     {
       id: 'format',
       header: t('repos.columns.format'),
-      meta: { label: t('repos.columns.format') },
+      meta: { label: t('repos.columns.format'), showFrom: 'lg' },
       cell: ({ row }) => <FormatBadge format={row.original.format} />,
     },
     {
       id: 'type',
       header: t('repos.columns.type'),
-      meta: { label: t('repos.columns.type') },
+      meta: { label: t('repos.columns.type'), showFrom: 'xl' },
       cell: ({ row }) => <RepoTypeBadge type={row.original.repo_type} />,
     },
     {
@@ -161,26 +163,26 @@ function buildColumns(actions: RowActions): AnyColumnDef<RepositoryView>[] {
     {
       id: 'blob_store',
       header: t('repos.columns.blobStore'),
-      meta: { label: t('repos.columns.blobStore') },
+      meta: { label: t('repos.columns.blobStore'), showFrom: '7xl' },
       cell: ({ row }) => <span className="font-mono">{row.original.blob_store.name}</span>,
     },
     {
       id: 'size',
       header: t('repos.columns.size'),
-      meta: { label: t('repos.columns.size'), align: 'right' },
+      meta: { label: t('repos.columns.size'), align: 'right', showFrom: '2xl' },
       cell: ({ row }) => <BytesText bytes={row.original.stats?.size_bytes} />,
     },
     {
       id: 'components',
       header: t('repos.columns.components'),
-      meta: { label: t('repos.columns.components'), align: 'right' },
+      meta: { label: t('repos.columns.components'), align: 'right', showFrom: '4xl' },
       cell: ({ row }) =>
         row.original.stats ? row.original.stats.component_count.toLocaleString() : '-',
     },
     {
       id: 'health',
       header: t('repos.columns.health'),
-      meta: { label: t('repos.columns.health') },
+      meta: { label: t('repos.columns.health'), showFrom: '6xl' },
       cell: ({ row }) => {
         const health = row.original.health
         if (!health?.scanned) {
@@ -201,11 +203,11 @@ function buildColumns(actions: RowActions): AnyColumnDef<RepositoryView>[] {
     {
       id: 'url',
       header: t('repos.columns.url'),
-      meta: { label: t('repos.columns.url') },
+      meta: { label: t('repos.columns.url'), showFrom: '5xl', fluid: true },
       cell: ({ row }) => (
-        <span className="flex items-center gap-1">
+        <span className="flex min-w-0 items-center gap-1">
           <span
-            className="max-w-64 truncate font-mono text-muted-foreground"
+            className="min-w-0 truncate font-mono text-muted-foreground"
             title={row.original.url}
           >
             {row.original.url}
@@ -220,7 +222,7 @@ function buildColumns(actions: RowActions): AnyColumnDef<RepositoryView>[] {
     {
       accessorKey: 'created_at',
       header: t('repos.columns.created'),
-      meta: { label: t('repos.columns.created'), sortKey: 'created_at' },
+      meta: { label: t('repos.columns.created'), sortKey: 'created_at', showFrom: '3xl' },
       cell: ({ row }) => <RelativeTime value={row.original.created_at} />,
     },
     {
