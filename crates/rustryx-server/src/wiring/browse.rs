@@ -9,12 +9,14 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
-use axum::routing::get;
+use axum::routing::{delete, get};
 use http::{HeaderMap, StatusCode};
 use rustryx_api::{ApiError, ApiPath, ApiQuery, RequestPrincipal, Requires, RouteModule, RouteSet};
 use rustryx_core::identity::{Action, Principal};
 use rustryx_core::model::{Asset, Component, RepoFormat, RepoType, Repository};
 use rustryx_core::names::RepoName;
+use rustryx_core::error::StoreError;
+use rustryx_core::ids::ComponentId;
 use rustryx_core::ports::{
     AssetRepo, ComponentFilter, ComponentRepo, Decision, PageRequest, RbacChecker, RepositoryRepo,
     ResourceRef,
@@ -69,6 +71,11 @@ impl RouteModule for BrowseModule {
                 "/api/v1/components",
                 Requires::Public,
                 get(components).with_state(state.clone()),
+            )
+            .route(
+                "/api/v1/components/{component_id}",
+                Requires::Admin,
+                delete(delete_component).with_state(state.clone()),
             )
             .route(
                 "/api/v1/client-setup",
@@ -231,6 +238,52 @@ async fn client_setup(
     )
     .await?;
     Ok(Json(body))
+}
+
+#[derive(Debug, Deserialize)]
+struct ComponentPath {
+    component_id: ComponentId,
+}
+
+async fn delete_component(
+    State(api): State<BrowseApi>,
+    ApiPath(path): ApiPath<ComponentPath>,
+) -> Result<StatusCode, ApiError> {
+    let Some(component) = api.components.get(path.component_id).await? else {
+        return Err(ApiError::route_not_found());
+    };
+    let Some(repository) = api.repositories.get(component.repository_id).await? else {
+        return Err(ApiError::route_not_found());
+    };
+    if repository.repo_type == RepoType::Group {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "repository_not_hosted",
+            "A group repository has no files of its own",
+        ));
+    }
+    let assets = api.assets.list_by_component(component.id).await?;
+    for asset in &assets {
+        if let Err(error) = super::rpm_sync::remember_sync_exclusion(
+            api.repositories.as_ref(),
+            asset.repository_id,
+            &asset.path,
+        )
+        .await
+        {
+            tracing::error!(%error, "sync exclusion was not stored");
+        }
+    }
+    match api.components.delete(component.id).await {
+        Ok(()) => Ok(StatusCode::NO_CONTENT),
+        Err(StoreError::NotFound(_)) => Err(ApiError::route_not_found()),
+        Err(StoreError::Conflict(_)) => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "immutable_tag",
+            "The component is protected",
+        )),
+        Err(error) => Err(error.into()),
+    }
 }
 
 async fn components(
