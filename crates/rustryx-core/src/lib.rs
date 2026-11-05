@@ -27,6 +27,7 @@ pub mod notification;
 pub mod ports;
 pub mod project;
 pub mod promotion;
+pub mod promotion_run;
 pub mod quota;
 pub mod registry;
 pub mod replication;
