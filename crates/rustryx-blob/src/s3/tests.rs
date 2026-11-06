@@ -1,5 +1,5 @@
 //! Behaviour of the S3 store against an in-memory object store and a fake multipart
-//! API. No network: the real S3 dialect is exercised by `tests/s3_minio.rs`.
+//! API. No network: the real S3 dialect is exercised by `tests/s3_seaweed.rs`.
 
 use std::sync::Mutex;
 

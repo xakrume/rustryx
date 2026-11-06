@@ -72,10 +72,7 @@ async fn scanners_are_unique_and_only_one_vulnerability_default_is_kept() {
     ));
     edited.is_default = false;
     scanners.update(&edited, 1).await.unwrap();
-    assert_eq!(
-        scanners.get(first.id).await.unwrap().unwrap().enabled,
-        false
-    );
+    assert!(!scanners.get(first.id).await.unwrap().unwrap().enabled);
 
     let probe = ProbeResult {
         at: OffsetDateTime::now_utc(),

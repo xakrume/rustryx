@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use rustryx_core::{Secret, StoreError};
-use rustryx_db::migrate::expected_schema_version;
+use rustryx_db::migrate::{embedded_migration_count, expected_schema_version};
 use rustryx_db::{SchemaStatus, migrate, schema_status};
 use tokio::task::JoinSet;
 
@@ -11,7 +11,8 @@ use crate::support::TestDb;
 async fn migrate_creates_the_schema_and_is_idempotent() {
     let db = TestDb::empty().await;
     let first = migrate(&db.url).await.expect("first migrate");
-    assert_eq!(first.applied.len(), 8);
+    let migration_count = embedded_migration_count();
+    assert_eq!(first.applied.len(), migration_count);
     assert_eq!(first.applied[0].version, 1);
     assert_eq!(first.applied[0].description, "core");
     assert_eq!(first.schema_version, expected_schema_version());
@@ -76,15 +77,19 @@ async fn concurrent_migrators_apply_every_migration_exactly_once() {
         busy_runs, 1,
         "one caller did the work, the others found nothing left"
     );
+    let migration_count = embedded_migration_count();
     let unique: HashSet<_> = applied_versions.iter().collect();
-    assert_eq!(applied_versions.len(), 8);
-    assert_eq!(unique.len(), 8, "no migration ran twice");
+    assert_eq!(applied_versions.len(), migration_count);
+    assert_eq!(unique.len(), migration_count, "no migration ran twice");
     let pool = db.pool().await;
     let recorded: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations WHERE success")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(recorded, 8);
+    assert_eq!(
+        recorded,
+        i64::try_from(migration_count).expect("count fits i64")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

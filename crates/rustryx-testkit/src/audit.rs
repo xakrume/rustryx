@@ -100,7 +100,10 @@ fn matches_query(event: &AuditEvent, query: &AuditQuery) -> bool {
             .is_none_or(|target| event.target.as_ref() == Some(target))
         && query.repository.as_ref().is_none_or(|name| {
             event.target.as_ref().is_some_and(|target| {
-                target == name || target.strip_prefix(name).is_some_and(|rest| rest.starts_with(':'))
+                target == name
+                    || target
+                        .strip_prefix(name)
+                        .is_some_and(|rest| rest.starts_with(':'))
             })
         })
         && query

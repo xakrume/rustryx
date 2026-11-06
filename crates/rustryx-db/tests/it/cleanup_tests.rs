@@ -12,8 +12,10 @@ use crate::fixtures::seed_repository;
 use crate::support::TestDb;
 
 fn policy(name: &str) -> CleanupPolicy {
-    let mut criteria = CleanupCriteria::default();
-    criteria.max_age_days = Some(30);
+    let criteria = CleanupCriteria {
+        max_age_days: Some(30),
+        ..CleanupCriteria::default()
+    };
     let mut policy = CleanupPolicy::new(
         CleanupPolicyId::generate(),
         name,

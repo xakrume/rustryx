@@ -179,7 +179,7 @@ describe('blob store create', () => {
     renderApp('/admin/blob-stores?view=create', { user: 'admin' })
     await user.type(await screen.findByLabelText(/^Name/), 'secure-s3')
     await user.selectOptions(screen.getByLabelText(/^Kind/), 's3')
-    await user.type(screen.getByLabelText(/^Endpoint URL/), 'https://minio.example.org')
+    await user.type(screen.getByLabelText(/^Endpoint URL/), 'https://seaweedfs.example.org')
     await user.type(screen.getByLabelText(/^Bucket/), 'secure')
     await user.type(screen.getByLabelText(/^Region/), 'us-east-1')
     await user.selectOptions(screen.getByLabelText(/^Credentials/), 'inline')

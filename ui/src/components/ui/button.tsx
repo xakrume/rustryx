@@ -5,8 +5,8 @@ import type { ComponentProps } from 'react'
 import { cn } from '@/lib/utils'
 
 /**
- * Pill shaped, in the Apple manner. Primary actions use the accent (blue) token. Hover only
- * changes brightness or a quiet fill: a transform on hover shifts layout under the pointer.
+ * Fully rounded. Primary actions use the accent token. Hover only changes brightness
+ * or a quiet fill: a transform on hover shifts layout under the pointer.
  * Height comes from --control-h, so density and the 44px touch minimum apply everywhere.
  */
 export const buttonVariants = cva(

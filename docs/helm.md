@@ -313,7 +313,7 @@ Things to set deliberately:
 ### `storage`
 
 * `storage.type: s3` (default). `storage.s3.endpoint`, `bucket` and `region` are required (the application
-  requires all three); `path_style` defaults to `true` (MinIO, Ceph). Keys come from the Secret; turn
+  requires all three); `path_style` defaults to `true` (SeaweedFS, Ceph). Keys come from the Secret; turn
   `secrets.entries.s3AccessKey` and `s3SecretKey` off when the pod authenticates through a workload identity.
 * `storage.type: local` creates a PVC (`storage.local.size`, `storageClassName`, `accessModes`, `existingClaim`)
   mounted at `storage.local.mountPath`, annotated `helm.sh/resource-policy: keep` so uninstall does not delete

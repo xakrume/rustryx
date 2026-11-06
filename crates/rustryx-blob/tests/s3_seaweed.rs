@@ -1,13 +1,12 @@
-//! `S3BlobStore` against a real S3 server (`MinIO`) started with testcontainers.
+//! `S3BlobStore` against SeaweedFS (S3 API) started with testcontainers.
 //!
 //! Gating:
 //! - `RUSTRYX_IT=1`: the test is required; a missing Docker or image is a failure.
 //! - `RUSTRYX_IT=0`: skipped.
 //! - unset: runs when Docker answers, otherwise skips with a message.
 //!
-//! Image: `RUSTRYX_MINIO_IMAGE=name:tag` overrides the candidates. The default
-//! candidates are `minio/minio:latest` and, because the community image was removed
-//! from Docker Hub, `cgr.dev/chainguard/minio:latest` (the same server).
+//! Image: `RUSTRYX_SEAWEEDFS_IMAGE=name:tag` overrides the default
+//! `chrislusf/seaweedfs:4.13`. The same image is pinned in `deploy/compose`.
 //!
 //! One test drives all steps against one container so that the container start
 //! happens once and so that the RSS measurement is not polluted by parallel tests.
@@ -39,7 +38,7 @@ use rustryx_core::{BlobError, Secret};
 use serde_json::json;
 use testcontainers::core::{IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, CopyTargetOptions, GenericImage, ImageExt};
+use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
 const BUCKET: &str = "artifacts";
 const ACCESS_KEY: &str = "rustryx-it-user";
@@ -69,38 +68,74 @@ fn docker_answers() -> bool {
 }
 
 fn image_candidates() -> Vec<String> {
-    match std::env::var("RUSTRYX_MINIO_IMAGE") {
+    match std::env::var("RUSTRYX_SEAWEEDFS_IMAGE") {
         Ok(image) if !image.is_empty() => vec![image],
-        _ => vec![
-            "minio/minio:latest".into(),
-            "cgr.dev/chainguard/minio:latest".into(),
-        ],
+        _ => vec!["chrislusf/seaweedfs:4.13".into()],
     }
+}
+
+/// Starts master, volume, filer and the S3 API, then creates `BUCKET`.
+/// The marker on stderr is the signal that the bucket exists.
+fn seaweed_script() -> String {
+    format!(
+        r#"set -eu
+cat > /tmp/s3.json <<'JSON'
+{{"identities":[{{"name":"rustryx","credentials":[{{"accessKey":"{key}","secretKey":"{secret}"}}],"actions":["Admin","Read","Write","List","Tagging"]}}]}}
+JSON
+/usr/bin/weed -logtostderr=true server -dir=/data -volume.max=0 -master.volumeSizeLimitMB=1024 -s3 -s3.config=/tmp/s3.json -ip.bind=0.0.0.0 &
+pid=$!
+ok=0
+i=0
+while [ "$i" -lt 90 ]; do
+  if wget -q -O- http://127.0.0.1:9333/cluster/status >/dev/null 2>&1; then
+    ok=1
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+if [ "$ok" != 1 ]; then
+  echo "seaweedfs master did not start" >&2
+  exit 1
+fi
+created=0
+j=0
+while [ "$j" -lt 40 ]; do
+  if echo "s3.bucket.create -name {bucket}" | /usr/bin/weed shell -master=127.0.0.1:9333; then
+    created=1
+    break
+  fi
+  j=$((j + 1))
+  sleep 1
+done
+if [ "$created" != 1 ]; then
+  echo "seaweedfs bucket was not created" >&2
+  exit 1
+fi
+echo "rustryx seaweedfs bucket ready" >&2
+wait "$pid"
+"#,
+        key = ACCESS_KEY,
+        secret = SECRET_KEY,
+        bucket = BUCKET,
+    )
 }
 
 async fn start_one(image: &str) -> Result<ContainerAsync<GenericImage>, String> {
     let (name, tag) = image.rsplit_once(':').unwrap_or((image, "latest"));
+    let script = seaweed_script();
     GenericImage::new(name, tag)
-        .with_exposed_port(9000.tcp())
-        // `MinIO` prints its banner (with the API address) on stderr.
-        .with_wait_for(WaitFor::message_on_stderr("API: http"))
-        .with_env_var("MINIO_ROOT_USER", ACCESS_KEY)
-        .with_env_var("MINIO_ROOT_PASSWORD", SECRET_KEY)
-        // A top-level directory under the data dir is a bucket for `MinIO`; copying a
-        // file into it creates the bucket before the server starts, which spares the
-        // test a signed `CreateBucket` call. Root so that the data dir is writable.
+        .with_exposed_port(8333.tcp())
+        .with_wait_for(WaitFor::message_on_stderr("rustryx seaweedfs bucket ready"))
         .with_user("0")
-        .with_copy_to(
-            CopyTargetOptions::new(format!("/data/{BUCKET}/.keep")),
-            Vec::<u8>::new(),
-        )
-        .with_cmd(["server", "/data"])
+        .with_entrypoint("/bin/sh")
+        .with_cmd(["-c", script.as_str()])
         .start()
         .await
         .map_err(|err| format!("{image}: {err}"))
 }
 
-async fn start_minio() -> Result<ContainerAsync<GenericImage>, String> {
+async fn start_seaweed() -> Result<ContainerAsync<GenericImage>, String> {
     let mut failures = Vec::new();
     for image in image_candidates() {
         match start_one(&image).await {
@@ -199,7 +234,7 @@ async fn wait_until_reachable(store: &S3BlobStore) {
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
-    panic!("MinIO did not become reachable: {last:?}");
+    panic!("SeaweedFS did not become reachable: {last:?}");
 }
 
 async fn small_object_round_trip(store: &S3BlobStore) {
@@ -414,7 +449,7 @@ impl BlobStoreRepo for OneStoreRepo {
 async fn registry_builds_a_working_store(endpoint: &str) {
     let def = BlobStoreDef::new(
         BlobStoreId::generate(),
-        "minio",
+        "seaweedfs",
         BlobStoreKind::S3,
         json!({
             "bucket": BUCKET,
@@ -429,7 +464,7 @@ async fn registry_builds_a_working_store(endpoint: &str) {
     let secrets = MapSecretResolver::new([("IT_KEY", ACCESS_KEY), ("IT_SECRET", SECRET_KEY)]);
     let registry = BlobStoreRegistry::new(Arc::new(OneStoreRepo(def.clone())), Arc::new(secrets));
     let store = registry.store_by_id(def.id).await.unwrap();
-    assert_eq!(registry.definition(def.id).await.unwrap().name, "minio");
+    assert_eq!(registry.definition(def.id).await.unwrap().name, "seaweedfs");
     store.health().await.unwrap();
     let mut writer = store.begin(&key("via-registry"), None).await.unwrap();
     writer
@@ -687,38 +722,38 @@ async fn presigned_downloads_work_without_credentials_and_expire(endpoint: &str)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn s3_minio_suite() {
+async fn s3_seaweed_suite() {
     let required = match gate() {
         Gate::Skip(reason) => {
-            eprintln!("skipping MinIO tests: {reason}");
+            eprintln!("skipping SeaweedFS tests: {reason}");
             return;
         }
         Gate::Required => true,
         Gate::Probe if docker_answers() => false,
         Gate::Probe => {
             eprintln!(
-                "skipping MinIO tests: Docker is not available (set RUSTRYX_IT=1 to require it)"
+                "skipping SeaweedFS tests: Docker is not available (set RUSTRYX_IT=1 to require it)"
             );
             return;
         }
     };
-    let container = match start_minio().await {
+    let container = match start_seaweed().await {
         Ok(container) => container,
         Err(err) if !required => {
-            eprintln!("skipping MinIO tests: could not start a container ({err})");
+            eprintln!("skipping SeaweedFS tests: could not start a container ({err})");
             return;
         }
-        Err(err) => panic!("RUSTRYX_IT=1 but MinIO could not be started: {err}"),
+        Err(err) => panic!("RUSTRYX_IT=1 but SeaweedFS could not be started: {err}"),
     };
     let host = container.get_host().await.unwrap();
-    let mapped = container.get_host_port_ipv4(9000.tcp()).await.unwrap();
+    let mapped = container.get_host_port_ipv4(8333.tcp()).await.unwrap();
     let endpoint = format!("http://{host}:{mapped}");
 
     let config = s3_config(
         &endpoint,
         &json!({"part_size_mib": 5, "max_concurrent_uploads": 4}),
     );
-    let store = S3BlobStore::new("minio", &config, Some(&credentials())).unwrap();
+    let store = S3BlobStore::new("seaweedfs", &config, Some(&credentials())).unwrap();
     let part_bytes = 5 * MIB;
     wait_until_reachable(&store).await;
 

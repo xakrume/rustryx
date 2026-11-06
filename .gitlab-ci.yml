@@ -32,6 +32,8 @@ workflow:
 variables:
   # Same digests as the Dockerfiles; ci/check-toolchain-pin.sh keeps them equal.
   RUST_IMAGE: rust:1.99.0-trixie@sha256:81015672d6939b0265f09adf96d5de125482bb1330106076956b0518e74edc90
+  # Node 22 for the UI job (ui/package.json engines). Pin by digest like the rest.
+  NODE_IMAGE: node:22-bookworm@sha256:e273cf2a19c7334c03f52e2ca933ecdfc3fbfaad49db7b8bc8c3edd9ac34e9c7
   TOOLS_IMAGE: alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
   DOCKER_CLI_IMAGE: docker:29.7-cli@sha256:3f4743208d2338c934d7b8bcfbe1bb54c0b2355c510ad5e0f31c0c4a54bd704e
   DOCKER_DIND_IMAGE: docker:29.7-dind@sha256:3ef33f2e220b79ed3ef3b99d81746f06f306cd6340e2cb7331d17ae996e74cb6
@@ -73,6 +75,11 @@ lint:
     - |
       if [ -n "$CI_COMMIT_TAG" ]; then ci/release-check.sh "$CI_COMMIT_TAG"; fi
     - rustup toolchain install --profile minimal
+    - |
+      mkdir -p ui/dist
+      printf '%s\n' '<!doctype html><html><body><div id="root"></div></body></html>' >ui/dist/index.html
+      printf '%s\n' '' >ui/dist/theme-init.js
+      printf '%s\n' '<svg xmlns="http://www.w3.org/2000/svg"/>' >ui/dist/favicon.svg
     - cargo fmt --all -- --check
     - cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
     - apt-get update -qq && apt-get install -y -qq --no-install-recommends shellcheck python3-venv >/dev/null
@@ -109,6 +116,16 @@ architecture:
         easement check
       fi
 
+# Same gates as `make ui-check` and `make ui-build`. Playwright e2e stays local.
+ui:
+  stage: lint
+  image: $NODE_IMAGE
+  interruptible: true
+  script:
+    - npm ci --prefix ui
+    - npm --prefix ui run check
+    - npm --prefix ui run build
+
 # ---------------------------------------------------------------- test
 # Integration tests start their dependencies with testcontainers, so the job needs
 # a Docker daemon: docker-in-docker. RUSTRYX_IT=1 makes them required.
@@ -131,6 +148,11 @@ test:
   script:
     - rustup toolchain install --profile minimal
     - cargo install --locked --version 0.9.148 cargo-nextest
+    - |
+      mkdir -p ui/dist
+      printf '%s\n' '<!doctype html><html><body><div id="root"></div></body></html>' >ui/dist/index.html
+      printf '%s\n' '' >ui/dist/theme-init.js
+      printf '%s\n' '<svg xmlns="http://www.w3.org/2000/svg"/>' >ui/dist/favicon.svg
     - cargo install --locked --version 0.9.1 cargo-llvm-cov
     - |
       cargo llvm-cov nextest --workspace --all-features --locked \

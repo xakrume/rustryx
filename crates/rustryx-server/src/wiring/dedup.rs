@@ -89,7 +89,10 @@ async fn dedup_status(
     _proof: Authorized<AdminGrant>,
     Path(name): Path<String>,
 ) -> Json<DedupView> {
-    let runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
+    let runs = api
+        .runs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     Json(runs.get(&name).cloned().unwrap_or_else(DedupView::idle))
 }
 
@@ -117,13 +120,13 @@ async fn dedup_start(
         .and_then(|value| value.as_str())
         .map(str::to_owned)
         .ok_or_else(|| {
-            ApiError::bad_request(
-                "invalid_input",
-                "The local blob store has no directory",
-            )
+            ApiError::bad_request("invalid_input", "The local blob store has no directory")
         })?;
     {
-        let mut runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut runs = api
+            .runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if runs.get(&name).is_some_and(|view| view.status == "running") {
             let view = runs.get(&name).cloned().unwrap_or_else(DedupView::running);
             return Ok((StatusCode::OK, Json(view)).into_response());
@@ -134,11 +137,13 @@ async fn dedup_start(
     let key = name.clone();
     tokio::task::spawn_blocking(move || {
         let outcome = dedup_directory(std::path::Path::new(&path));
-        let mut guard = runs.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut guard = runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let view = guard.entry(key).or_insert_with(DedupView::running);
         match outcome {
             Ok(report) => {
-                view.status = "succeeded".to_owned();
+                "succeeded".clone_into(&mut view.status);
                 view.files = report.files;
                 view.hashed = report.hashed;
                 view.links = report.links;
@@ -146,13 +151,16 @@ async fn dedup_start(
                 view.errors = report.errors;
             }
             Err(error) => {
-                view.status = "failed".to_owned();
+                "failed".clone_into(&mut view.status);
                 view.error = Some(error.to_string());
             }
         }
     });
     let view = {
-        let runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
+        let runs = api
+            .runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         runs.get(&name).cloned().unwrap_or_else(DedupView::running)
     };
     Ok((StatusCode::ACCEPTED, Json(view)).into_response())

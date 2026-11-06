@@ -309,7 +309,7 @@ fn validate_name(name: &str, what: &str) -> Result<(), DomainError> {
     Ok(())
 }
 
-/// Harbor style retention: rules say what to KEEP; items a rule covers and no rule keeps are
+/// Retain-mode retention: rules say what to KEEP; items a rule covers and no rule keeps are
 /// deleted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "template", rename_all = "snake_case")]

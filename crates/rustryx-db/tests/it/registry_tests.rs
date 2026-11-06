@@ -16,7 +16,7 @@ fn registry(name: &str) -> Registry {
         RegistryId::generate(),
         name,
         RegistryProvider::Oci,
-        "https://harbor.example",
+        "https://registry.example",
         OffsetDateTime::now_utc(),
     );
     registry.auth = RegistryAuth::Basic {
@@ -31,14 +31,14 @@ async fn a_registry_seals_its_password_and_rewrites_bound_proxies() {
     let db = TestDb::new().await;
     let store = db.store().await;
     let repos = rustryx_db::repos::PgRegistryRepo::new(store.pool().clone(), test_sealer());
-    let first = registry("harbor");
+    let first = registry("origin");
     repos.create(&first).await.unwrap();
     assert!(matches!(
-        repos.create(&registry("harbor")).await,
+        repos.create(&registry("origin")).await,
         Err(StoreError::Conflict(_))
     ));
     let mut bad = registry("broken");
-    bad.url = "https://harbor.example/v2".to_owned();
+    bad.url = "https://registry.example/v2".to_owned();
     assert!(matches!(
         repos.create(&bad).await,
         Err(StoreError::Conflict(_))
@@ -54,11 +54,12 @@ async fn a_registry_seals_its_password_and_rewrites_bound_proxies() {
         }
         other => panic!("unexpected auth {other:?}"),
     }
-    let sealed: String = sqlx::query_scalar("SELECT auth->>'password_sealed' FROM registries WHERE id = $1")
-        .bind(first.id.as_uuid())
-        .fetch_one(store.pool())
-        .await
-        .unwrap();
+    let sealed: String =
+        sqlx::query_scalar("SELECT auth->>'password_sealed' FROM registries WHERE id = $1")
+            .bind(first.id.as_uuid())
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
     assert_ne!(sealed, "s3cret");
 
     let (blob_store, _) = seed_repository(&store).await;
@@ -84,11 +85,12 @@ async fn a_registry_seals_its_password_and_rewrites_bound_proxies() {
     let mut edited = stored;
     edited.url = "https://new.example".to_owned();
     repos.update(&edited, 1).await.unwrap();
-    let remote: String = sqlx::query_scalar("SELECT proxy_config->>'remote_url' FROM repositories WHERE id = $1")
-        .bind(repo.id.as_uuid())
-        .fetch_one(store.pool())
-        .await
-        .unwrap();
+    let remote: String =
+        sqlx::query_scalar("SELECT proxy_config->>'remote_url' FROM repositories WHERE id = $1")
+            .bind(repo.id.as_uuid())
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
     assert_eq!(remote, "https://new.example");
     assert!(matches!(
         repos.update(&edited, 1).await,
@@ -107,13 +109,24 @@ async fn a_registry_seals_its_password_and_rewrites_bound_proxies() {
         )
         .await
         .unwrap();
-    assert!(repos.get(first.id).await.unwrap().unwrap().last_test.unwrap().ok);
+    assert!(
+        repos
+            .get(first.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .last_test
+            .unwrap()
+            .ok
+    );
 
-    sqlx::query("UPDATE repositories SET proxy_config = proxy_config - 'registry_id' WHERE id = $1")
-        .bind(repo.id.as_uuid())
-        .execute(store.pool())
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE repositories SET proxy_config = proxy_config - 'registry_id' WHERE id = $1",
+    )
+    .bind(repo.id.as_uuid())
+    .execute(store.pool())
+    .await
+    .unwrap();
     repos.delete(first.id).await.unwrap();
     assert!(repos.get(first.id).await.unwrap().is_none());
 }

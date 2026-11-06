@@ -29,7 +29,7 @@ test.describe('blob stores', () => {
     await signIn(page, 'admin', '/admin/blob-stores?view=create')
     await page.getByLabel(/^Name/).fill('secure-e2e')
     await page.getByLabel(/^Kind/).selectOption('s3')
-    await page.getByLabel(/^Endpoint URL/).fill('https://minio.example.org')
+    await page.getByLabel(/^Endpoint URL/).fill('https://seaweedfs.example.org')
     await page.getByLabel(/^Bucket/).fill('secure')
     await page.getByLabel(/^Region/).fill('us-east-1')
     await page.getByLabel(/^Credentials/).selectOption('inline')

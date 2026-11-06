@@ -18,7 +18,7 @@ const view = (over: Partial<BlobStoreView> = {}): BlobStoreView => ({
   name: 'archive',
   kind: 's3',
   config: {
-    endpoint: 'https://minio.example.org',
+    endpoint: 'https://seaweedfs.example.org',
     bucket: 'b',
     region: 'us-east-1',
     key_prefix: '',

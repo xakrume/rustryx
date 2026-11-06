@@ -68,14 +68,14 @@ fn actor() -> ActorRef {
 async fn registries_are_unique_validated_versioned_and_tested() {
     let env = env();
     let registries = env.store.registries();
-    let first = registry("harbor");
+    let first = registry("origin");
     registries.create(&first).await.unwrap();
     assert!(matches!(
         registries.create(&first).await,
         Err(StoreError::Conflict(_))
     ));
     assert!(matches!(
-        registries.create(&registry("harbor")).await,
+        registries.create(&registry("origin")).await,
         Err(StoreError::Conflict(_))
     ));
     let mut with_path = registry("pathy");
@@ -92,7 +92,7 @@ async fn registries_are_unique_validated_versioned_and_tested() {
         .into_iter()
         .map(|r| r.name)
         .collect();
-    assert_eq!(names, ["alpha", "harbor"]);
+    assert_eq!(names, ["alpha", "origin"]);
 
     let test = RegistryTest {
         at: T0,

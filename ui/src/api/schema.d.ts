@@ -6578,7 +6578,7 @@ export interface components {
         /**
          * @description Settings of an S3 blob store (the endpoint passes the SSRF filter).
          * @example {
-         *       "endpoint": "https://minio.example.org",
+         *       "endpoint": "https://seaweedfs.example.org",
          *       "bucket": "rustryx-archive",
          *       "region": "us-east-1",
          *       "key_prefix": "",
@@ -6628,7 +6628,7 @@ export interface components {
          *       "name": "archive",
          *       "kind": "s3",
          *       "config": {
-         *         "endpoint": "https://minio.example.org",
+         *         "endpoint": "https://seaweedfs.example.org",
          *         "bucket": "rustryx-archive",
          *         "region": "us-east-1",
          *         "key_prefix": "",

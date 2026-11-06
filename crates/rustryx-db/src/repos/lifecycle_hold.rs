@@ -195,11 +195,14 @@ impl LifecycleHoldRepo for PgLifecycleHoldRepo {
         active_only: bool,
         page: &PageRequest,
     ) -> Result<Page<LifecycleHold>, StoreError> {
-        let ids = target.map(target_ids).unwrap_or(TargetIds {
-            component_id: None,
-            repository_id: None,
-            project_id: None,
-        });
+        let ids = target.map_or(
+            TargetIds {
+                component_id: None,
+                repository_id: None,
+                project_id: None,
+            },
+            target_ids,
+        );
         let (limit, fetch) = cursor::fetch_limit(page);
         let after = match &page.after {
             Some(token) => Some(

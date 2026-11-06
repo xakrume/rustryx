@@ -1,6 +1,6 @@
 # Local development
 
-The stack in `deploy/compose/` gives a developer PostgreSQL 16, Redis 7, MinIO,
+The stack in `deploy/compose/` gives a developer PostgreSQL 16, Redis 7, SeaweedFS,
 Keycloak and OpenLDAP with the same fixtures the integration tests use. Everything
 in it is test data with public credentials: never expose the ports beyond the
 machine (they are bound to `127.0.0.1`) and never reuse a value from it.
@@ -13,7 +13,7 @@ Pipeline and release: [ci-and-release.md](ci-and-release.md). Supply chain:
 ```
 cd deploy/compose
 docker compose up -d          # backing services
-docker compose ps             # all healthy; minio-init and certs show "Exited (0)", that is correct
+docker compose ps             # all healthy; seaweedfs-init and certs show "Exited (0)", that is correct
 ```
 
 No `.env` is needed: `docker-compose.yml` loads `services.yaml` with the values of
@@ -25,7 +25,7 @@ docker compose --profile rustryx up --build   # also builds and runs rustryx
 docker compose down -v                        # stop and delete the data
 ```
 
-`docker compose up -d --wait` reports the one-shot `minio-init` job as exited and
+`docker compose up -d --wait` reports the one-shot `seaweedfs-init` job as exited and
 returns an error even though it succeeded; use `up -d` and `ps`, or start named
 services (`up -d --wait keycloak ldap`, which is what `ci/verify-fixtures.sh` does).
 
@@ -35,20 +35,19 @@ services (`up -d --wait keycloak ldap`, which is what `ci/verify-fixtures.sh` do
 |---|---|---|
 | PostgreSQL 16 | `127.0.0.1:5432`, database `rustryx` | `rustryx` / `rustryx-test-only` |
 | Redis 7 | `127.0.0.1:6379` | password `redis-test-only` |
-| MinIO (S3) | API `127.0.0.1:9000`, console `127.0.0.1:9001`, bucket `rustryx-blobs` | `rustryx-minio` / `minio-test-only-secret` |
+| SeaweedFS (S3) | API `127.0.0.1:8333`, filer `127.0.0.1:8888`, bucket `rustryx-blobs` | `rustryx-seaweed` / `seaweed-test-only-secret` |
 | Keycloak | `https://localhost:8443` (realm `rustryx`) | admin console `admin` / `admin-test-only` |
 | OpenLDAP | `ldaps://localhost:1636`, `ldap://localhost:1389` (StartTLS) | admin `cn=admin,dc=rustryx,dc=test` / `ldap-admin-test-only` |
 | rustryx (profile) | `http://localhost:8081` | bootstrap admin `admin` / `admin-test-only-0123456789` |
 
-The bucket is created by the `minio-init` job (idempotent). Keycloak is `start-dev`
+The bucket is created by the `seaweedfs-init` job (a second run treats "already exists" as success). Keycloak is `start-dev`
 with `--import-realm`; OpenLDAP loads its seed before it opens its sockets, so
 "healthy" means "seeded".
 
 Notes that cost time once:
 
-* MinIO no longer publishes container images to a public registry. The stack pins
-  the last Bitnami build (`bitnamilegacy/minio`), frozen and unpatched. It is for
-  local use only; any S3 endpoint works instead.
+* Blobs go to SeaweedFS (`chrislusf/seaweedfs:4.13`), one process with the S3 API
+  on port 8333. It is for local use only; any S3 endpoint works instead.
 * Keycloak's issuer is `https://localhost:8443/realms/rustryx` whichever address a
   client used (`KC_HOSTNAME`). From a container, reach it as `https://keycloak:8443`
   and set the public issuer (`RUSTRYX_AUTH_OIDC_PUBLIC_ISSUER_URL`) to the localhost
@@ -61,7 +60,7 @@ Notes that cost time once:
 
 The `certs` service writes a throwaway CA and one server certificate to
 `deploy/compose/certs/` (git-ignored) on the first start and renews them when less
-than 30 days remain. The certificate lists `localhost`, `ldap`, `keycloak`, `minio`,
+than 30 days remain. The certificate lists `localhost`, `ldap`, `keycloak`, `seaweedfs`,
 `rustryx`, `rustryx.localhost`, `127.0.0.1` and `::1`. The CA private key is deleted
 right after signing. Trust it with `ca.crt` from that directory:
 

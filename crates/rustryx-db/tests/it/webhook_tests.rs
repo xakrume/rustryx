@@ -72,7 +72,10 @@ async fn a_webhook_keeps_its_sealed_secret_and_a_scope_stops_at_twenty() {
             .await
             .unwrap();
     }
-    let extra = hooks.create(&hook(scope, "one-too-many")).await.unwrap_err();
+    let extra = hooks
+        .create(&hook(scope, "one-too-many"))
+        .await
+        .unwrap_err();
     assert!(matches!(extra, StoreError::Conflict(_)), "{extra:?}");
 
     let matched = hooks

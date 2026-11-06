@@ -154,6 +154,7 @@ fn must_not_use_blocking_constructs_in_production_code() {
     );
     assert!(files.len() >= 10, "scan found only {} files", files.len());
     let mut violations = Vec::new();
+    let mut dedup_found = false;
     for file in files {
         // Test-only modules: `tests.rs` files and the `tests/` directories next to them.
         let in_test_module = file.file_name().is_some_and(|name| name == "tests.rs")
@@ -162,7 +163,22 @@ fn must_not_use_blocking_constructs_in_production_code() {
             continue;
         }
         let code = production_code(&std::fs::read_to_string(&file).unwrap());
-        for needle in found_in(&code) {
+        let found = found_in(&code);
+        // Sync batch hardlink pass (`dedup_directory`): not on the async request path,
+        // same exception shape as the disk monitor for threads.
+        if file.file_name().is_some_and(|name| name == "dedup.rs") {
+            dedup_found = found.contains(&"std::fs");
+            let other: Vec<_> = found.into_iter().filter(|n| *n != "std::fs").collect();
+            for needle in other {
+                let why = FORBIDDEN
+                    .iter()
+                    .find(|(n, _)| *n == needle)
+                    .map_or("", |(_, why)| *why);
+                violations.push(format!("{}: `{needle}` ({why})", file.display()));
+            }
+            continue;
+        }
+        for needle in found {
             let why = FORBIDDEN
                 .iter()
                 .find(|(n, _)| *n == needle)
@@ -170,6 +186,10 @@ fn must_not_use_blocking_constructs_in_production_code() {
             violations.push(format!("{}: `{needle}` ({why})", file.display()));
         }
     }
+    assert!(
+        dedup_found,
+        "the scan must see std::fs in dedup.rs, or the allowlist checks nothing"
+    );
     assert!(
         violations.is_empty(),
         "forbidden constructs:\n{}",

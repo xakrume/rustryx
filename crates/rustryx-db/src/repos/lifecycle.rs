@@ -360,7 +360,8 @@ fn run_cursor(token: &str) -> Result<(bool, OffsetDateTime, Uuid), StoreError> {
     let key = cursor::decode(RUN_PAGE, token)?;
     let (nanos, id) = key.split_once('|').ok_or_else(cursor::invalid_token)?;
     let nanos: i128 = nanos.parse().map_err(|_| cursor::invalid_token())?;
-    let at = OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|_| cursor::invalid_token())?;
+    let at =
+        OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|_| cursor::invalid_token())?;
     let id = Uuid::parse_str(id).map_err(|_| cursor::invalid_token())?;
     Ok((false, at, id))
 }
@@ -379,7 +380,8 @@ fn candidate_cursor(
         return Err(cursor::invalid_token());
     }
     let nanos: i128 = nanos.parse().map_err(|_| cursor::invalid_token())?;
-    let at = OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|_| cursor::invalid_token())?;
+    let at =
+        OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|_| cursor::invalid_token())?;
     Ok((
         false,
         Uuid::parse_str(repo).map_err(|_| cursor::invalid_token())?,
@@ -426,7 +428,12 @@ fn failed_item(target: &TargetRow, component: Uuid) -> PendingItem {
     }
 }
 
-fn kept_item(target: &TargetRow, component: Uuid, decision: ItemDecision, reason: String) -> PendingItem {
+fn kept_item(
+    target: &TargetRow,
+    component: Uuid,
+    decision: ItemDecision,
+    reason: String,
+) -> PendingItem {
     PendingItem {
         repository: target.repository.clone(),
         component_id: component,
@@ -473,10 +480,7 @@ async fn delete_one(
             item: None,
         });
     };
-    let mut savepoint = tx
-        .begin()
-        .await
-        .map_err(|e| map_err(DELETE_CONTEXT, e))?;
+    let mut savepoint = tx.begin().await.map_err(|e| map_err(DELETE_CONTEXT, e))?;
     let deleted = sqlx::query("DELETE FROM components WHERE id = $1")
         .bind(id.as_uuid())
         .execute(&mut *savepoint)
@@ -636,11 +640,12 @@ impl LifecycleRepo for PgLifecycleRepo {
         let mut tx = write::begin(&self.pool, options, DELETE_CONTEXT)
             .await
             .map_err(MutationError::into_store_error)?;
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM lifecycle_runs WHERE id = $1)")
-            .bind(run.as_uuid())
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| map_err(DELETE_CONTEXT, e))?;
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM lifecycle_runs WHERE id = $1)")
+                .bind(run.as_uuid())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| map_err(DELETE_CONTEXT, e))?;
         if !exists {
             return Err(StoreError::Conflict(format!(
                 "lifecycle run {run} does not exist"
@@ -795,7 +800,10 @@ impl LifecycleRunRepo for PgLifecycleRunRepo {
         let next = if stamped.len() > limit {
             stamped.truncate(limit);
             stamped.last().map(|(at, run)| {
-                cursor::encode(RUN_PAGE, &format!("{}|{}", at.unix_timestamp_nanos(), run.id))
+                cursor::encode(
+                    RUN_PAGE,
+                    &format!("{}|{}", at.unix_timestamp_nanos(), run.id),
+                )
             })
         } else {
             None
@@ -948,16 +956,13 @@ impl LifecycleRunRepo for PgLifecycleRunRepo {
             let rows = match rows {
                 Ok(rows) => rows,
                 Err(error) => {
-                    return Some((
-                        vec![Err(map_err("list lifecycle items", error))],
-                        None,
-                    ));
+                    return Some((vec![Err(map_err("list lifecycle items", error))], None));
                 }
             };
             if rows.is_empty() {
                 return None;
             }
-            let next = rows.last().map(|row| row.seq).unwrap_or(after);
+            let next = rows.last().map_or(after, |row| row.seq);
             let items = rows.into_iter().map(ItemRow::into_item).collect();
             Some((items, Some((pool, run_id, next))))
         })
@@ -971,9 +976,8 @@ impl LifecycleRunRepo for PgLifecycleRunRepo {
         policy_version: i64,
         max_age: Duration,
     ) -> Result<Option<LifecycleRun>, StoreError> {
-        let age = time::Duration::try_from(max_age).map_err(|_| {
-            StoreError::Invalid("max age out of range".to_owned())
-        })?;
+        let age = time::Duration::try_from(max_age)
+            .map_err(|_| StoreError::Invalid("max age out of range".to_owned()))?;
         let cutoff = OffsetDateTime::now_utc()
             .checked_sub(age)
             .ok_or_else(|| StoreError::Invalid("max age out of range".to_owned()))?;

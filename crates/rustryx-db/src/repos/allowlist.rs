@@ -46,11 +46,17 @@ impl CveAllowlistRepo for PgCveAllowlistRepo {
             .validate()
             .map_err(|error| StoreError::Conflict(error.to_string()))?;
         scope_exists(&self.pool, entry.scope).await?;
-        let mut tx = self.pool.begin().await.map_err(|e| map_err("create cve exception", e))?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| map_err("create cve exception", e))?;
         insert_entry(&mut tx, entry).await?;
         let revision = bump_revision(&mut tx).await?;
         notify(&mut tx, &InvalidationEvent::Config(revision)).await?;
-        tx.commit().await.map_err(|e| map_err("create cve exception", e))
+        tx.commit()
+            .await
+            .map_err(|e| map_err("create cve exception", e))
     }
 
     async fn list(
@@ -77,7 +83,10 @@ impl CveAllowlistRepo for PgCveAllowlistRepo {
         .fetch_all(&self.pool)
         .await
         .map_err(|e| map_err("list cve exceptions", e))?;
-        let items = rows.into_iter().map(decode).collect::<Result<Vec<_>, _>>()?;
+        let items = rows
+            .into_iter()
+            .map(decode)
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Page { items, next: None })
     }
 
@@ -89,14 +98,17 @@ impl CveAllowlistRepo for PgCveAllowlistRepo {
         entry
             .validate()
             .map_err(|error| StoreError::Conflict(error.to_string()))?;
-        let mut tx = self.pool.begin().await.map_err(|e| map_err("update cve exception", e))?;
-        let current: Option<i64> = sqlx::query_scalar(
-            "SELECT version FROM cve_allowlist WHERE id = $1 FOR UPDATE",
-        )
-        .bind(entry.id.as_uuid())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| map_err("read cve exception", e))?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| map_err("update cve exception", e))?;
+        let current: Option<i64> =
+            sqlx::query_scalar("SELECT version FROM cve_allowlist WHERE id = $1 FOR UPDATE")
+                .bind(entry.id.as_uuid())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| map_err("read cve exception", e))?;
         let Some(version) = current else {
             return Err(StoreError::NotFound("cve exception".to_owned()));
         };
@@ -121,11 +133,17 @@ impl CveAllowlistRepo for PgCveAllowlistRepo {
         .map_err(|e| map_err("update cve exception", e))?;
         let revision = bump_revision(&mut tx).await?;
         notify(&mut tx, &InvalidationEvent::Config(revision)).await?;
-        tx.commit().await.map_err(|e| map_err("update cve exception", e))
+        tx.commit()
+            .await
+            .map_err(|e| map_err("update cve exception", e))
     }
 
     async fn delete(&self, id: CveAllowlistEntryId) -> Result<(), StoreError> {
-        let mut tx = self.pool.begin().await.map_err(|e| map_err("delete cve exception", e))?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| map_err("delete cve exception", e))?;
         let deleted = sqlx::query("DELETE FROM cve_allowlist WHERE id = $1")
             .bind(id.as_uuid())
             .execute(&mut *tx)
@@ -136,7 +154,9 @@ impl CveAllowlistRepo for PgCveAllowlistRepo {
         }
         let revision = bump_revision(&mut tx).await?;
         notify(&mut tx, &InvalidationEvent::Config(revision)).await?;
-        tx.commit().await.map_err(|e| map_err("delete cve exception", e))
+        tx.commit()
+            .await
+            .map_err(|e| map_err("delete cve exception", e))
     }
 
     async fn copy_system_to_project(
@@ -144,11 +164,12 @@ impl CveAllowlistRepo for PgCveAllowlistRepo {
         project: ProjectId,
         by: Option<UserId>,
     ) -> Result<u64, StoreError> {
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM projects WHERE id = $1)")
-            .bind(project.as_uuid())
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| map_err("read project", e))?;
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM projects WHERE id = $1)")
+                .bind(project.as_uuid())
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| map_err("read project", e))?;
         if !exists {
             return Err(StoreError::NotFound("project".to_owned()));
         }
@@ -166,7 +187,11 @@ impl CveAllowlistRepo for PgCveAllowlistRepo {
         if rows.is_empty() {
             return Ok(0);
         }
-        let mut tx = self.pool.begin().await.map_err(|e| map_err("copy cve exceptions", e))?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| map_err("copy cve exceptions", e))?;
         let now = OffsetDateTime::now_utc();
         for (vuln_id, reason, expires_at) in &rows {
             let mut copy = CveAllowlistEntry::new(
@@ -182,7 +207,9 @@ impl CveAllowlistRepo for PgCveAllowlistRepo {
         }
         let revision = bump_revision(&mut tx).await?;
         notify(&mut tx, &InvalidationEvent::Config(revision)).await?;
-        tx.commit().await.map_err(|e| map_err("copy cve exceptions", e))?;
+        tx.commit()
+            .await
+            .map_err(|e| map_err("copy cve exceptions", e))?;
         Ok(u64::try_from(rows.len()).unwrap_or(u64::MAX))
     }
 
@@ -244,7 +271,10 @@ impl CveAllowlistRepo for PgCveAllowlistRepo {
     }
 }
 
-async fn insert_entry(tx: &mut sqlx::PgConnection, entry: &CveAllowlistEntry) -> Result<(), StoreError> {
+async fn insert_entry(
+    tx: &mut sqlx::PgConnection,
+    entry: &CveAllowlistEntry,
+) -> Result<(), StoreError> {
     let (system, project, component) = scope_columns(entry.scope);
     sqlx::query(
         "INSERT INTO cve_allowlist (id, project_id, component_id, system, vuln_id, reason, \

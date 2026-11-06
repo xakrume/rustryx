@@ -194,7 +194,7 @@ pub(crate) async fn upsert_policy(
         .bind(mode_label(policy.mode))
         .bind(&keys)
         .bind(&roots)
-        .bind(&identities)
+        .bind(identities)
         .bind(policy.cosign_require_transparency_log)
         .bind(&stores)
         .bind(&policy.notation_identities)
@@ -219,7 +219,7 @@ pub(crate) async fn upsert_policy(
         .bind(mode_label(policy.mode))
         .bind(&keys)
         .bind(&roots)
-        .bind(&identities)
+        .bind(identities)
         .bind(policy.cosign_require_transparency_log)
         .bind(&stores)
         .bind(&policy.notation_identities)
@@ -277,13 +277,12 @@ pub(crate) async fn effective_policy(
     {
         return Ok(Some(own.clone()));
     }
-    if let Some(project_id) = project.map(rustryx_core::ids::ProjectId::from_uuid) {
-        if let Some(project_policy) = policies
+    if let Some(project_id) = project.map(rustryx_core::ids::ProjectId::from_uuid)
+        && let Some(project_policy) = policies
             .iter()
             .find(|policy| policy.scope == PolicyScope::Project(project_id))
-        {
-            return Ok(Some(project_policy.clone()));
-        }
+    {
+        return Ok(Some(project_policy.clone()));
     }
     Ok(policies
         .into_iter()
@@ -338,15 +337,30 @@ fn decode_material(row: MaterialRow) -> Result<TrustMaterial, StoreError> {
 fn decode_policy(row: PolicyRow) -> Result<TrustPolicy, StoreError> {
     let scope = match (row.system, row.project_id, row.repository_id) {
         (true, None, None) => PolicyScope::System,
-        (false, Some(id), None) => PolicyScope::Project(rustryx_core::ids::ProjectId::from_uuid(id)),
+        (false, Some(id), None) => {
+            PolicyScope::Project(rustryx_core::ids::ProjectId::from_uuid(id))
+        }
         (false, None, Some(id)) => PolicyScope::Repository(RepositoryId::from_uuid(id)),
-        _ => return Err(backend("read trust policy", "trust policy scope is ambiguous")),
+        _ => {
+            return Err(backend(
+                "read trust policy",
+                "trust policy scope is ambiguous",
+            ));
+        }
     };
     let mut policy = TrustPolicy::new(rustryx_core::ids::TrustPolicyId::from_uuid(row.id), scope);
     policy.required = parse_required(&row.required)?;
     policy.mode = parse_mode(&row.mode)?;
-    policy.cosign_keys = row.cosign_key_ids.into_iter().map(TrustMaterialId::from_uuid).collect();
-    policy.cosign_roots = row.cosign_root_ids.into_iter().map(TrustMaterialId::from_uuid).collect();
+    policy.cosign_keys = row
+        .cosign_key_ids
+        .into_iter()
+        .map(TrustMaterialId::from_uuid)
+        .collect();
+    policy.cosign_roots = row
+        .cosign_root_ids
+        .into_iter()
+        .map(TrustMaterialId::from_uuid)
+        .collect();
     policy.cosign_identities = row.cosign_identities.0;
     policy.cosign_require_transparency_log = row.cosign_require_tlog;
     policy.notation_stores = row
@@ -382,13 +396,16 @@ async fn scope_exists(tx: &mut sqlx::PgConnection, scope: PolicyScope) -> Result
     Ok(exists)
 }
 
-async fn ensure_material(tx: &mut sqlx::PgConnection, policy: &TrustPolicy) -> Result<(), StoreError> {
+async fn ensure_material(
+    tx: &mut sqlx::PgConnection,
+    policy: &TrustPolicy,
+) -> Result<(), StoreError> {
     let listed: Vec<Uuid> = policy
         .cosign_keys
         .iter()
         .chain(&policy.cosign_roots)
         .chain(&policy.notation_stores)
-        .map(|id| id.as_uuid())
+        .map(rustryx_core::ids::TrustMaterialId::as_uuid)
         .collect();
     if listed.is_empty() {
         return Ok(());
@@ -421,10 +438,12 @@ async fn lock_scope(
                 .await
         }
         PolicyScope::Project(id) => {
-            sqlx::query_as("SELECT id, version FROM trust_policies WHERE project_id = $1 FOR UPDATE")
-                .bind(id.as_uuid())
-                .fetch_optional(&mut *tx)
-                .await
+            sqlx::query_as(
+                "SELECT id, version FROM trust_policies WHERE project_id = $1 FOR UPDATE",
+            )
+            .bind(id.as_uuid())
+            .fetch_optional(&mut *tx)
+            .await
         }
         PolicyScope::Repository(id) => {
             sqlx::query_as(
@@ -477,7 +496,9 @@ async fn bump_revision(tx: &mut sqlx::PgConnection) -> Result<i64, StoreError> {
 }
 
 fn uuids(ids: &[TrustMaterialId]) -> Vec<Uuid> {
-    ids.iter().map(|id| id.as_uuid()).collect()
+    ids.iter()
+        .map(rustryx_core::ids::TrustMaterialId::as_uuid)
+        .collect()
 }
 
 fn scope_columns(scope: PolicyScope) -> (bool, Option<Uuid>, Option<Uuid>) {
@@ -501,7 +522,10 @@ fn parse_kind(raw: &str) -> Result<TrustMaterialKind, StoreError> {
         "cosign_public_key" => Ok(TrustMaterialKind::CosignPublicKey),
         "cosign_root" => Ok(TrustMaterialKind::CosignRoot),
         "notation_ca" => Ok(TrustMaterialKind::NotationCa),
-        _ => Err(backend("read trust material", "unknown trust material kind")),
+        _ => Err(backend(
+            "read trust material",
+            "unknown trust material kind",
+        )),
     }
 }
 
@@ -520,7 +544,10 @@ fn parse_required(raw: &str) -> Result<RequiredSignatures, StoreError> {
         "cosign" => Ok(RequiredSignatures::Cosign),
         "notation" => Ok(RequiredSignatures::Notation),
         "both" => Ok(RequiredSignatures::Both),
-        _ => Err(backend("read trust policy", "unknown signature requirement")),
+        _ => Err(backend(
+            "read trust policy",
+            "unknown signature requirement",
+        )),
     }
 }
 

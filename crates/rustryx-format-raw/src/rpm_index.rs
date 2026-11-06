@@ -64,7 +64,9 @@ pub fn inflate(bytes: &[u8]) -> Result<Vec<u8>, IndexError> {
     if bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b {
         let mut decoder = GzDecoder::new(bytes);
         let mut out = Vec::new();
-        decoder.read_to_end(&mut out).map_err(|_| IndexError::Syntax)?;
+        decoder
+            .read_to_end(&mut out)
+            .map_err(|_| IndexError::Syntax)?;
         Ok(out)
     } else {
         Ok(bytes.to_vec())
@@ -103,10 +105,8 @@ fn hrefs(xml: &str, packages_only: bool) -> Result<Vec<String>, IndexError> {
             Event::Empty(start) => {
                 push_href(&start, in_package, packages_only, &mut paths)?;
             }
-            Event::End(end) => {
-                if end.local_name().as_ref() == b"package" {
-                    in_package = false;
-                }
+            Event::End(end) if end.local_name().as_ref() == b"package" => {
+                in_package = false;
             }
             _ => {}
         }
@@ -164,7 +164,10 @@ fn safe_path(href: &str) -> Option<String> {
     if href.is_empty() || href.contains('\\') || href.contains("://") {
         return None;
     }
-    if href.split('/').any(|part| part.is_empty() || part == "." || part == "..") {
+    if href
+        .split('/')
+        .any(|part| part.is_empty() || part == "." || part == "..")
+    {
         return None;
     }
     Some(href.to_owned())

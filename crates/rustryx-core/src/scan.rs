@@ -30,8 +30,8 @@ pub use policy::{
     PullGatePolicy, ScanPolicy,
 };
 pub use report::{
-    ComponentSecurityState, Finding, LicenseBuckets, QuarantineState, RepositoryHealth,
-    ScanReport, ScanStatus, ScanSummary, ScanTrigger, VulnBucket, cvss_bucket, normalize_vuln_id,
+    ComponentSecurityState, Finding, LicenseBuckets, QuarantineState, RepositoryHealth, ScanReport,
+    ScanStatus, ScanSummary, ScanTrigger, VulnBucket, cvss_bucket, normalize_vuln_id,
 };
 pub use scanner::{ProbeResult, ScannerAuth, ScannerDataSet, ScannerKind, ScannerRecord};
 pub use trust::{

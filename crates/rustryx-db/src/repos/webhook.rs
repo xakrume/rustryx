@@ -60,8 +60,14 @@ impl WebhookRepo for PgWebhookRepo {
             .validate()
             .map_err(|error| StoreError::Conflict(error.to_string()))?;
         let (system, project, repository) = scope_columns(webhook.scope);
-        let secret = self.sealer.seal(&secret_aad(webhook.id), webhook.secret.expose())?;
-        let auth = seal_auth(self.sealer.as_ref(), webhook.id, webhook.auth_header.as_ref())?;
+        let secret = self
+            .sealer
+            .seal(&secret_aad(webhook.id), webhook.secret.expose())?;
+        let auth = seal_auth(
+            self.sealer.as_ref(),
+            webhook.id,
+            webhook.auth_header.as_ref(),
+        )?;
         let events = event_names(&webhook.events)?;
         sqlx::query(
             "INSERT INTO webhooks (id, project_id, repository_id, system, name, kind, url, \
@@ -99,7 +105,8 @@ impl WebhookRepo for PgWebhookRepo {
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| map_err("read webhook", e))?;
-        row.map(|row| row.into_webhook(self.sealer.as_ref())).transpose()
+        row.map(|row| row.into_webhook(self.sealer.as_ref()))
+            .transpose()
     }
 
     async fn list(&self, scope: Option<NotifyScope>) -> Result<Vec<Webhook>, StoreError> {
@@ -208,11 +215,12 @@ impl WebhookRepo for PgWebhookRepo {
         .await
         .map_err(|e| map_err("rotate webhook secret", e))?;
         if updated.rows_affected() == 0 {
-            let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM webhooks WHERE id = $1)")
-                .bind(id.as_uuid())
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| map_err("rotate webhook secret", e))?;
+            let exists: bool =
+                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM webhooks WHERE id = $1)")
+                    .bind(id.as_uuid())
+                    .fetch_one(&self.pool)
+                    .await
+                    .map_err(|e| map_err("rotate webhook secret", e))?;
             if exists {
                 return Err(StoreError::Conflict(
                     "webhook was changed by someone else".to_owned(),
@@ -308,9 +316,10 @@ impl Row {
             .transpose()?;
         webhook.enabled = self.enabled;
         webhook.suspended_at = self.suspended_at;
-        webhook.consecutive_failures = to_u64(i64::from(self.consecutive_failures), "read webhook")?
-            .try_into()
-            .map_err(|_| backend("read webhook", "failure counter does not fit"))?;
+        webhook.consecutive_failures =
+            to_u64(i64::from(self.consecutive_failures), "read webhook")?
+                .try_into()
+                .map_err(|_| backend("read webhook", "failure counter does not fit"))?;
         webhook.retry_max = u8::try_from(self.retry_max)
             .map_err(|_| backend("read webhook", "retry_max does not fit"))?;
         webhook.timeout_secs = u8::try_from(self.timeout_secs)

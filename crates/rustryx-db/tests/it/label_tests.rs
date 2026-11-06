@@ -17,7 +17,12 @@ fn name(raw: &str) -> LabelName {
 }
 
 fn label(scope: LabelScope, raw: &str) -> Label {
-    Label::new(LabelId::generate(), scope, name(raw), OffsetDateTime::UNIX_EPOCH)
+    Label::new(
+        LabelId::generate(),
+        scope,
+        name(raw),
+        OffsetDateTime::UNIX_EPOCH,
+    )
 }
 
 fn page(limit: u32) -> PageRequest {

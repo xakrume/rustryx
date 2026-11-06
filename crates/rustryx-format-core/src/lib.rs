@@ -75,11 +75,11 @@ pub use hosted::{
 pub use metrics::{CacheLabel, RequestClass, RequestLabels};
 pub use path::{NormalizedPath, PathError, PathRules};
 pub use policy::{ContentPolicy, DeleteIntent, NoopContentPolicy, WriteIntent};
-pub use proxy::{CachedDocument, ProxyFetch, UpstreamPath};
 pub use proxy::ssrf::{SystemResolver, UpstreamUrlPolicy, UrlRejection};
 pub use proxy::upstream::{
     ReqwestClientConfig, ReqwestUpstreamClient, UpstreamClient, UpstreamError, UpstreamRequest,
 };
+pub use proxy::{CachedDocument, ProxyFetch, UpstreamPath};
 pub use registry::{FormatRegistry, RegistryError};
 pub use request::{ArtifactRequest, ClientInfo, ContentKind, RequestHead, action_for_method};
 pub use routing::RuleRoutingGate;

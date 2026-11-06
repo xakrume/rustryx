@@ -24,21 +24,21 @@
 //! separate command and the readiness probe says when the schema is there.
 
 mod artifacts;
+mod audit_log;
 mod blobs;
 pub mod bootstrap;
 mod browse;
 mod bus;
-mod audit_log;
 mod catalog;
 mod client_setup;
+mod compat;
 mod database;
 mod dedup;
 mod formats;
 mod identity;
 pub mod maintenance;
-mod compat;
-mod registry_login;
 mod ops;
+mod registry_login;
 mod repositories;
 mod rpm_sync;
 mod sso;
@@ -325,19 +325,21 @@ fn repository_module(
     rbac: &Arc<Rbac>,
     base_url: Option<url::Url>,
 ) -> anyhow::Result<Arc<dyn RouteModule>> {
-    Ok(Arc::new(repositories::RepositoriesModule::new(
-        Arc::clone(&repos.repositories),
-        Arc::clone(&repos.blob_stores),
-        Arc::clone(rbac) as Arc<dyn RbacChecker>,
-        Arc::clone(&repos.clock),
-        repositories::RepoHttp {
-            base_url,
-            require_https: config.server.require_https,
-            anonymous_enabled: config.auth.anonymous_enabled,
-            upstream: formats::url_policy(&config.upstream)?,
-        },
-    )
-    .with_blobs(Arc::clone(&repos.blobs))))
+    Ok(Arc::new(
+        repositories::RepositoriesModule::new(
+            Arc::clone(&repos.repositories),
+            Arc::clone(&repos.blob_stores),
+            Arc::clone(rbac) as Arc<dyn RbacChecker>,
+            Arc::clone(&repos.clock),
+            repositories::RepoHttp {
+                base_url,
+                require_https: config.server.require_https,
+                anonymous_enabled: config.auth.anonymous_enabled,
+                upstream: formats::url_policy(&config.upstream)?,
+            },
+        )
+        .with_blobs(Arc::clone(&repos.blobs)),
+    ))
 }
 
 fn management_modules(
@@ -392,7 +394,7 @@ fn compat_module(
     rbac: &Arc<Rbac>,
     base_url: Option<url::Url>,
 ) -> anyhow::Result<Arc<dyn RouteModule>> {
-    Ok(Arc::new(compat::compatModule::new(compat::compatDeps {
+    Ok(Arc::new(compat::CompatModule::new(compat::CompatDeps {
         repositories: Arc::clone(&repos.repositories),
         blob_stores: Arc::clone(&repos.blob_stores),
         components: Arc::clone(&repos.components),
@@ -429,13 +431,20 @@ fn route_modules(
             Arc::clone(&repos.repositories),
             Arc::clone(&repos.assets),
             Arc::clone(&repos.audit),
-            base_url.unwrap_or_else(|| {
-                url::Url::parse("http://127.0.0.1:8081").expect("fallback base url")
-            }),
+            base_url.unwrap_or_else(fallback_base_url),
         )),
-        Arc::new(audit_log::AuditLogModule::new(Arc::clone(&repos.audit_read))),
+        Arc::new(audit_log::AuditLogModule::new(Arc::clone(
+            &repos.audit_read,
+        ))),
         Arc::new(dedup::DedupModule::new(Arc::clone(&repos.blob_stores))),
     ]
+}
+
+fn fallback_base_url() -> url::Url {
+    #[allow(clippy::expect_used, reason = "compile-time literal URL")]
+    {
+        url::Url::parse("http://127.0.0.1:8081").expect("literal URL")
+    }
 }
 
 /// Shutdown steps, in order. Session revocations go first, while the pool is still open.

@@ -81,7 +81,8 @@ async fn lock_repository(
     .fetch_optional(&mut *conn)
     .await
     .map_err(|e| map_mutation_err("lock repository", e))?;
-    let Some((repo_type, policy, quota_bytes, blob_store_id, project_id, project_quota)) = row else {
+    let Some((repo_type, policy, quota_bytes, blob_store_id, project_id, project_quota)) = row
+    else {
         return Err(StoreError::NotFound("repository".to_owned()).into());
     };
     let repo_type = parse_repo_type(&repo_type)?;
@@ -205,7 +206,12 @@ async fn switch_asset(
         .fetch_optional(&mut *conn)
         .await
         .map_err(|e| map_mutation_err("lock asset", e))?;
-        check_policy(guard.repo_type, guard.write_policy, mode, existing.is_some())?;
+        check_policy(
+            guard.repo_type,
+            guard.write_policy,
+            mode,
+            existing.is_some(),
+        )?;
         if let Some(blob_id) = lock_link_blob {
             let (store, _) = lock_blob(conn, blob_id).await?;
             if store != guard.blob_store_id {
@@ -582,13 +588,22 @@ mod tests {
         let hosted = RepoType::Hosted;
         let proxy = RepoType::Proxy;
         // Allow: only create only refuses, and only an existing path.
-        assert_eq!(check_policy(hosted, WritePolicy::Allow, upsert, true), Ok(()));
-        assert_eq!(check_policy(hosted, WritePolicy::Allow, upsert, false), Ok(()));
+        assert_eq!(
+            check_policy(hosted, WritePolicy::Allow, upsert, true),
+            Ok(())
+        );
+        assert_eq!(
+            check_policy(hosted, WritePolicy::Allow, upsert, false),
+            Ok(())
+        );
         assert_eq!(
             check_policy(hosted, WritePolicy::Allow, create, true),
             Err(AlreadyExists)
         );
-        assert_eq!(check_policy(hosted, WritePolicy::Allow, create, false), Ok(()));
+        assert_eq!(
+            check_policy(hosted, WritePolicy::Allow, create, false),
+            Ok(())
+        );
         // AllowOnce: an existing path is refused in both modes, CreateOnly names itself.
         assert_eq!(
             check_policy(hosted, WritePolicy::AllowOnce, upsert, true),
@@ -612,7 +627,10 @@ mod tests {
                 );
             }
         }
-        assert_eq!(check_policy(proxy, WritePolicy::Deny, upsert, false), Ok(()));
+        assert_eq!(
+            check_policy(proxy, WritePolicy::Deny, upsert, false),
+            Ok(())
+        );
         assert_eq!(
             check_policy(proxy, WritePolicy::Deny, create, true),
             Err(AlreadyExists)

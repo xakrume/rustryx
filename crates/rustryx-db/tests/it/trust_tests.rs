@@ -58,7 +58,8 @@ async fn the_repository_policy_wins_and_listed_material_stays() {
     system.cosign_keys = vec![key.id];
     policies.upsert_trust_policy(&system, None).await.unwrap();
 
-    let mut project_policy = TrustPolicy::new(TrustPolicyId::generate(), PolicyScope::Project(project));
+    let mut project_policy =
+        TrustPolicy::new(TrustPolicyId::generate(), PolicyScope::Project(project));
     project_policy.required = RequiredSignatures::Cosign;
     project_policy.mode = GateMode::Enforce;
     project_policy.cosign_keys = vec![key.id];
@@ -66,7 +67,11 @@ async fn the_repository_policy_wins_and_listed_material_stays() {
         .upsert_trust_policy(&project_policy, None)
         .await
         .unwrap();
-    let effective = policies.effective_trust_for(repo.id).await.unwrap().unwrap();
+    let effective = policies
+        .effective_trust_for(repo.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(effective.mode, GateMode::Enforce);
     assert_eq!(effective.scope, PolicyScope::Project(project));
 
@@ -76,7 +81,11 @@ async fn the_repository_policy_wins_and_listed_material_stays() {
     own.cosign_keys = vec![key.id];
     own.cosign_require_transparency_log = true;
     policies.upsert_trust_policy(&own, None).await.unwrap();
-    let effective = policies.effective_trust_for(repo.id).await.unwrap().unwrap();
+    let effective = policies
+        .effective_trust_for(repo.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(effective.cosign_require_transparency_log);
     assert_eq!(effective.scope, PolicyScope::Repository(repo.id));
 
@@ -91,5 +100,12 @@ async fn the_repository_policy_wins_and_listed_material_stays() {
         .unwrap();
     assert_eq!(stored.version, 2);
     assert_eq!(stored.mode, GateMode::Enforce);
-    assert_eq!(material.list(Some(TrustMaterialKind::CosignPublicKey)).await.unwrap().len(), 1);
+    assert_eq!(
+        material
+            .list(Some(TrustMaterialKind::CosignPublicKey))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }

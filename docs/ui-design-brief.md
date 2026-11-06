@@ -12,9 +12,9 @@ reviewed by hand. If this brief and MASTER.md disagree, this brief wins.
 | Delivery | `ui/` builds to static files embedded into the `rustryx` binary (SPA fallback, hashed assets, strict CSP, no inline scripts) | one artifact, no separate web server, works behind any ingress |
 | API contract | UI talks only to the native API `/api/v1/*` described by `docs/openapi/rustryx-api-v1.yaml`; the TypeScript client is generated from it | backend and UI are built in parallel against one contract |
 | Auth in UI | Keycloak code flow with PKCE through the server (cookie session, SameSite=Lax, CSRF token on mutations); local login form for break-glass; no tokens in localStorage | README 8.3 |
-| Style | Minimalism and Swiss style, dark and light themes, density 8 (dashboard), subtle motion (150 to 300 ms) | professional tool, long sessions |
-| Palette | Apple-style quiet neutrals (`#f5f5f7` page, white cards, `#1d1d1f` ink; true black and graphite in dark), one action blue `#0071e3`, green only for success, red for destruction; both themes defined as semantic tokens (`--color-*`), never raw hex in components | every pair is proven by `scripts/check-contrast.mjs` |
-| Type | the system face (SF Pro on Apple platforms, Segoe UI on Windows, self-hosted Fira Sans as fallback) for UI text and headings; the system monospace (SF Mono, Menlo) then Fira Code for coordinates, digests, paths, commands, logs | code font is limited to technical values; headings use tight negative tracking |
+| Style | Dark and light themes, density 8 (dashboard), motion 150 to 300 ms | a tool people sit in for a long time |
+| Palette | Quiet neutrals (`#f5f5f7` page, white cards, `#1d1d1f` ink; true black and graphite in dark), one action blue `#0071e3`, green only for success, red for destruction; both themes defined as semantic tokens (`--color-*`), never raw hex in components | every pair is proven by `scripts/check-contrast.mjs` |
+| Type | the system face (SF Pro, Segoe UI, self-hosted Fira Sans as fallback) for UI text and headings; the system monospace (SF Mono, Menlo) then Fira Code for coordinates, digests, paths, commands, logs | code font is limited to technical values; headings use tight negative tracking |
 | Icons | Lucide SVG only, no emoji; icon-only buttons carry an accessible label | skill rule |
 
 ## Rules every screen must satisfy
@@ -33,5 +33,5 @@ reviewed by hand. If this brief and MASTER.md disagree, this brief wins.
 ## Open items for wave 3
 
 - Light theme tokens and the contrast validator.
-- Page list and navigation come from `docs/ui-page-inventory.md` (being produced from the compat and Harbor parity research).
+- Page list and navigation come from `docs/ui-page-inventory.md` (being produced from the compat and OCI-registry parity research).
 - OpenAPI contract for `/api/v1/*` is written after wave 1 integrates, because it needs the final core entities.
