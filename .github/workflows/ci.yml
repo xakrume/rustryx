@@ -199,7 +199,9 @@ jobs:
 
   test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # Cold llvm-cov compile + Docker IT routinely exceeds 45m; keep headroom after
+    # the parallelism caps below (runner OOM previously killed the job near 58m).
+    timeout-minutes: 90
     permissions:
       contents: read
     steps:
@@ -209,6 +211,9 @@ jobs:
       - name: Rust toolchain from rust-toolchain.toml
         run: rustup toolchain install --profile minimal
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Separate key from non-coverage jobs: instrumented artifacts are incompatible.
+          key: llvm-cov
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest@0.9.148,cargo-llvm-cov@0.9.1
@@ -231,6 +236,8 @@ jobs:
         env:
           RUSTRYX_IT: "1"
           RUSTRYX_MINIO_IMAGE: ${{ vars.RUSTRYX_MINIO_IMAGE }}
+          # Peak RSS of parallel rustc+llvm instrumentation OOMs the 7 GiB runner.
+          CARGO_BUILD_JOBS: "2"
         run: |
           docker version --format 'docker server {{.Server.Version}}'
           cargo llvm-cov nextest --workspace --all-features --locked \

@@ -5,7 +5,16 @@
 fail-fast = false
 # A flaky test is a bug to fix, not to retry: retries would turn red into green.
 retries = 0
+# Cap concurrency: GitHub-hosted runners (~7 GiB) OOM when llvm-cov instrumentation
+# shares the box with several Keycloak/Postgres/MinIO containers at once.
+test-threads = 2
 slow-timeout = { period = "60s", terminate-after = 5 }
+
+# Heavy Docker IT: each of these can pull a multi-GB image into RAM. threads-required
+# equal to the profile's test-threads serializes them against each other.
+[[profile.ci.overrides]]
+filter = 'package(rustryx-auth) | package(rustryx-blob) | package(rustryx-db) | package(rustryx-server)'
+threads-required = 2
 
 [profile.ci.junit]
 # JUnit XML for the job artifacts (OPS-22). Relative to the profile directory.
