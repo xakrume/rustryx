@@ -265,17 +265,17 @@ A page is done when all of these hold (the shell provides the first four):
 
 ## 13. Bundle size
 
-Measured on the production build of 2026-10-24 (`npm run build`, `check-dist.mjs`):
+Measured on the production build of 2026-11-06 (`npm run build`, `check-dist.mjs`):
 
 | | raw | gzip |
 |---|---|---|
-| initial JavaScript (entry, `vendor-react`, `vendor-tanstack`) | 491.9 KiB | **160.2 KiB** |
-| of which application entry | 165.5 KiB | 56.0 KiB |
+| initial JavaScript (entry, `vendor-react`, `vendor-tanstack`) | 483.5 KiB | **155.8 KiB** |
+| of which application entry | 154.6 KiB | 50.9 KiB |
 | of which React and React DOM | 217.1 KiB | 67.5 KiB |
-| of which TanStack Router and Query | 109.3 KiB | 36.7 KiB |
-| initial CSS | | 8.8 KiB |
+| of which TanStack Router and Query | 111.9 KiB | 37.4 KiB |
+| initial CSS | | 12.4 KiB |
 
-The login page adds its own chunk (about 128 KiB raw, form libraries and zod), the signed-in shell about 83 KiB raw (command palette, sidebar), each page one small chunk; Recharts and the table library are loaded only by pages that draw charts or tables; fonts download per unicode range on demand. The build fails when the initial JavaScript passes 175 KiB gzip (`INITIAL_JS_GZIP_BUDGET_KIB` in `scripts/check-dist.mjs`); raising it needs a reason in the commit message. Zod is kept out of the entry on purpose (route `validateSearch` is hand written), which saved about 20 KiB gzip.
+The signed-in shell (`_app`) carries tooltips and toasts so the login entry stays light; Recharts and the table library load only on pages that need them. The build fails when the initial JavaScript passes 175 KiB gzip (`INITIAL_JS_GZIP_BUDGET_KIB` in `scripts/check-dist.mjs`). `cn()` uses `clsx` only (no `tailwind-merge`) so merge logic does not land in the entry. Zod stays out of the entry (hand-written `validateSearch`).
 
 ## 14. Generated files and CI
 

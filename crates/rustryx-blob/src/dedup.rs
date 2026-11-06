@@ -59,7 +59,7 @@ pub fn dedup_directory(root: &Path) -> io::Result<DedupReport> {
             report.hashed = report.hashed.saturating_add(1);
             match hash_file(&path) {
                 Ok(digest) => {
-                    let nlink = path.metadata().map(|meta| meta.nlink()).unwrap_or(1);
+                    let nlink = path.metadata().map_or(1, |meta| meta.nlink());
                     by_hash.entry(digest).or_default().push((path, nlink));
                 }
                 Err(_) => report.errors = report.errors.saturating_add(1),
@@ -96,7 +96,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
 fn hash_file(path: &Path) -> io::Result<String> {
     let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
-    let mut buf = [0_u8; 64 * 1024];
+    let mut buf = vec![0_u8; 64 * 1024];
     loop {
         let read = file.read(&mut buf)?;
         if read == 0 {
@@ -164,7 +164,10 @@ mod tests {
         let a = fs::metadata(root.path().join("a.bin")).unwrap();
         let b = fs::metadata(root.path().join("b.bin")).unwrap();
         assert_eq!(a.ino(), b.ino());
-        assert_ne!(a.ino(), fs::metadata(root.path().join("c.bin")).unwrap().ino());
+        assert_ne!(
+            a.ino(),
+            fs::metadata(root.path().join("c.bin")).unwrap().ino()
+        );
         let again = dedup_directory(root.path()).unwrap();
         assert_eq!(again.links, 0);
         assert_eq!(again.bytes_saved, 0);

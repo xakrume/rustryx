@@ -90,7 +90,9 @@ fn inflate(bytes: &[u8]) -> Result<Vec<u8>, IndexError> {
     // Alpine appends the signature as another gzip member. `MultiGzDecoder` joins them.
     let mut decoder = MultiGzDecoder::new(bytes);
     let mut out = Vec::new();
-    decoder.read_to_end(&mut out).map_err(|_| IndexError::Syntax)?;
+    decoder
+        .read_to_end(&mut out)
+        .map_err(|_| IndexError::Syntax)?;
     if out.is_empty() {
         return Err(IndexError::Syntax);
     }
@@ -125,7 +127,8 @@ fn tar_member(archive: &[u8], wanted: &str) -> Option<Vec<u8>> {
         }
         let data = archive[offset..data_end].to_vec();
         offset = data_end.div_ceil(512) * 512;
-        if (typeflag == b'0' || typeflag == 0) && (name == wanted || name.ends_with(&format!("/{wanted}")))
+        if (typeflag == b'0' || typeflag == 0)
+            && (name == wanted || name.ends_with(&format!("/{wanted}")))
         {
             return Some(data);
         }
@@ -134,7 +137,10 @@ fn tar_member(archive: &[u8], wanted: &str) -> Option<Vec<u8>> {
 }
 
 fn header_text(bytes: &[u8]) -> String {
-    let end = bytes.iter().position(|byte| *byte == 0).unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
     String::from_utf8_lossy(&bytes[..end]).trim().to_owned()
 }
 
@@ -192,7 +198,7 @@ mod tests {
         header[148..156].copy_from_slice(checksum.as_bytes());
         let mut raw = header;
         raw.extend_from_slice(body);
-        while raw.len() % 512 != 0 {
+        while !raw.len().is_multiple_of(512) {
             raw.push(0);
         }
         raw.extend(std::iter::repeat_n(0_u8, 1024));

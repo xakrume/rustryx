@@ -81,7 +81,9 @@ pub fn inflate(bytes: &[u8]) -> Result<Vec<u8>, IndexError> {
     if bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b {
         let mut decoder = GzDecoder::new(bytes);
         let mut out = Vec::new();
-        decoder.read_to_end(&mut out).map_err(|_| IndexError::Syntax)?;
+        decoder
+            .read_to_end(&mut out)
+            .map_err(|_| IndexError::Syntax)?;
         Ok(out)
     } else {
         Ok(bytes.to_vec())
@@ -132,7 +134,9 @@ fn architecture_allowed(path: &str, architectures: &[String]) -> bool {
     if architectures.is_empty() {
         return true;
     }
-    architectures.iter().any(|arch| path.contains(&format!("/binary-{arch}/")))
+    architectures
+        .iter()
+        .any(|arch| path.contains(&format!("/binary-{arch}/")))
 }
 
 fn release_paths(release: &str) -> Result<Vec<String>, IndexError> {
@@ -172,7 +176,10 @@ fn safe_path(href: &str) -> Option<String> {
     if href.is_empty() || href.contains('\\') || href.contains("://") {
         return None;
     }
-    if href.split('/').any(|part| part.is_empty() || part == "." || part == "..") {
+    if href
+        .split('/')
+        .any(|part| part.is_empty() || part == "." || part == "..")
+    {
         return None;
     }
     Some(href.to_owned())
@@ -205,12 +212,8 @@ SHA256:
  cccc 4 main/binary-arm64/Packages.gz
  dddd 4 contrib/binary-amd64/Packages.gz
 ";
-        let indexes = package_indexes(
-            release,
-            &["main".to_owned()],
-            &["amd64".to_owned()],
-        )
-        .unwrap();
+        let indexes =
+            package_indexes(release, &["main".to_owned()], &["amd64".to_owned()]).unwrap();
         assert_eq!(indexes, vec!["main/binary-amd64/Packages.gz".to_owned()]);
     }
 

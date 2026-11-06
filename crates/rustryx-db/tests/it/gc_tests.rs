@@ -39,7 +39,9 @@ async fn a_stopped_gc_run_keeps_its_sample_and_purges() {
         untagged_deleted: 0,
     };
     let per_store = serde_json::json!({ "files": { "candidates": 2 } });
-    gc.update_progress(run.id, &counts, &per_store).await.unwrap();
+    gc.update_progress(run.id, &counts, &per_store)
+        .await
+        .unwrap();
     assert!(gc.request_stop(run.id).await.unwrap());
     assert!(gc.stop_requested(run.id).await.unwrap());
 
@@ -62,7 +64,13 @@ async fn a_stopped_gc_run_keeps_its_sample_and_purges() {
     });
     gc.save_samples(&samples).await.unwrap();
     let page = gc
-        .list_samples(run.id, &PageRequest { limit: 1000, after: None })
+        .list_samples(
+            run.id,
+            &PageRequest {
+                limit: 1000,
+                after: None,
+            },
+        )
         .await
         .unwrap();
     assert_eq!(page.items.len(), 1000);
@@ -71,7 +79,9 @@ async fn a_stopped_gc_run_keeps_its_sample_and_purges() {
     assert!(page.items.iter().all(|sample| sample.key != "past-the-cap"));
 
     let finished = started + time::Duration::minutes(1);
-    gc.finish(run.id, TaskRunStatus::Cancelled, finished).await.unwrap();
+    gc.finish(run.id, TaskRunStatus::Cancelled, finished)
+        .await
+        .unwrap();
     assert!(!gc.request_stop(run.id).await.unwrap());
     let stored = gc.get(run.id).await.unwrap().unwrap();
     assert_eq!(stored.status, TaskRunStatus::Cancelled);
@@ -81,16 +91,26 @@ async fn a_stopped_gc_run_keeps_its_sample_and_purges() {
     let manual = gc.last_manual_start().await.unwrap().unwrap();
     assert_eq!(manual, stored.started_at.unwrap());
 
-    let mut later = GcRun::new(GcRunId::generate(), TaskTrigger::Schedule, GcOptions::new(3600));
+    let mut later = GcRun::new(
+        GcRunId::generate(),
+        TaskTrigger::Schedule,
+        GcOptions::new(3600),
+    );
     later.status = TaskRunStatus::Running;
     gc.create(&later).await.unwrap();
     let first = gc
-        .list(&PageRequest { limit: 1, after: None })
+        .list(&PageRequest {
+            limit: 1,
+            after: None,
+        })
         .await
         .unwrap();
     assert_eq!(first.items.len(), 1);
     let second = gc
-        .list(&PageRequest { limit: 1, after: first.next })
+        .list(&PageRequest {
+            limit: 1,
+            after: first.next,
+        })
         .await
         .unwrap();
     assert_eq!(second.items.len(), 1);
@@ -103,5 +123,9 @@ async fn a_stopped_gc_run_keeps_its_sample_and_purges() {
     assert_eq!(removed, 1);
     assert!(gc.get(run.id).await.unwrap().is_none());
     assert!(gc.get(later.id).await.unwrap().is_some());
-    assert!(gc.list_samples(run.id, &PageRequest::default()).await.is_err());
+    assert!(
+        gc.list_samples(run.id, &PageRequest::default())
+            .await
+            .is_err()
+    );
 }

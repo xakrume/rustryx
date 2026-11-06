@@ -69,13 +69,12 @@ impl BlobRepo for PgBlobRepo {
     }
 
     async fn count_by_store(&self, id: BlobStoreId) -> Result<u64, StoreError> {
-        let total: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*)::bigint FROM blobs WHERE blob_store_id = $1",
-        )
-        .bind(id.as_uuid())
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| map_err("count store blobs", e))?;
+        let total: i64 =
+            sqlx::query_scalar("SELECT COUNT(*)::bigint FROM blobs WHERE blob_store_id = $1")
+                .bind(id.as_uuid())
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| map_err("count store blobs", e))?;
         to_u64(total, "count store blobs")
     }
 

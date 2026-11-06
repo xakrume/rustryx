@@ -30,7 +30,9 @@ async fn a_subscription_matches_its_scope_and_a_repeat_mail_is_suppressed() {
         SubscriptionId::generate(),
         NotifyScope::System,
         vec![EventKind::Push],
-        vec![Recipient::ProjectRole { role: ProjectRole::Maintainer }],
+        vec![Recipient::ProjectRole {
+            role: ProjectRole::Maintainer,
+        }],
     );
     assert!(notes.upsert(&bad, None).await.is_err());
     bad.scope = NotifyScope::Project(project);
@@ -61,9 +63,19 @@ async fn a_subscription_matches_its_scope_and_a_repeat_mail_is_suppressed() {
         kind: EventKind::Push,
         subject_key: "repo".to_owned(),
     };
-    assert_eq!(notes.create_for_events(&[mail.clone()], None).await.unwrap(), 1);
+    assert_eq!(
+        notes
+            .create_for_events(std::slice::from_ref(&mail), None)
+            .await
+            .unwrap(),
+        1
+    );
     assert_eq!(notes.create_for_events(&[mail], None).await.unwrap(), 1);
-    let claimed = notes.claim("worker", Duration::from_secs(30)).await.unwrap().unwrap();
+    let claimed = notes
+        .claim("worker", Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(claimed.status, EmailStatus::Sending);
     assert!(
         notes

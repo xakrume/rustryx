@@ -111,6 +111,14 @@ jobs:
       - name: Rust toolchain from rust-toolchain.toml
         run: rustup toolchain install --profile minimal
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Clippy compiles rustryx-server, whose build.rs requires ui/dist. A stub is enough
+      # here; the ui job builds the real production assets.
+      - name: Stub UI dist for the server embed
+        run: |
+          mkdir -p ui/dist
+          printf '%s\n' '<!doctype html><html><body><div id="root"></div></body></html>' >ui/dist/index.html
+          printf '%s\n' '' >ui/dist/theme-init.js
+          printf '%s\n' '<svg xmlns="http://www.w3.org/2000/svg"/>' >ui/dist/favicon.svg
       - name: cargo fmt
         run: cargo fmt --all -- --check
       - name: cargo clippy
@@ -205,6 +213,14 @@ jobs:
         with:
           tool: cargo-nextest@0.9.148,cargo-llvm-cov@0.9.1
           fallback: none
+      # The server embed (include_dir) needs ui/dist at compile time. Stub is enough for
+      # Rust tests; the ui job builds and checks the real production assets.
+      - name: Stub UI dist for the server embed
+        run: |
+          mkdir -p ui/dist
+          printf '%s\n' '<!doctype html><html><body><div id="root"></div></body></html>' >ui/dist/index.html
+          printf '%s\n' '' >ui/dist/theme-init.js
+          printf '%s\n' '<svg xmlns="http://www.w3.org/2000/svg"/>' >ui/dist/favicon.svg
       # RUSTRYX_IT=1 makes the integration tests REQUIRED: a missing Docker or image
       # is a failure and not a skip (crates/rustryx-blob/tests/s3_minio.rs). They start
       # PostgreSQL, MinIO, Keycloak and OpenLDAP through testcontainers; the Keycloak

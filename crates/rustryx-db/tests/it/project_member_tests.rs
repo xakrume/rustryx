@@ -84,7 +84,10 @@ async fn members_are_unique_per_subject_and_listed_by_id() {
 
     let empty = group_member(project, "", ProjectRole::Guest);
     let empty_group = repo.add(&empty).await.unwrap_err();
-    assert!(matches!(empty_group, StoreError::Conflict(_)), "{empty_group}");
+    assert!(
+        matches!(empty_group, StoreError::Conflict(_)),
+        "{empty_group}"
+    );
 
     let group = group_member(project, "/dev", ProjectRole::Guest);
     repo.add(&group).await.unwrap();
@@ -105,7 +108,12 @@ async fn members_are_unique_per_subject_and_listed_by_id() {
     assert_eq!(listed.items.len(), 1);
     assert!(listed.next.is_some());
 
-    assert!(repo.get(ProjectMemberId::generate()).await.unwrap().is_none());
+    assert!(
+        repo.get(ProjectMemberId::generate())
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(matches!(
         repo.set_role(ProjectMemberId::generate(), ProjectRole::Guest, false)
             .await,

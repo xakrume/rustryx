@@ -54,11 +54,12 @@ async fn a_registry_seals_its_password_and_rewrites_bound_proxies() {
         }
         other => panic!("unexpected auth {other:?}"),
     }
-    let sealed: String = sqlx::query_scalar("SELECT auth->>'password_sealed' FROM registries WHERE id = $1")
-        .bind(first.id.as_uuid())
-        .fetch_one(store.pool())
-        .await
-        .unwrap();
+    let sealed: String =
+        sqlx::query_scalar("SELECT auth->>'password_sealed' FROM registries WHERE id = $1")
+            .bind(first.id.as_uuid())
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
     assert_ne!(sealed, "s3cret");
 
     let (blob_store, _) = seed_repository(&store).await;
@@ -84,11 +85,12 @@ async fn a_registry_seals_its_password_and_rewrites_bound_proxies() {
     let mut edited = stored;
     edited.url = "https://new.example".to_owned();
     repos.update(&edited, 1).await.unwrap();
-    let remote: String = sqlx::query_scalar("SELECT proxy_config->>'remote_url' FROM repositories WHERE id = $1")
-        .bind(repo.id.as_uuid())
-        .fetch_one(store.pool())
-        .await
-        .unwrap();
+    let remote: String =
+        sqlx::query_scalar("SELECT proxy_config->>'remote_url' FROM repositories WHERE id = $1")
+            .bind(repo.id.as_uuid())
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
     assert_eq!(remote, "https://new.example");
     assert!(matches!(
         repos.update(&edited, 1).await,
@@ -107,13 +109,24 @@ async fn a_registry_seals_its_password_and_rewrites_bound_proxies() {
         )
         .await
         .unwrap();
-    assert!(repos.get(first.id).await.unwrap().unwrap().last_test.unwrap().ok);
+    assert!(
+        repos
+            .get(first.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .last_test
+            .unwrap()
+            .ok
+    );
 
-    sqlx::query("UPDATE repositories SET proxy_config = proxy_config - 'registry_id' WHERE id = $1")
-        .bind(repo.id.as_uuid())
-        .execute(store.pool())
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE repositories SET proxy_config = proxy_config - 'registry_id' WHERE id = $1",
+    )
+    .bind(repo.id.as_uuid())
+    .execute(store.pool())
+    .await
+    .unwrap();
     repos.delete(first.id).await.unwrap();
     assert!(repos.get(first.id).await.unwrap().is_none());
 }

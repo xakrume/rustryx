@@ -214,9 +214,9 @@ impl QuotaRepo for PgQuotaRepo {
             (
                 project_limit,
                 project_used.unwrap_or(0),
-                project_id
-                    .map(|id| QuotaScope::Project(id.into()))
-                    .unwrap_or(QuotaScope::Repository(repository)),
+                project_id.map_or(QuotaScope::Repository(repository), |id| {
+                    QuotaScope::Project(id.into())
+                }),
             ),
         ] {
             let Some(limit) = limit else {
