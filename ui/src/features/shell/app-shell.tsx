@@ -1,6 +1,5 @@
 import { Outlet, useLocation } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
-import { Toaster } from '@/components/toaster'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { ProtectedRoute } from '@/features/auth/protected-route'
@@ -31,8 +30,7 @@ export function AppShell() {
   }, [pathname])
 
   return (
-    // Tooltip and toaster live here, not in the entry App: the login page does not need
-    // them, and keeping Radix toast/tooltip out of the initial JS stays under the budget.
+    // TooltipProvider stays in the shell so @floating-ui is not part of the login entry.
     <TooltipProvider delayDuration={300}>
       <CommandPaletteProvider>
         <div className="flex h-dvh bg-background">
@@ -70,7 +68,6 @@ export function AppShell() {
           </SheetContent>
         </Sheet>
         <SessionWatcher />
-        <Toaster />
       </CommandPaletteProvider>
     </TooltipProvider>
   )

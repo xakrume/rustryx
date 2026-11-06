@@ -269,13 +269,13 @@ Measured on the production build of 2026-11-06 (`npm run build`, `check-dist.mjs
 
 | | raw | gzip |
 |---|---|---|
-| initial JavaScript (entry, `vendor-react`, `vendor-tanstack`) | 483.5 KiB | **155.8 KiB** |
-| of which application entry | 154.6 KiB | 50.9 KiB |
+| initial JavaScript (entry, `vendor-react`, `vendor-tanstack`) | 520.1 KiB | **167.5 KiB** |
+| of which application entry | 191.1 KiB | 62.5 KiB |
 | of which React and React DOM | 217.1 KiB | 67.5 KiB |
 | of which TanStack Router and Query | 111.9 KiB | 37.4 KiB |
 | initial CSS | | 12.4 KiB |
 
-The signed-in shell (`_app`) carries tooltips and toasts so the login entry stays light; Recharts and the table library load only on pages that need them. The build fails when the initial JavaScript passes 175 KiB gzip (`INITIAL_JS_GZIP_BUDGET_KIB` in `scripts/check-dist.mjs`). `cn()` uses `clsx` only (no `tailwind-merge`) so merge logic does not land in the entry. Zod stays out of the entry (hand-written `validateSearch`).
+Tooltips stay in the signed-in shell so `@floating-ui` is not in the login entry; the toaster stays on `App` so tests and every route see toasts. Recharts and the table library load only on pages that need them. The build fails when the initial JavaScript passes 175 KiB gzip (`INITIAL_JS_GZIP_BUDGET_KIB` in `scripts/check-dist.mjs`). `cn()` uses `clsx` only (no `tailwind-merge`). Zod stays out of the entry (hand-written `validateSearch`).
 
 ## 14. Generated files and CI
 
