@@ -86,7 +86,10 @@ async fn concurrent_migrators_apply_every_migration_exactly_once() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(recorded, i64::try_from(migration_count).expect("count fits i64"));
+    assert_eq!(
+        recorded,
+        i64::try_from(migration_count).expect("count fits i64")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
