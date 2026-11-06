@@ -82,7 +82,9 @@ describe('dashboard', () => {
     const main = within(await screen.findByRole('main'))
     expect(await main.findByRole('link', { name: 'Upload' })).toBeInTheDocument()
     expect(main.queryByRole('link', { name: 'Create repository' })).not.toBeInTheDocument()
-    expect(await main.findByRole('link', { name: 'Search packages and images' })).toBeInTheDocument()
+    expect(
+      await main.findByRole('link', { name: 'Search packages and images' }),
+    ).toBeInTheDocument()
     expect(main.queryByRole('link', { name: 'Routing rules' })).not.toBeInTheDocument()
     expect(main.queryByRole('link', { name: 'View audit log' })).not.toBeInTheDocument()
   })
