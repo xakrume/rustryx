@@ -281,7 +281,7 @@ New ports to implement (wave 2): this revision's `RevokedTokenRepo` (table `revo
 | `src/registry.rs:73` | `build_parts` match on `BlobStoreKind` | add `Azure` and `Group` arms returning a `BuildError` ("kind not supported by this build") until stream F; a group is built by the F1 group adapter |
 | `src/registry/tests.rs:27` | `FakeRepo` test double misses `BlobStoreRepo::update` | add it (a no op that returns `Ok`) |
 | `src/registry/tests.rs:61`, `:153` | `BlobStoreDef` literals | `BlobStoreDef::new` |
-| `tests/s3_minio.rs:386` | `OneStoreRepo` implements `BlobStoreRepo` | add `update` (found by search) |
+| `tests/s3_seaweed.rs` | `OneStoreRepo` implements `BlobStoreRepo` | add `update` (found by search) |
 | `src/s3/tests/support.rs` | `BlobCommit` literal | constructor (found by search) |
 
 Also: map the gap 5 to 7 cases to the new variants (`InvalidKey` instead of `Backend` with a `KeyError` source, `InsufficientStorage` for a full disk, `Overloaded { retry_after }` for upload slot exhaustion, which used `Unavailable`); implement `BlobStore::shutdown` (replaces the side trait `CleanupDrain`); `BlobStore::capabilities` (`lists_staging` is false for S3 through `object_store`, so an empty `list_stale_staging` result there means "cannot tell").

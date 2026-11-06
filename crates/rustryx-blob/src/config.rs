@@ -121,14 +121,14 @@ impl LocalConfig {
 pub struct S3Config {
     /// Bucket name.
     pub bucket: String,
-    /// Region used for request signing. `MinIO` and Ceph accept any non-empty value.
+    /// Region used for request signing. SeaweedFS and Ceph accept any non-empty value.
     #[serde(default = "default_region")]
     pub region: String,
-    /// Custom endpoint (`MinIO`, Ceph RGW). Absent means AWS.
+    /// Custom endpoint (SeaweedFS, Ceph RGW). Absent means AWS.
     #[serde(default)]
     pub endpoint: Option<String>,
     /// Path-style addressing (`https://host/bucket/key`). Defaults to true when an
-    /// endpoint is set (`MinIO`, Ceph) and to false for AWS.
+    /// endpoint is set (SeaweedFS, Ceph) and to false for AWS.
     #[serde(default)]
     pub path_style: Option<bool>,
     /// Permit a plain `http://` endpoint. Off by default; only for a trusted network.
@@ -444,7 +444,7 @@ mod tests {
     #[test]
     fn must_not_allow_plain_http_unless_configured() {
         let mut config = valid();
-        config.endpoint = Some("http://minio:9000".into());
+        config.endpoint = Some("http://seaweedfs:8333".into());
         assert!(rejected(&config).contains("allow_http"));
         config.allow_http = true;
         config.validate().unwrap();

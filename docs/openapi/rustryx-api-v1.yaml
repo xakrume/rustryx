@@ -2665,7 +2665,7 @@ paths:
                   name: archive
                   kind: s3
                   config:
-                    endpoint: https://minio.example.org
+                    endpoint: https://seaweedfs.example.org
                     bucket: rustryx-archive
                     region: us-east-1
                     key_prefix: ''
@@ -13433,7 +13433,7 @@ components:
       required: [endpoint, bucket, region]
       additionalProperties: false
       example:
-        endpoint: https://minio.example.org
+        endpoint: https://seaweedfs.example.org
         bucket: rustryx-archive
         region: us-east-1
         key_prefix: ''
@@ -13488,7 +13488,7 @@ components:
         name: archive
         kind: s3
         config:
-          endpoint: https://minio.example.org
+          endpoint: https://seaweedfs.example.org
           bucket: rustryx-archive
           region: us-east-1
           key_prefix: ''

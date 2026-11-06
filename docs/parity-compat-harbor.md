@@ -127,7 +127,7 @@ Sources: N-types, N-fields, N-formats, N-matrix, N-pub, N-docker, N-routing, N-a
 |---|---|---|---|---|
 | `BLOB-01` File blob store on a local or network path (NFS v4, EFS) | yes (npl) | yes: filesystem backend (default) | `phase1` | `rustryx-blob` local store; HA needs a shared RWX volume (SRE-34) |
 | `BLOB-02` S3 blob store: bucket, region, key prefix | yes (CE) | yes: S3 backend | `phase1` | `rustryx-blob` S3 store, multipart parts of 16 MiB (01-architecture 1.4) |
-| `BLOB-03` S3-compatible endpoint URL and path-style access | yes (CE) | `unverified` (S3 backend is listed, endpoint option not seen) | `phase1` | MinIO and Ceph per README 3.1; `endpoint` and `path_style` in `rustryx-config` |
+| `BLOB-03` S3-compatible endpoint URL and path-style access | yes (CE) | `unverified` (S3 backend is listed, endpoint option not seen) | `phase1` | SeaweedFS in the local stack, Ceph RGW and AWS S3 the same way; `endpoint` and `path_style` in `rustryx-config` |
 | `BLOB-04` S3 credentials: static keys, session token, assume-role, instance metadata, environment | yes (CE) | unverified | `wave2` | phase 1 takes static keys and environment; assume-role and instance metadata added in `rustryx-blob` |
 | `BLOB-05` S3 server-side encryption (SSE-S3, SSE-KMS with full key id) | yes (CE) | unverified | `wave2` | `encryption` block on the S3 blob store definition |
 | `BLOB-06` S3 connection pool size and extra tuning | yes (CE) | thread limits in the storage section | `wave2` | pool settings in `BlobStoreDef` |

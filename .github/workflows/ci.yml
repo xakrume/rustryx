@@ -225,7 +225,7 @@ jobs:
       # Hosted runners (~7 GiB) are killed (OOM, then exit 143) when testcontainers
       # shares the box with llvm-cov. Drop those binaries here. They stay in the tree:
       # `cargo test` / `cargo nextest run` still runs them locally (Docker for the
-      # PostgreSQL binaries; RUSTRYX_IT=1 for MinIO, Keycloak, OpenLDAP and real
+      # PostgreSQL binaries; RUSTRYX_IT=1 for SeaweedFS, Keycloak, OpenLDAP and real
       # clients). GitLab's test job still runs the full set with RUSTRYX_IT=1.
       # This job does not set RUSTRYX_IT, so a gated test that the filter misses
       # skips instead of starting a container. Coverage gate stays observation (DSO-17).
@@ -239,7 +239,7 @@ jobs:
             --filterset 'not (
                 (package(=rustryx-db) and binary(=it))
                 or (package(=rustryx-server) and (binary(=postgres_serve) or binary(=postgres_tasks)))
-                or (package(=rustryx-blob) and binary(=s3_minio))
+                or (package(=rustryx-blob) and binary(=s3_seaweed))
                 or (package(=rustryx-auth) and binary(=oidc_keycloak))
                 or test(=ldap::integration_tests::openldap_with_the_shared_fixture)
               )'

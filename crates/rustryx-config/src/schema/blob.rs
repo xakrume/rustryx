@@ -38,7 +38,7 @@ pub struct BlobConfig {
     pub s3_access_key: Option<ConfigSecret>,
     /// S3 secret access key.
     pub s3_secret_key: Option<ConfigSecret>,
-    /// Use path-style addressing (`MinIO`, `Ceph`).
+    /// Use path-style addressing (`SeaweedFS`, `Ceph`).
     pub s3_path_style: bool,
     /// Multipart part size in MiB. Memory per upload is bounded by one part.
     pub s3_part_size_mb: u64,

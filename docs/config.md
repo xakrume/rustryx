@@ -160,7 +160,7 @@ Generated from the key table and the default configuration by a test; edit
 | `blob.s3_region` | `RUSTRYX_BLOB_S3_REGION` | string | unset | - | S3 region. Required for `s3`. |
 | `blob.s3_access_key` | `RUSTRYX_BLOB_S3_ACCESS_KEY` | string | unset | secret (also `RUSTRYX_BLOB_S3_ACCESS_KEY_FILE`) | S3 access key id. Required for `s3`. |
 | `blob.s3_secret_key` | `RUSTRYX_BLOB_S3_SECRET_KEY` | string | unset | secret (also `RUSTRYX_BLOB_S3_SECRET_KEY_FILE`) | S3 secret access key. Required for `s3`. |
-| `blob.s3_path_style` | `RUSTRYX_BLOB_S3_PATH_STYLE` | bool | `true` | - | Path-style addressing (MinIO, Ceph). |
+| `blob.s3_path_style` | `RUSTRYX_BLOB_S3_PATH_STYLE` | bool | `true` | - | Path-style addressing (SeaweedFS, Ceph). |
 | `blob.s3_part_size_mb` | `RUSTRYX_BLOB_S3_PART_SIZE_MB` | integer | `16` | - | Multipart part size in MiB (5 to 5120). |
 | `auth.anonymous_enabled` | `RUSTRYX_AUTH_ANONYMOUS_ENABLED` | bool | `false` | - | Global switch for anonymous access. A repository must also allow it. |
 | `auth.allow_local_role_supplement` | `RUSTRYX_AUTH_ALLOW_LOCAL_ROLE_SUPPLEMENT` | bool | `false` | - | Let manually assigned roles add to roles derived from groups. |

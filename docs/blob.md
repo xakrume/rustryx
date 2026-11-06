@@ -16,7 +16,7 @@ encryption and pool options (wave 2, stream F; the registry refuses those kinds 
 | Abort, drop and task cancellation leave nothing | `abort` removes or aborts; `Drop` schedules the same on a task tracker | `must_not_leave_a_partial_blob_after_{abort,drop}`, `..._when_the_writing_task_is_cancelled`, `..._when_commit_fails` and the S3 equivalents |
 | Commit is atomic | `rename(2)` inside one file system; S3 completion is atomic | `commit_is_atomic_under_concurrent_writers_to_different_keys` |
 | An acknowledged commit survives a crash | local: fsync of data before the rename, fsync of the directories after it | by construction (see "Local store") |
-| Bodies are never held in memory | 64 KiB slices through a bounded buffer; S3 buffers one part | `must_not_buffer_whole_blob_in_memory` (512 MiB, RSS growth in the KiB range), MinIO suite (160 MiB, about 26 MiB growth with 16 MiB parts) |
+| Bodies are never held in memory | 64 KiB slices through a bounded buffer; S3 buffers one part | `must_not_buffer_whole_blob_in_memory` (512 MiB, RSS growth in the KiB range), SeaweedFS suite (160 MiB, about 26 MiB growth with 16 MiB parts) |
 | A key cannot escape the root | strict allowlist, no `..`, no absolute path, reserved staging name, second check on the resolved path | `must_not_escape_the_root_with_hostile_keys` |
 | An invalid key is never reported as a missing object | the typed `BlobError::InvalidKey` on every operation of both stores | `must_not_report_an_invalid_key_as_a_missing_blob`, `must_not_report_an_invalid_key_as_a_missing_object` |
 | A local write below the free space floor is refused, reads, listings and deletes never are | `DiskGuard` is consulted by `begin` and by every `write`, nowhere else | `must_not_accept_a_write_below_the_free_space_floor`, `must_not_block_reads_listings_or_deletes_when_the_disk_is_full` |
@@ -24,7 +24,7 @@ encryption and pool options (wave 2, stream F; the registry refuses those kinds 
 | A listing never reports what `get` could not reach | names that are not a valid key of their own shard are skipped, symlinks are never followed | `must_not_report_files_that_are_not_blobs_of_their_shard`, `must_not_follow_symlinks_out_of_the_root`, `foreign_objects_are_not_blobs` |
 | A cursor from a client is validated like a key | `key_of_location` accepts only `<b0>/<b1>/<valid key>` with the shard of that key | `must_not_follow_a_hostile_cursor` (local and S3) |
 | A presigned URL lives at most 900 s and never reaches a log | clamp in two steps, `Secret` wrapper, no URL in any error | `must_not_sign_beyond_the_max_ttl`, `must_not_leak_a_presigned_url_through_debug_or_the_store` |
-| A presigned URL cannot be changed by its holder | the response overrides are part of the SigV4 signature | MinIO suite: tampered `response-content-disposition` is 403 |
+| A presigned URL cannot be changed by its holder | the response overrides are part of the SigV4 signature | SeaweedFS suite: tampered `response-content-disposition` is 403 |
 | A key or path is never a metric label | closed label sets, pinned by a test over every series | `must_not_put_a_key_or_a_path_into_a_label` |
 | Digests describe the stored bytes | SHA-1, SHA-256, MD5 computed from the very slices handed to the backend; a failed write poisons the writer | `must_not_commit_after_a_failed_write`, digest vector and chunk boundary tests |
 | No std blocking calls, no hashing on the blocking pool | production code scanned in a test | `must_not_use_blocking_constructs_in_production_code` |
@@ -124,7 +124,7 @@ messages name fields and limits, never values.
 | Field | Default | Meaning |
 |---|---|---|
 | `bucket` | required | bucket name |
-| `region` | `us-east-1` | signing region (`MinIO` and Ceph accept any non-empty value) |
+| `region` | `us-east-1` | signing region (SeaweedFS and Ceph accept any non-empty value) |
 | `endpoint` | AWS | custom endpoint; `https` unless `allow_http` is true |
 | `path_style` | true with an endpoint, false for AWS | `https://host/bucket/key` addressing |
 | `allow_http` | false | permit a plain `http://` endpoint (trusted network only) |
@@ -220,9 +220,9 @@ forever.
 ```
 
 AWS: `aws s3api put-bucket-lifecycle-configuration --bucket <bucket> --lifecycle-configuration file://rule.json`.
-Ceph RGW supports the same rule. `MinIO` also removes stale uploads on its own
-(configurable expiry, 24 h by default in current releases; check your version) and
-accepts the rule. Keep `DaysAfterInitiation` above the longest legitimate upload.
+Ceph RGW and SeaweedFS accept the same rule. Apply it. Do not rely on a server
+default to abort an abandoned upload. Keep `DaysAfterInitiation` above the longest
+legitimate upload.
 
 ### Permissions
 
@@ -272,7 +272,7 @@ the object names, not of the keys (the shard is a hash).
 - Objects under the prefix that are not `<b0>/<b1>/<valid key>` with the shard of that key
   (a console upload, `_rustryx/health-probe`, a misfiled name) are skipped and counted in
   one log line: no `get`, `head` or `delete` could reach them.
-- The names must arrive in ascending order. S3, MinIO and Ceph list that way, but the
+- The names must arrive in ascending order. S3, SeaweedFS and Ceph list that way, but the
   `ObjectStore` trait does not promise it, and a walk over an unordered backend would repeat
   or skip keys without an error, so an out-of-order name is a `Backend` error.
 - A listing error is an error, never an empty page. `verify_blobs` would read an empty
@@ -388,17 +388,17 @@ instead of failing a download.
 ## Tests
 
 ```
-cargo test -p rustryx-blob                    # unit, local store, disk floor, listing, memory, rules; MinIO when Docker answers
-RUSTRYX_IT=1 cargo test -p rustryx-blob --test s3_minio -- --nocapture   # MinIO required
+cargo test -p rustryx-blob                    # unit, local store, disk floor, listing, memory, rules; SeaweedFS when Docker answers
+RUSTRYX_IT=1 cargo test -p rustryx-blob --test s3_seaweed -- --nocapture   # SeaweedFS required
 RUSTRYX_IT=0 cargo test -p rustryx-blob       # never touch Docker
 cargo llvm-cov -p rustryx-blob --summary-only
 ```
 
-`RUSTRYX_MINIO_IMAGE=name:tag` overrides the image. The `minio/minio` repository no longer
-exists on Docker Hub; the default falls back to `cgr.dev/chainguard/minio:latest`, the
-same server. `memory_streaming.rs` must keep exactly one test (RSS is per process).
+`RUSTRYX_SEAWEEDFS_IMAGE=name:tag` overrides the image. The default is
+`chrislusf/seaweedfs:4.13`, the same tag `deploy/compose` pins.
+`memory_streaming.rs` must keep exactly one test (RSS is per process).
 
-The MinIO suite also lists keys (paging, a foreign object under the prefix, a hostile
+The SeaweedFS suite also lists keys (paging, a foreign object under the prefix, a hostile
 cursor) and fetches presigned URLs with a bare TCP client that holds no credentials: the
 body and the signed overrides come back, a tampered override is 403, a key that is not
 there is 404, a one second URL is 403 after it expires.

@@ -76,7 +76,7 @@ function growth(end: number, days: number, perDay: number): number[] {
 
 function seed(): StoreRecord[] {
   const s3 = (bucket: string) => ({
-    endpoint: 'https://minio.example.org',
+    endpoint: 'https://seaweedfs.example.org',
     bucket,
     region: 'us-east-1',
     key_prefix: '',

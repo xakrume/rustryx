@@ -229,7 +229,7 @@ pub const KEYS: &[KeySpec] = &[
     key!(
         "blob.s3_path_style",
         Kind::Bool,
-        "Path-style addressing (MinIO, Ceph)."
+        "Path-style addressing (SeaweedFS, Ceph)."
     ),
     key!(
         "blob.s3_part_size_mb",

@@ -117,9 +117,9 @@ product.
 
 - `crates/rustryx-server/Cargo.toml` needs `[[bin]] name = "rustryx"`: both Dockerfiles fail without it.
 - The OIDC callback path `/api/v1/auth/oidc/callback` is assumed in the realm JSON: the api crate must serve it (or change the realm redirect URIs).
-- Official MinIO images are gone from Docker Hub: compose pins `bitnamilegacy/minio`, the S3 integration test needs `RUSTRYX_MINIO_IMAGE` (blob agent fell back to `cgr.dev/chainguard/minio:latest`). Decide on one image for both.
+- The local stack and the S3 integration test use SeaweedFS (`chrislusf/seaweedfs:4.13`). `RUSTRYX_SEAWEEDFS_IMAGE` overrides the test image.
 - Release binary is built with `cargo auditable build --locked --release`, otherwise Trivy sees no Rust crates and the scan would be green while checking nothing.
-- Image tags: `X.Y.Z-musl|glibc`, `sha-<7>-musl|glibc` on `ghcr.io/<owner>/rustryx` (matches chart `image.variant`). Repository variables: `RUSTRYX_SIGNING`, `COSIGN_KMS_KEY_REF`, `VAULT_ADDR`, `VAULT_JWT_ROLE`, `VAULT_JWT_AUDIENCE`, `IMAGE_SIZE_BUDGET_MB`, `RUSTRYX_MINIO_IMAGE`, `ENABLE_SEMGREP`. Key-based signing needs a committed `ci/cosign.pub`.
+- Image tags: `X.Y.Z-musl|glibc`, `sha-<7>-musl|glibc` on `ghcr.io/<owner>/rustryx` (matches chart `image.variant`). Repository variables: `RUSTRYX_SIGNING`, `COSIGN_KMS_KEY_REF`, `VAULT_ADDR`, `VAULT_JWT_ROLE`, `VAULT_JWT_AUDIENCE`, `IMAGE_SIZE_BUDGET_MB`, `RUSTRYX_SEAWEEDFS_IMAGE`, `ENABLE_SEMGREP`. Key-based signing needs a committed `ci/cosign.pub`.
 - Advisories: `RUSTSEC-2024-0449` (`unsafe-libyaml` via `serde_yaml_ng` in rustryx-config) is a warning, consider replacing the YAML crate; `RUSTSEC-2023-0071` (`rsa`) is an exception until 2027-01-22 enforced by `ci/check-exceptions.py`.
 - Not run on a server: GitHub jobs, `.gitlab-ci.yml`, the `rustryx` compose profile, a build of the real workspace image. Only `slsa-github-generator@v2.1.0` is pinned by tag (the generator requires it).
 - Not done: Makefile, devcontainer, `.pre-commit-config.yaml`, `security-exceptions.yml`, `SECURITY.md`.

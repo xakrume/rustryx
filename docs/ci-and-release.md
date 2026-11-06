@@ -70,10 +70,10 @@ are never cancelled: cancelling one could leave a tag without an image.
 
 GitHub's `test` job does not start Docker. The nextest filter drops the
 testcontainers binaries: `rustryx-db` `it` (PostgreSQL), `rustryx-server`
-`postgres_serve` and `postgres_tasks`, `rustryx-blob` `s3_minio`, `rustryx-auth`
+`postgres_serve` and `postgres_tasks`, `rustryx-blob` `s3_seaweed`, `rustryx-auth`
 `oidc_keycloak`, and `ldap::integration_tests::openldap_with_the_shared_fixture`.
 `RUSTRYX_IT` is unset, so any other real-client test skips. Run those locally
-with Docker (`cargo test -p rustryx-db`, and `RUSTRYX_IT=1` for MinIO, Keycloak,
+with Docker (`cargo test -p rustryx-db`, and `RUSTRYX_IT=1` for SeaweedFS, Keycloak,
 OpenLDAP and real clients). GitLab's `test` job still runs the full set.
 `nightly.yml` does not run them.
 
@@ -155,7 +155,7 @@ No secret is needed: registry access uses the job token. These are variables
 | `COSIGN_KMS_KEY_REF` | key reference for `kms` and `both`, for example `hashivault://rustryx-release` |
 | `VAULT_ADDR`, `VAULT_JWT_ROLE`, `VAULT_JWT_AUDIENCE` | Vault or OpenBao login of the workflow (audience defaults to `rustryx-release`) |
 | `IMAGE_SIZE_BUDGET_MB` | fails `ci/test-image.sh` above this uncompressed size; unset means report only |
-| `RUSTRYX_MINIO_IMAGE` | MinIO image for the S3 integration test (see below) |
+| `RUSTRYX_SEAWEEDFS_IMAGE` | SeaweedFS image for the S3 integration test (default `chrislusf/seaweedfs:4.13`) |
 | `ENABLE_SEMGREP` | `true` turns the Semgrep job on |
 
 Also set: required status checks `lint`, `ui`, `architecture`, `test`,
@@ -167,9 +167,8 @@ Branch protection / rulesets need GitHub Pro on a private repository (or a publi
 repo). Until that is available, the `ci` workflow still runs and reports checks on
 every pull request and every push to `main`; they are not merge-blocking yet.
 
-`RUSTRYX_MINIO_IMAGE`: the community MinIO image is no longer published, so the
-default image candidates of the S3 test may not pull. Set the variable to an image
-you can reach. The local compose stack pins `bitnamilegacy/minio` for the same reason.
+`RUSTRYX_SEAWEEDFS_IMAGE`: the S3 integration test and the local compose stack
+use `chrislusf/seaweedfs:4.13`. Set the variable when that tag cannot be pulled.
 
 ## Images and tags
 
