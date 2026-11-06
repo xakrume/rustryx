@@ -199,7 +199,7 @@ jobs:
 
   test:
     runs-on: ubuntu-24.04
-    # Cold llvm-cov + serialized Docker IT can run past an hour on a cold cache.
+    # Two compile passes (plain nextest + llvm-cov) on a cold cache need headroom.
     timeout-minutes: 120
     permissions:
       contents: read
@@ -207,21 +207,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Hosted runners have ~7 GiB RAM. Instrumented rustc + Keycloak/Postgres/MinIO
-      # previously killed the job ("lost communication"). Swap absorbs the peak.
-      - name: Add swap space
-        run: |
-          sudo fallocate -l 8G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          free -h
       - name: Rust toolchain from rust-toolchain.toml
         run: rustup toolchain install --profile minimal
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          # Separate key from non-coverage jobs: instrumented artifacts are incompatible.
-          key: llvm-cov
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest@0.9.148,cargo-llvm-cov@0.9.1
@@ -234,33 +222,47 @@ jobs:
           printf '%s\n' '<!doctype html><html><body><div id="root"></div></body></html>' >ui/dist/index.html
           printf '%s\n' '' >ui/dist/theme-init.js
           printf '%s\n' '<svg xmlns="http://www.w3.org/2000/svg"/>' >ui/dist/favicon.svg
+      # Split from llvm-cov: hosted runners (~7 GiB) OOM when instrumented rustc shares
+      # the box with Keycloak/Postgres/MinIO. Plain nextest keeps Docker IT required
+      # without the instrumentation RSS peak.
       # RUSTRYX_IT=1 makes the integration tests REQUIRED: a missing Docker or image
       # is a failure and not a skip (crates/rustryx-blob/tests/s3_minio.rs). They start
       # PostgreSQL, MinIO, Keycloak and OpenLDAP through testcontainers; the Keycloak
       # realm and the LDIF are the shared fixtures in deploy/compose, proven by the
       # `fixtures` job. A service container cannot mount the realm file or pass
       # `--import-realm`, which is why they are not declared as `services:` here.
-      - name: Unit and integration tests with coverage
+      - name: Unit and integration tests
         env:
           RUSTRYX_IT: "1"
           RUSTRYX_MINIO_IMAGE: ${{ vars.RUSTRYX_MINIO_IMAGE }}
-          # Peak RSS of parallel rustc+llvm instrumentation OOMs the 7 GiB runner.
           CARGO_BUILD_JOBS: "2"
         run: |
           docker version --format 'docker server {{.Server.Version}}'
-          cargo llvm-cov nextest --workspace --all-features --locked \
-            --config-file ci/nextest.toml --profile ci --no-report
+          cargo nextest run --workspace --all-features --locked \
+            --config-file ci/nextest.toml --profile ci
       - name: Doc tests
         run: cargo test --doc --workspace --all-features --locked
-      - name: Reports (JUnit, Cobertura, lcov, summary)
+      # Coverage without RUSTRYX_IT: Docker IT tests skip, so the instrumented run does
+      # not also host Keycloak/MinIO. Gate below stays observation-mode (DSO-17).
+      - name: Unit tests with coverage
+        id: llvm_cov
+        env:
+          CARGO_BUILD_JOBS: "2"
+        run: |
+          cargo llvm-cov nextest --workspace --all-features --locked \
+            --config-file ci/nextest.toml --profile ci --no-report
+      - name: Collect JUnit
         if: always()
+        run: find target -path '*nextest*' -name junit.xml -exec cp {} junit.xml \; -quit
+      - name: Reports (Cobertura, lcov, summary)
+        if: steps.llvm_cov.outcome == 'success'
         run: |
           ignore='(/tests/|/benches/|/rustryx-testkit/)'
           cargo llvm-cov report --ignore-filename-regex "$ignore" --lcov --output-path lcov.info
           cargo llvm-cov report --ignore-filename-regex "$ignore" --cobertura --output-path cobertura.xml
           cargo llvm-cov report --ignore-filename-regex "$ignore" --json --summary-only --output-path coverage-summary.json
-          find target -path '*nextest*' -name junit.xml -exec cp {} junit.xml \; -quit
       - name: Restore the coverage baseline of main
+        if: steps.llvm_cov.outcome == 'success'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: coverage-baseline.json
@@ -270,6 +272,7 @@ jobs:
             coverage-baseline-
       - name: Coverage thresholds and regression against main
         id: coverage
+        if: steps.llvm_cov.outcome == 'success'
         continue-on-error: true # OBSERVATION MODE (DSO-17): remove this line to make the coverage gate blocking
         run: |
           python3 ci/coverage-gate.py --baseline coverage-baseline.json \
