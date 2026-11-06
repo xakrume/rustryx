@@ -199,15 +199,23 @@ jobs:
 
   test:
     runs-on: ubuntu-24.04
-    # Cold llvm-cov compile + Docker IT routinely exceeds 45m; keep headroom after
-    # the parallelism caps below (runner OOM previously killed the job near 58m).
-    timeout-minutes: 90
+    # Cold llvm-cov + serialized Docker IT can run past an hour on a cold cache.
+    timeout-minutes: 120
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Hosted runners have ~7 GiB RAM. Instrumented rustc + Keycloak/Postgres/MinIO
+      # previously killed the job ("lost communication"). Swap absorbs the peak.
+      - name: Add swap space
+        run: |
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
       - name: Rust toolchain from rust-toolchain.toml
         run: rustup toolchain install --profile minimal
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
