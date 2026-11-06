@@ -199,7 +199,7 @@ jobs:
 
   test:
     runs-on: ubuntu-24.04
-    # Two compile passes (plain nextest + llvm-cov) on a cold cache need headroom.
+    # llvm-cov plus doc tests. Docker integration tests are not in this job.
     timeout-minutes: 120
     permissions:
       contents: read
@@ -222,35 +222,29 @@ jobs:
           printf '%s\n' '<!doctype html><html><body><div id="root"></div></body></html>' >ui/dist/index.html
           printf '%s\n' '' >ui/dist/theme-init.js
           printf '%s\n' '<svg xmlns="http://www.w3.org/2000/svg"/>' >ui/dist/favicon.svg
-      # Split from llvm-cov: hosted runners (~7 GiB) OOM when instrumented rustc shares
-      # the box with Keycloak/Postgres/MinIO. Plain nextest keeps Docker IT required
-      # without the instrumentation RSS peak.
-      # RUSTRYX_IT=1 makes the integration tests REQUIRED: a missing Docker or image
-      # is a failure and not a skip (crates/rustryx-blob/tests/s3_minio.rs). They start
-      # PostgreSQL, MinIO, Keycloak and OpenLDAP through testcontainers; the Keycloak
-      # realm and the LDIF are the shared fixtures in deploy/compose, proven by the
-      # `fixtures` job. A service container cannot mount the realm file or pass
-      # `--import-realm`, which is why they are not declared as `services:` here.
-      - name: Unit and integration tests
-        env:
-          RUSTRYX_IT: "1"
-          RUSTRYX_MINIO_IMAGE: ${{ vars.RUSTRYX_MINIO_IMAGE }}
-          CARGO_BUILD_JOBS: "2"
-        run: |
-          docker version --format 'docker server {{.Server.Version}}'
-          cargo nextest run --workspace --all-features --locked \
-            --config-file ci/nextest.toml --profile ci
-      - name: Doc tests
-        run: cargo test --doc --workspace --all-features --locked
-      # Coverage without RUSTRYX_IT: Docker IT tests skip, so the instrumented run does
-      # not also host Keycloak/MinIO. Gate below stays observation-mode (DSO-17).
+      # Hosted runners (~7 GiB) are killed (OOM, then exit 143) when testcontainers
+      # shares the box with llvm-cov. Drop those binaries here. They stay in the tree:
+      # `cargo test` / `cargo nextest run` still runs them locally (Docker for the
+      # PostgreSQL binaries; RUSTRYX_IT=1 for MinIO, Keycloak, OpenLDAP and real
+      # clients). GitLab's test job still runs the full set with RUSTRYX_IT=1.
+      # This job does not set RUSTRYX_IT, so a gated test that the filter misses
+      # skips instead of starting a container. Coverage gate stays observation (DSO-17).
       - name: Unit tests with coverage
         id: llvm_cov
         env:
           CARGO_BUILD_JOBS: "2"
         run: |
           cargo llvm-cov nextest --workspace --all-features --locked \
-            --config-file ci/nextest.toml --profile ci --no-report
+            --config-file ci/nextest.toml --profile ci --no-report \
+            --filterset 'not (
+                (package(=rustryx-db) and binary(=it))
+                or (package(=rustryx-server) and (binary(=postgres_serve) or binary(=postgres_tasks)))
+                or (package(=rustryx-blob) and binary(=s3_minio))
+                or (package(=rustryx-auth) and binary(=oidc_keycloak))
+                or test(=ldap::integration_tests::openldap_with_the_shared_fixture)
+              )'
+      - name: Doc tests
+        run: cargo test --doc --workspace --all-features --locked
       - name: Collect JUnit
         if: always()
         run: find target -path '*nextest*' -name junit.xml -exec cp {} junit.xml \; -quit

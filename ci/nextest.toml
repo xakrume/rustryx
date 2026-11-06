@@ -5,9 +5,8 @@
 fail-fast = false
 # A flaky test is a bug to fix, not to retry: retries would turn red into green.
 retries = 0
-# Serialize on CI: GitHub-hosted runners (~7 GiB) OOM when llvm-cov instrumentation
-# shares the box with Keycloak/Postgres/MinIO containers. One test at a time keeps
-# peak RSS under the runner limit (with the swap step in .github/workflows/ci.yml).
+# One test at a time. llvm-cov on a GitHub-hosted runner (~7 GiB) peaks high, and
+# GitLab's test job runs this same profile together with testcontainers.
 test-threads = 1
 slow-timeout = { period = "60s", terminate-after = 5 }
 

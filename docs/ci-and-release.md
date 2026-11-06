@@ -57,7 +57,7 @@ are never cancelled: cancelling one could leave a tag without an image.
 | `lint` | `cargo fmt`, `clippy -D warnings --locked`, hadolint, yamllint, actionlint, shellcheck, the Python tests of `ci/`, compiler and base image pins, `ci/release-check.sh` on tags | blocking |
 | `ui` | `npm ci` in `ui/`, then `npm run check` (typecheck, lint, vitest, licences) and `npm run build`; same as `make ui-check` / `make ui-build` | blocking |
 | `architecture` | `easement check` (full on `main`, `--diff origin/main` on pull requests) | blocking |
-| `test` | unit and integration tests (nextest, `RUSTRYX_IT=1`), doc tests, JUnit, Cobertura | blocking |
+| `test` | unit tests and in-process integration tests (nextest under llvm-cov), doc tests, JUnit, Cobertura. Docker/testcontainers tests are excluded | blocking |
 | `test`, coverage step | 80% workspace, 90% for `rustryx-auth`, `rustryx-rbac` and the format parser crates, no drop against main | observation |
 | `fixtures` | `ci/verify-fixtures.sh`: realm and LDIF behave as README 8.6 needs | blocking |
 | `code-security`, every step | exceptions record, `cargo deny`, deny.toml negative tests, `cargo audit` (high and above), gitleaks, Trivy on `Cargo.lock`, SBOM not empty | observation |
@@ -67,6 +67,15 @@ are never cancelled: cancelling one could leave a tag without an image.
 | `publish` | tags, immutability guard | blocking |
 | `sign`, `provenance`, `verify` | signature, SBOM attestation, SLSA provenance, verification by digest | blocking |
 | `nightly` | `cargo audit`, `cargo deny check advisories`, exceptions not expired, fuzzing | blocks nothing, a red run is the alert |
+
+GitHub's `test` job does not start Docker. The nextest filter drops the
+testcontainers binaries: `rustryx-db` `it` (PostgreSQL), `rustryx-server`
+`postgres_serve` and `postgres_tasks`, `rustryx-blob` `s3_minio`, `rustryx-auth`
+`oidc_keycloak`, and `ldap::integration_tests::openldap_with_the_shared_fixture`.
+`RUSTRYX_IT` is unset, so any other real-client test skips. Run those locally
+with Docker (`cargo test -p rustryx-db`, and `RUSTRYX_IT=1` for MinIO, Keycloak,
+OpenLDAP and real clients). GitLab's `test` job still runs the full set.
+`nightly.yml` does not run them.
 
 There is no `deploy` job. Deployment is by GitOps or `helm upgrade` and belongs
 with the chart in `deploy/helm/`; a job that does not deploy would be an empty job.
@@ -340,7 +349,9 @@ Same stages and scripts. Differences worth knowing:
   reviewed and statically checked, not run on a GitLab server).
 * `fixtures` needs a shell-executor runner (tag in `FIXTURES_RUNNER_TAG`), because
   the stack is queried on `localhost`; docker-in-docker publishes its ports on
-  another host. `test` uses docker-in-docker with `TESTCONTAINERS_HOST_OVERRIDE`.
+  another host. `test` uses docker-in-docker with `TESTCONTAINERS_HOST_OVERRIDE`
+  and `RUSTRYX_IT=1`, so it still runs the Docker integration tests that GitHub's
+  `test` job skips.
 * The arm64 jobs use the tag `saas-linux-medium-arm64`; change it on a
   self-managed instance.
 * Keyless signing uses the job's `SIGSTORE_ID_TOKEN`; the verification identity is
