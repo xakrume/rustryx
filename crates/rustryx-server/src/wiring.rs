@@ -724,7 +724,22 @@ mod tests {
         assert!(components.authenticator.is_some());
         assert!(components.rbac.is_some());
         assert!(components.sessions.is_some());
-        assert_eq!(components.modules.len(), 2, "native auth and artifacts");
+        let module_names: Vec<_> = components.modules.iter().map(|m| m.name()).collect();
+        assert_eq!(
+            module_names,
+            [
+                "native-auth",
+                "artifacts",
+                "rpm-sync",
+                "audit-log",
+                "blob-dedup",
+                "repositories",
+                "compat-v1",
+                "browse",
+                "catalog",
+                "ops",
+            ]
+        );
         let names: Vec<_> = components.background.iter().map(|task| task.name).collect();
         for expected in [
             "invalidation_bus",
