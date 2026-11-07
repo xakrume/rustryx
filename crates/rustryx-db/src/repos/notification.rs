@@ -69,13 +69,12 @@ impl NotificationRepo for PgNotificationRepo {
             .validate()
             .map_err(|error| StoreError::Conflict(error.to_string()))?;
         scope_exists(&self.pool, subscription.scope).await?;
-        let current: Option<i64> = sqlx::query_scalar(
-            "SELECT version FROM notification_subscriptions WHERE id = $1",
-        )
-        .bind(subscription.id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| map_err("read notification subscription", e))?;
+        let current: Option<i64> =
+            sqlx::query_scalar("SELECT version FROM notification_subscriptions WHERE id = $1")
+                .bind(subscription.id.as_uuid())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| map_err("read notification subscription", e))?;
         let version = match (current, expected_version) {
             (Some(current), Some(expected)) if current == expected => current.saturating_add(1),
             (Some(current), Some(expected)) => {
@@ -147,35 +146,34 @@ impl NotificationRepo for PgNotificationRepo {
         &self,
         scope: Option<NotifyScope>,
     ) -> Result<Vec<NotificationSubscription>, StoreError> {
-        let rows: Vec<SubRow> = match scope {
-            None => {
-                sqlx::query_as("SELECT * FROM notification_subscriptions ORDER BY id")
+        let rows: Vec<SubRow> =
+            match scope {
+                None => {
+                    sqlx::query_as("SELECT * FROM notification_subscriptions ORDER BY id")
+                        .fetch_all(&self.pool)
+                        .await
+                }
+                Some(NotifyScope::System) => {
+                    sqlx::query_as(
+                        "SELECT * FROM notification_subscriptions WHERE system ORDER BY id",
+                    )
                     .fetch_all(&self.pool)
                     .await
-            }
-            Some(NotifyScope::System) => {
-                sqlx::query_as("SELECT * FROM notification_subscriptions WHERE system ORDER BY id")
-                    .fetch_all(&self.pool)
-                    .await
-            }
-            Some(NotifyScope::Project(id)) => {
-                sqlx::query_as(
+                }
+                Some(NotifyScope::Project(id)) => sqlx::query_as(
                     "SELECT * FROM notification_subscriptions WHERE project_id = $1 ORDER BY id",
                 )
                 .bind(id.as_uuid())
                 .fetch_all(&self.pool)
-                .await
-            }
-            Some(NotifyScope::Repository(id)) => {
-                sqlx::query_as(
+                .await,
+                Some(NotifyScope::Repository(id)) => sqlx::query_as(
                     "SELECT * FROM notification_subscriptions WHERE repository_id = $1 ORDER BY id",
                 )
                 .bind(id.as_uuid())
                 .fetch_all(&self.pool)
-                .await
+                .await,
             }
-        }
-        .map_err(|e| map_err("list notification subscriptions", e))?;
+            .map_err(|e| map_err("list notification subscriptions", e))?;
         rows.into_iter().map(decode_sub).collect()
     }
 
@@ -305,7 +303,10 @@ impl NotificationRepo for PgNotificationRepo {
         error: Option<&str>,
         retry_in: Option<Duration>,
     ) -> Result<bool, StoreError> {
-        let ends = matches!(status, EmailStatus::Sent | EmailStatus::Failed | EmailStatus::Dead);
+        let ends = matches!(
+            status,
+            EmailStatus::Sent | EmailStatus::Failed | EmailStatus::Dead
+        );
         if retry_in.is_none() && !ends {
             return Err(StoreError::Invalid(
                 "a mail ends as sent, failed or dead, or goes back with a retry delay".to_owned(),
@@ -345,13 +346,12 @@ impl NotificationRepo for PgNotificationRepo {
     }
 
     async fn count_sent_since(&self, since: OffsetDateTime) -> Result<u64, StoreError> {
-        let count: i64 = sqlx::query_scalar(
-            "SELECT count(*)::bigint FROM email_deliveries WHERE sent_at >= $1",
-        )
-        .bind(since)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| map_err("count sent email", e))?;
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*)::bigint FROM email_deliveries WHERE sent_at >= $1")
+                .bind(since)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| map_err("count sent email", e))?;
         Ok(u64::try_from(count).unwrap_or(0))
     }
 
@@ -404,7 +404,12 @@ fn decode_sub(row: SubRow) -> Result<NotificationSubscription, StoreError> {
         (true, None, None) => NotifyScope::System,
         (false, Some(id), None) => NotifyScope::Project(ProjectId::from_uuid(id)),
         (false, None, Some(id)) => NotifyScope::Repository(RepositoryId::from_uuid(id)),
-        _ => return Err(backend("read notification subscription", "scope is ambiguous")),
+        _ => {
+            return Err(backend(
+                "read notification subscription",
+                "scope is ambiguous",
+            ));
+        }
     };
     let events = row
         .events
@@ -414,9 +419,14 @@ fn decode_sub(row: SubRow) -> Result<NotificationSubscription, StoreError> {
                 .ok_or_else(|| backend("read notification subscription", "event kind is unknown"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let recipients = serde_json::from_value(row.recipients)
-        .map_err(|_| backend("read notification subscription", "recipients are not recipients"))?;
-    let mut subscription = NotificationSubscription::new(SubscriptionId::from_uuid(row.id), scope, events, recipients);
+    let recipients = serde_json::from_value(row.recipients).map_err(|_| {
+        backend(
+            "read notification subscription",
+            "recipients are not recipients",
+        )
+    })?;
+    let mut subscription =
+        NotificationSubscription::new(SubscriptionId::from_uuid(row.id), scope, events, recipients);
     subscription.enabled = row.enabled;
     subscription.version = row.version;
     subscription.created_by = row.created_by.map(UserId::from_uuid);

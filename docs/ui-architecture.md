@@ -131,11 +131,11 @@ Tokens live in `src/styles/tokens.css` and nowhere else. The light set is the `@
 
 - `data-theme` on `<html>` is always the resolved `light` or `dark`; "system" is resolved in JavaScript. `public/theme-init.js` sets it (and `data-density`) before first paint from the same localStorage keys the app uses (a test fails if they drift); `ThemeProvider` takes over, follows the OS while the preference is "system", syncs other tabs, and never throws when storage is blocked.
 - **Contrast is proven, not claimed.** `scripts/check-contrast.mjs` (part of `npm run lint`) computes the WCAG ratio of every foreground and background pair in both themes (122 pair checks: 4.5:1 for text, 3:1 for control boundaries, the focus ring and graphics; chart series are held to 4.5:1 because they color the direct labels) and fails on any miss. Every token must appear in a checked pair or be exempt with a written reason, so a new token cannot skip the proof. Lowest ratios today: light 3.95, dark 3.29, both for non text graphics. Playwright additionally runs axe in a real browser on the main pages in both themes.
-- The accent is Apple blue `#0071e3` in both themes (4.6:1 with white text). Links are `#0066cc` in light and `#2997ff` in dark. Green is the success state only.
+- The accent is `#0071e3` in both themes (4.6:1 with white text). Links are `#0066cc` in light and `#2997ff` in dark. Green is the success state only.
 - `--color-border` is a decorative separator below 3:1 on purpose (WCAG exempts it); the edge of a control uses `--color-input`.
 - Density: `data-density="compact"` (default) or `comfortable` re-points `--control-h-base`, `--row-h-base`, `--cell-px` and the table text size. On coarse pointers `--control-h` and `--row-h` are raised to at least 44px whatever the density says.
 - Motion: `prefers-reduced-motion` turns animations into 0.01 ms (Radix waits for `animationend`) and transitions off. Hover changes opacity only, never layout.
-- Fonts: the stack starts with the system face (`-apple-system`, SF Pro, Segoe UI) and the system monospace; the self-hosted fallback is Fira Sans 400 to 700 (latin, latin-ext, cyrillic) and Fira Code Variable (same subsets) as woff2 from `@fontsource`, declared in `fonts.css` with the vendor's `unicode-range`, so the browser downloads only the subsets a page needs. Fira Code is for technical values only (coordinates, digests, paths, commands, logs).
+- Fonts: the stack starts with the system face (`system-ui`, SF Pro, Segoe UI) and the system monospace; the self-hosted fallback is Fira Sans 400 to 700 (latin, latin-ext, cyrillic) and Fira Code Variable (same subsets) as woff2 from `@fontsource`, declared in `fonts.css` with the vendor's `unicode-range`, so the browser downloads only the subsets a page needs. Fira Code is for technical values only (coordinates, digests, paths, commands, logs).
 
 To add a token: add it to BOTH blocks, then run `npm run lint:contrast`; add a pair to `PAIRS` in `scripts/contrast-lib.mjs` (or an exemption with a reason).
 
@@ -265,17 +265,17 @@ A page is done when all of these hold (the shell provides the first four):
 
 ## 13. Bundle size
 
-Measured on the production build of 2026-10-24 (`npm run build`, `check-dist.mjs`):
+Measured on the production build of 2026-11-06 (`npm run build`, `check-dist.mjs`):
 
 | | raw | gzip |
 |---|---|---|
-| initial JavaScript (entry, `vendor-react`, `vendor-tanstack`) | 491.9 KiB | **160.2 KiB** |
-| of which application entry | 165.5 KiB | 56.0 KiB |
+| initial JavaScript (entry, `vendor-react`, `vendor-tanstack`) | 520.1 KiB | **167.5 KiB** |
+| of which application entry | 191.1 KiB | 62.5 KiB |
 | of which React and React DOM | 217.1 KiB | 67.5 KiB |
-| of which TanStack Router and Query | 109.3 KiB | 36.7 KiB |
-| initial CSS | | 8.8 KiB |
+| of which TanStack Router and Query | 111.9 KiB | 37.4 KiB |
+| initial CSS | | 12.4 KiB |
 
-The login page adds its own chunk (about 128 KiB raw, form libraries and zod), the signed-in shell about 83 KiB raw (command palette, sidebar), each page one small chunk; Recharts and the table library are loaded only by pages that draw charts or tables; fonts download per unicode range on demand. The build fails when the initial JavaScript passes 175 KiB gzip (`INITIAL_JS_GZIP_BUDGET_KIB` in `scripts/check-dist.mjs`); raising it needs a reason in the commit message. Zod is kept out of the entry on purpose (route `validateSearch` is hand written), which saved about 20 KiB gzip.
+Tooltips stay in the signed-in shell so `@floating-ui` is not in the login entry; the toaster stays on `App` so tests and every route see toasts. Recharts and the table library load only on pages that need them. The build fails when the initial JavaScript passes 175 KiB gzip (`INITIAL_JS_GZIP_BUDGET_KIB` in `scripts/check-dist.mjs`). `cn()` uses `clsx` only (no `tailwind-merge`). Zod stays out of the entry (hand-written `validateSearch`).
 
 ## 14. Generated files and CI
 
@@ -304,7 +304,7 @@ Suggested CI steps for the `ui` job: `npm ci`, `npm run check` (typecheck, lint 
 
 | Topic | Decision | Reason |
 |---|---|---|
-| Accent | Apple blue `#0071e3` with white text in both themes | 4.6:1 with white text; proven by the contrast check |
+| Accent | `#0071e3` with white text in both themes | 4.6:1 with white text; proven by the contrast check |
 | Dialog, menu, select, toast | custom Dialog on Radix primitives, non modal menus, native select, Radix Toast | the stock components inject `<style>` at runtime, which `style-src 'self'` blocks |
 | TypeScript 5.9, ESLint 9, Vitest 3, Table 8 | not the newest majors | typescript-eslint and eslint-plugin-jsx-a11y do not support TypeScript 6 and ESLint 10 yet; TanStack Table 9 has a different API |
 | `validateSearch` hand written | no zod in route files | the router needs it on the critical path; zod would be in the entry bundle |

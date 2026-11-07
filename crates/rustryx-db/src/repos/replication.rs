@@ -70,8 +70,6 @@ struct Row {
     updated_at: OffsetDateTime,
 }
 
-
-
 #[async_trait::async_trait]
 impl ReplicationRepo for PgReplicationRepo {
     async fn create_rule(&self, rule: &ReplicationRule) -> Result<(), StoreError> {
@@ -126,11 +124,10 @@ impl ReplicationRepo for PgReplicationRepo {
     }
 
     async fn list_rules(&self) -> Result<Vec<ReplicationRule>, StoreError> {
-        let rows: Vec<Row> =
-            sqlx::query_as("SELECT * FROM replication_rules ORDER BY name")
-                .fetch_all(&self.pool)
-                .await
-                .map_err(|e| map_err("list replication rules", e))?;
+        let rows: Vec<Row> = sqlx::query_as("SELECT * FROM replication_rules ORDER BY name")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| map_err("list replication rules", e))?;
         rows.into_iter().map(decode).collect()
     }
 
@@ -359,14 +356,7 @@ fn columns(
         ),
     };
     Ok((
-        direction,
-        trigger,
-        on_push,
-        on_delete,
-        repository,
-        project,
-        filter,
-        bandwidth,
+        direction, trigger, on_push, on_delete, repository, project, filter, bandwidth,
     ))
 }
 

@@ -268,7 +268,7 @@ impl BlobStoreMemberRepo for PgBlobStoreMemberRepo {
         let kind = kind_label(group.kind)?;
         let quota = group.quota_bytes.map(to_i64).transpose()?;
         let mut tx = begin(&self.pool, "convert blob store to group").await?;
-        guard_conversion(&mut *tx, existing, group).await?;
+        guard_conversion(&mut tx, existing, group).await?;
         sqlx::query(
             "INSERT INTO blob_stores (id, name, kind, config, quota_bytes, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6)",

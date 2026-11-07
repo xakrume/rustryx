@@ -11,6 +11,15 @@
 #
 # Every FROM is pinned by digest (OPS-01, DSO-18); see Dockerfile for the rules.
 
+# Web UI embed (same pin and steps as Dockerfile).
+FROM node:22-bookworm@sha256:e273cf2a19c7334c03f52e2ca933ecdfc3fbfaad49db7b8bc8c3edd9ac34e9c7 AS ui
+WORKDIR /ui
+COPY ui/package.json ui/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    npm ci
+COPY ui/ ./
+RUN npm run build
+
 FROM rust:1.99.0-alpine3.24@sha256:0cce0a5e0e8ba67b455257a3a02a1d99005f382748789d6464460028810f1627 AS builder
 
 # build-base: gcc, g++, make, musl-dev and binutils (objcopy, strip). aws-lc-sys,
@@ -36,6 +45,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 
 WORKDIR /src
 COPY . .
+COPY --from=ui /ui/dist ./ui/dist
 
 # musl targets link statically by default (crt-static). The last two commands are
 # the negative requirement "no dynamic loader": a program header of type INTERP
@@ -62,7 +72,7 @@ COPY --from=builder /out/rustryx.debug /rustryx.debug
 
 # distroless/static: CA certificates, tzdata, /etc/passwd, nothing else. No libc,
 # which is the point of the static binary (OPS-10).
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99 AS runtime
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329 AS runtime
 
 # Provided by CI, deliberately WITHOUT defaults: an image built without them gets
 # empty labels and ci/check-image-labels.sh fails (OPS-15).

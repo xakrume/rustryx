@@ -52,7 +52,10 @@ async fn an_exception_is_unique_in_its_scope_and_applies_to_a_component() {
     assert!(allow.create(&system).await.is_err());
     let copied = allow.copy_system_to_project(project, None).await.unwrap();
     assert_eq!(copied, 1);
-    assert_eq!(allow.copy_system_to_project(project, None).await.unwrap(), 0);
+    assert_eq!(
+        allow.copy_system_to_project(project, None).await.unwrap(),
+        0
+    );
 
     let mut own = CveAllowlistEntry::new(
         CveAllowlistEntryId::generate(),
@@ -72,7 +75,14 @@ async fn an_exception_is_unique_in_its_scope_and_applies_to_a_component() {
     own.expires_at = Some(OffsetDateTime::UNIX_EPOCH);
     allow.update(&own, 1).await.unwrap();
     let page = allow
-        .list(AllowlistScope::Component(component), false, &PageRequest { limit: 10, after: None })
+        .list(
+            AllowlistScope::Component(component),
+            false,
+            &PageRequest {
+                limit: 10,
+                after: None,
+            },
+        )
         .await
         .unwrap();
     assert!(page.items.is_empty());

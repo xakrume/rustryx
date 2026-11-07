@@ -88,7 +88,8 @@ impl RegistryRepo for PgRegistryRepo {
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| map_err("read registry", e))?;
-        row.map(|row| row.into_registry(self.sealer.as_ref())).transpose()
+        row.map(|row| row.into_registry(self.sealer.as_ref()))
+            .transpose()
     }
 
     async fn list(&self) -> Result<Vec<Registry>, StoreError> {
@@ -140,7 +141,7 @@ impl RegistryRepo for PgRegistryRepo {
                 "registry was changed by someone else".to_owned(),
             ));
         }
-        rewrite_proxies(&mut *tx, self.sealer.as_ref(), registry, &auth).await?;
+        rewrite_proxies(&mut tx, self.sealer.as_ref(), registry, &auth).await?;
         let _ = created_at;
         super::common::notify(&mut tx, &InvalidationEvent::Reset).await?;
         tx.commit()
@@ -222,7 +223,7 @@ impl Row {
             .collect();
         registry.last_test = self
             .last_test
-            .map(|value| serde_json::from_value(value))
+            .map(serde_json::from_value)
             .transpose()
             .map_err(|_| backend("read registry", "last test"))?;
         registry.version = self.version;
@@ -257,7 +258,8 @@ async fn rewrite_proxies(
                 let RegistryAuth::Basic { password, .. } = &registry.auth else {
                     return Err(backend("rewrite proxy registries", "auth"));
                 };
-                let sealed = sealer.seal(&proxy_aad(RepositoryId::from_uuid(id)), password.expose())?;
+                let sealed =
+                    sealer.seal(&proxy_aad(RepositoryId::from_uuid(id)), password.expose())?;
                 object.insert(
                     "auth".to_owned(),
                     serde_json::json!({ "username": username, "password_sealed": sealed }),

@@ -104,8 +104,7 @@ impl Row {
         let subject = match self.subject_kind.as_str() {
             "user" => ProjectSubject::User {
                 user_id: UserId::from_uuid(
-                    self.user_id
-                        .ok_or_else(|| corrupt("read project member"))?,
+                    self.user_id.ok_or_else(|| corrupt("read project member"))?,
                 ),
             },
             "group" => ProjectSubject::Group {
@@ -354,12 +353,7 @@ impl ProjectAccessRepo for PgProjectAccessRepo {
         .await
         .map_err(|e| map_err("read project memberships", e))?;
         rows.into_iter()
-            .map(|row| {
-                Ok((
-                    ProjectId::from_uuid(row.project_id),
-                    parse_role(&row.role)?,
-                ))
-            })
+            .map(|row| Ok((ProjectId::from_uuid(row.project_id), parse_role(&row.role)?)))
             .collect()
     }
 

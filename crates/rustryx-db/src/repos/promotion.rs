@@ -5,8 +5,9 @@ use rustryx_core::events::EventDraft;
 use rustryx_core::ids::{ComponentId, PromotionId, RepositoryId, UserId};
 use rustryx_core::ports::{Page, PageRequest, PromotionRepo};
 use rustryx_core::promotion::{
-    MAX_PROMOTION_COMPONENTS, PromotionCheck, PromotionDecision, PromotionItem, PromotionItemStatus,
-    PromotionMode, PromotionRequest, PromotionSelector, PromotionStatus, PromotionTarget,
+    MAX_PROMOTION_COMPONENTS, PromotionCheck, PromotionDecision, PromotionItem,
+    PromotionItemStatus, PromotionMode, PromotionRequest, PromotionSelector, PromotionStatus,
+    PromotionTarget,
 };
 use sqlx::PgPool;
 use time::OffsetDateTime;
@@ -149,7 +150,11 @@ impl PromotionRepo for PgPromotionRepo {
                 "a promotion has at most 10000 items".to_owned(),
             ));
         }
-        let mut tx = self.pool.begin().await.map_err(|e| map_err("create promotion", e))?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| map_err("create promotion", e))?;
         sqlx::query(
             "INSERT INTO promotion_requests (id, mode, source_repository_id, target_repository_id, \
              selector, requested_by, requested_at, status, required_approvals, checks, expires_at, \
@@ -159,12 +164,18 @@ impl PromotionRepo for PgPromotionRepo {
         .bind(mode_label(request.mode))
         .bind(request.source_repository_id.as_uuid())
         .bind(request.target_repository_id.as_uuid())
-        .bind(serde_json::to_value(&request.selector).map_err(|_| backend("create promotion", "selector"))?)
+        .bind(
+            serde_json::to_value(&request.selector)
+                .map_err(|_| backend("create promotion", "selector"))?,
+        )
         .bind(request.requested_by.as_uuid())
         .bind(request.requested_at)
         .bind(status_label(request.status)?)
         .bind(i16::from(request.required_approvals))
-        .bind(serde_json::to_value(&request.checks).map_err(|_| backend("create promotion", "checks"))?)
+        .bind(
+            serde_json::to_value(&request.checks)
+                .map_err(|_| backend("create promotion", "checks"))?,
+        )
         .bind(request.expires_at)
         .bind(request.started_at)
         .bind(request.finished_at)
@@ -186,15 +197,18 @@ impl PromotionRepo for PgPromotionRepo {
             .map_err(|e| map_err("create promotion item", e))?;
         }
         outbox::insert_events(&mut tx, events).await?;
-        tx.commit().await.map_err(|e| map_err("create promotion", e))
+        tx.commit()
+            .await
+            .map_err(|e| map_err("create promotion", e))
     }
 
     async fn get(&self, id: PromotionId) -> Result<Option<PromotionRequest>, StoreError> {
-        let row: Option<RequestRow> = sqlx::query_as("SELECT * FROM promotion_requests WHERE id = $1")
-            .bind(id.as_uuid())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| map_err("read promotion", e))?;
+        let row: Option<RequestRow> =
+            sqlx::query_as("SELECT * FROM promotion_requests WHERE id = $1")
+                .bind(id.as_uuid())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| map_err("read promotion", e))?;
         row.map(decode_request).transpose()
     }
 
@@ -217,7 +231,10 @@ impl PromotionRepo for PgPromotionRepo {
         .fetch_all(&self.pool)
         .await
         .map_err(|e| map_err("list promotions", e))?;
-        let items = rows.into_iter().map(decode_request).collect::<Result<Vec<_>, _>>()?;
+        let items = rows
+            .into_iter()
+            .map(decode_request)
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Page { items, next: None })
     }
 
@@ -229,7 +246,11 @@ impl PromotionRepo for PgPromotionRepo {
         decision
             .validate()
             .map_err(|error| StoreError::Conflict(error.to_string()))?;
-        let mut tx = self.pool.begin().await.map_err(|e| map_err("decide promotion", e))?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| map_err("decide promotion", e))?;
         let row: Option<(String, i16, OffsetDateTime)> = sqlx::query_as(
             "SELECT status, required_approvals, expires_at FROM promotion_requests \
              WHERE id = $1 FOR UPDATE",
@@ -306,16 +327,19 @@ impl PromotionRepo for PgPromotionRepo {
             .map_err(|e| map_err("enqueue promotion", e))?;
         }
         outbox::insert_events(&mut tx, events).await?;
-        tx.commit().await.map_err(|e| map_err("decide promotion", e))?;
+        tx.commit()
+            .await
+            .map_err(|e| map_err("decide promotion", e))?;
         Ok(outcome)
     }
 
     async fn decisions(&self, id: PromotionId) -> Result<Vec<PromotionDecision>, StoreError> {
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM promotion_requests WHERE id = $1)")
-            .bind(id.as_uuid())
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| map_err("read promotion", e))?;
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM promotion_requests WHERE id = $1)")
+                .bind(id.as_uuid())
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| map_err("read promotion", e))?;
         if !exists {
             return Err(StoreError::NotFound("promotion".to_owned()));
         }
@@ -329,25 +353,26 @@ impl PromotionRepo for PgPromotionRepo {
         .map_err(|e| map_err("list promotion decisions", e))?;
         Ok(rows
             .into_iter()
-            .map(|(approver, approve, comment, counted, at)| PromotionDecision {
-                promotion_id: id,
-                approver: UserId::from_uuid(approver),
-                approve,
-                comment,
-                counted,
-                at,
-            })
+            .map(
+                |(approver, approve, comment, counted, at)| PromotionDecision {
+                    promotion_id: id,
+                    approver: UserId::from_uuid(approver),
+                    approve,
+                    comment,
+                    counted,
+                    at,
+                },
+            )
             .collect())
     }
 
     async fn cancel(&self, id: PromotionId, by: UserId) -> Result<(), StoreError> {
-        let row: Option<(Uuid, String)> = sqlx::query_as(
-            "SELECT requested_by, status FROM promotion_requests WHERE id = $1",
-        )
-        .bind(id.as_uuid())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| map_err("read promotion", e))?;
+        let row: Option<(Uuid, String)> =
+            sqlx::query_as("SELECT requested_by, status FROM promotion_requests WHERE id = $1")
+                .bind(id.as_uuid())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| map_err("read promotion", e))?;
         let Some((requester, status)) = row else {
             return Err(StoreError::NotFound("promotion".to_owned()));
         };
@@ -376,11 +401,12 @@ impl PromotionRepo for PgPromotionRepo {
         id: PromotionId,
         page: &PageRequest,
     ) -> Result<Page<PromotionItem>, StoreError> {
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM promotion_requests WHERE id = $1)")
-            .bind(id.as_uuid())
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| map_err("read promotion", e))?;
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM promotion_requests WHERE id = $1)")
+                .bind(id.as_uuid())
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| map_err("read promotion", e))?;
         if !exists {
             return Err(StoreError::NotFound("promotion".to_owned()));
         }
@@ -421,11 +447,12 @@ impl PromotionRepo for PgPromotionRepo {
         if updated.rows_affected() == 1 {
             return Ok(true);
         }
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM promotion_requests WHERE id = $1)")
-            .bind(id.as_uuid())
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| map_err("read promotion", e))?;
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM promotion_requests WHERE id = $1)")
+                .bind(id.as_uuid())
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| map_err("read promotion", e))?;
         if exists {
             Ok(false)
         } else {
@@ -469,7 +496,11 @@ impl PromotionRepo for PgPromotionRepo {
                 "a promotion ends with a terminal status".to_owned(),
             ));
         }
-        let mut tx = self.pool.begin().await.map_err(|e| map_err("finish promotion", e))?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| map_err("finish promotion", e))?;
         let updated = sqlx::query(
             "UPDATE promotion_requests SET status = $2, finished_at = $3 \
              WHERE id = $1 AND status IN ('approved', 'running')",
@@ -481,12 +512,13 @@ impl PromotionRepo for PgPromotionRepo {
         .await
         .map_err(|e| map_err("finish promotion", e))?;
         if updated.rows_affected() == 0 {
-            let exists: bool =
-                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM promotion_requests WHERE id = $1)")
-                    .bind(id.as_uuid())
-                    .fetch_one(&mut *tx)
-                    .await
-                    .map_err(|e| map_err("read promotion", e))?;
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM promotion_requests WHERE id = $1)",
+            )
+            .bind(id.as_uuid())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| map_err("read promotion", e))?;
             return Err(if exists {
                 StoreError::Conflict("the promotion is not executing".to_owned())
             } else {
@@ -494,7 +526,9 @@ impl PromotionRepo for PgPromotionRepo {
             });
         }
         outbox::insert_events(&mut tx, events).await?;
-        tx.commit().await.map_err(|e| map_err("finish promotion", e))
+        tx.commit()
+            .await
+            .map_err(|e| map_err("finish promotion", e))
     }
 
     async fn expire(&self, now: OffsetDateTime) -> Result<u64, StoreError> {

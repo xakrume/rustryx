@@ -4,9 +4,7 @@ use rustryx_core::error::StoreError;
 use rustryx_core::ids::{ProjectId, RepositoryId, ScannerId, SecurityPolicyId};
 use rustryx_core::lifecycle::PolicyScope;
 use rustryx_core::ports::{InvalidationEvent, SecurityPolicyRepo};
-use rustryx_core::scan::{
-    AllowlistMode, PullGatePolicy, ScanPolicy, TrustPolicy,
-};
+use rustryx_core::scan::{AllowlistMode, PullGatePolicy, ScanPolicy, TrustPolicy};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -153,7 +151,9 @@ impl SecurityPolicyRepo for PgScanPolicyRepo {
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(|e| map_err("read repository", e))?
-                .ok_or_else(|| StoreError::NotFound(format!("repository {repository} not found")))?;
+                .ok_or_else(|| {
+                    StoreError::NotFound(format!("repository {repository} not found"))
+                })?;
         let rows: Vec<Row> = sqlx::query_as(
             "SELECT * FROM scan_policies WHERE system OR project_id = $1 OR repository_id = $2",
         )
@@ -172,13 +172,12 @@ impl SecurityPolicyRepo for PgScanPolicyRepo {
             .cloned()
             .unwrap_or_else(|| ScanPolicy::system_default(SecurityPolicyId::generate()));
         let mut result = system;
-        if let Some(project_id) = project.map(ProjectId::from_uuid) {
-            if let Some(project_policy) = policies
+        if let Some(project_id) = project.map(ProjectId::from_uuid)
+            && let Some(project_policy) = policies
                 .iter()
                 .find(|policy| policy.scope == PolicyScope::Project(project_id))
-            {
-                result = merged(result, project_policy);
-            }
+        {
+            result = merged(result, project_policy);
         }
         if let Some(own) = policies
             .iter()
@@ -198,7 +197,10 @@ impl SecurityPolicyRepo for PgScanPolicyRepo {
         super::trust::upsert_policy(&self.pool, policy, expected_version).await
     }
 
-    async fn get_trust_policy(&self, scope: PolicyScope) -> Result<Option<TrustPolicy>, StoreError> {
+    async fn get_trust_policy(
+        &self,
+        scope: PolicyScope,
+    ) -> Result<Option<TrustPolicy>, StoreError> {
         super::trust::get_policy(&self.pool, scope).await
     }
 
@@ -250,12 +252,10 @@ async fn lock_scope(
                 .await
         }
         PolicyScope::Project(id) => {
-            sqlx::query_as(
-                "SELECT id, version FROM scan_policies WHERE project_id = $1 FOR UPDATE",
-            )
-            .bind(id.as_uuid())
-            .fetch_optional(&mut *tx)
-            .await
+            sqlx::query_as("SELECT id, version FROM scan_policies WHERE project_id = $1 FOR UPDATE")
+                .bind(id.as_uuid())
+                .fetch_optional(&mut *tx)
+                .await
         }
         PolicyScope::Repository(id) => {
             sqlx::query_as(
@@ -312,7 +312,12 @@ fn decode(row: Row) -> Result<ScanPolicy, StoreError> {
         (true, None, None) => PolicyScope::System,
         (false, Some(id), None) => PolicyScope::Project(ProjectId::from_uuid(id)),
         (false, None, Some(id)) => PolicyScope::Repository(RepositoryId::from_uuid(id)),
-        _ => return Err(backend("read scan policy", "scan policy scope is ambiguous")),
+        _ => {
+            return Err(backend(
+                "read scan policy",
+                "scan policy scope is ambiguous",
+            ));
+        }
     };
     let gate = row
         .gate

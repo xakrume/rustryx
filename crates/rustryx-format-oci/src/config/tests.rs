@@ -38,7 +38,7 @@ fn library_namespace_defaults_by_host() {
 #[test]
 fn the_option_overrides_the_host_rule() {
     let on = RepositoryOptions::from_format_config(&json!({"library_namespace": true}));
-    assert!(on.uses_library_namespace(&Url::parse("https://harbor.example.com").unwrap()));
+    assert!(on.uses_library_namespace(&Url::parse("https://registry.example.com").unwrap()));
     let off = RepositoryOptions::from_format_config(&json!({"library_namespace": false}));
     assert!(!off.uses_library_namespace(&Url::parse("https://registry-1.docker.io").unwrap()));
 }

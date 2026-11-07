@@ -222,7 +222,11 @@ function UpstreamActions({ repo }: { repo: RepositoryView }) {
 
 type SyncFilter = { include: string[]; exclude: string[] }
 
-async function readFilter(name: string, method: 'GET' | 'PUT', body?: SyncFilter): Promise<SyncFilter> {
+async function readFilter(
+  name: string,
+  method: 'GET' | 'PUT',
+  body?: SyncFilter,
+): Promise<SyncFilter> {
   const headers = new Headers({ Accept: 'application/json' })
   if (method !== 'GET') {
     headers.set('Content-Type', 'application/json')

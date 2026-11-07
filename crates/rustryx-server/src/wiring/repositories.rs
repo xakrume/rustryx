@@ -17,6 +17,7 @@ use rustryx_api::{
     AdminGrant, ApiError, ApiJson, ApiPath, ApiQuery, Authorized, RequestPrincipal, Requires,
     RouteModule, RouteSet,
 };
+use rustryx_blob::DiskProbe;
 use rustryx_core::error::StoreError;
 use rustryx_core::identity::{Action, Principal};
 use rustryx_core::ids::{BlobStoreId, RepositoryId};
@@ -30,14 +31,10 @@ use rustryx_core::ports::{
     ScanRepo,
 };
 use rustryx_core::scan::{LicenseBuckets, RepositoryHealth};
-use rustryx_blob::DiskProbe;
 use rustryx_format_core::proxy::ssrf::UpstreamUrlPolicy;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use url::Url;
-
-#[path = "vulnerabilities.rs"]
-pub mod vulnerabilities;
 
 /// Public URL and upstream rules the repository routes need.
 pub struct RepoHttp {
@@ -85,6 +82,10 @@ impl RepositoriesModule {
 
     /// Keeps the audit sink the composition root passes in.
     #[must_use]
+    #[allow(
+        dead_code,
+        reason = "wired when blob-store mutations start writing the audit log"
+    )]
     pub fn with_audit(mut self, audit: Arc<dyn AuditSink>) -> Self {
         self.state.audit = Some(audit);
         self
@@ -156,7 +157,9 @@ impl RouteModule for RepositoriesModule {
             .route(
                 "/api/v1/blob-stores/{name}",
                 Requires::Admin,
-                patch(patch_store).delete(delete_store).with_state(state.clone()),
+                patch(patch_store)
+                    .delete(delete_store)
+                    .with_state(state.clone()),
             )
             .route(
                 "/api/v1/blob-stores/{name}/actions/test-connection",
@@ -178,7 +181,10 @@ struct RepoApi {
     upstream: UpstreamUrlPolicy,
     scans: Option<Arc<dyn ScanRepo>>,
     blobs: Option<Arc<dyn BlobRepo>>,
-    #[allow(dead_code, reason = "wired by the composition root for later repository events")]
+    #[allow(
+        dead_code,
+        reason = "wired by the composition root for later repository events"
+    )]
     audit: Option<Arc<dyn AuditSink>>,
 }
 
@@ -588,7 +594,10 @@ fn check_store_config(kind: BlobStoreKind, config: &serde_json::Value) -> Result
         ));
     };
     if kind == BlobStoreKind::Local {
-        let path = object.get("path").and_then(serde_json::Value::as_str).unwrap_or("");
+        let path = object
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
         if !path.starts_with('/') || path.contains('\0') {
             return Err(ApiError::bad_request(
                 "invalid_input",
@@ -596,7 +605,12 @@ fn check_store_config(kind: BlobStoreKind, config: &serde_json::Value) -> Result
             ));
         }
     }
-    if kind == BlobStoreKind::S3 && object.get("bucket").and_then(serde_json::Value::as_str).unwrap_or("").is_empty()
+    if kind == BlobStoreKind::S3
+        && object
+            .get("bucket")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .is_empty()
     {
         return Err(ApiError::bad_request(
             "invalid_input",
@@ -606,7 +620,11 @@ fn check_store_config(kind: BlobStoreKind, config: &serde_json::Value) -> Result
     Ok(())
 }
 
-async fn store_response(api: &RepoApi, store: &BlobStoreDef, status: http::StatusCode) -> Result<Response, ApiError> {
+async fn store_response(
+    api: &RepoApi,
+    store: &BlobStoreDef,
+    status: http::StatusCode,
+) -> Result<Response, ApiError> {
     let repos = api.repositories.list().await?;
     let body = store_view(api, store, &repos, api.clock.now()).await;
     let mut response = (status, Json(body)).into_response();
@@ -623,7 +641,10 @@ async fn create_store(
 ) -> Result<Response, ApiError> {
     let name = body.name.trim();
     if name.is_empty() || name.len() > 128 || name.contains('/') {
-        return Err(ApiError::bad_request("invalid_input", "The blob store name is not valid"));
+        return Err(ApiError::bad_request(
+            "invalid_input",
+            "The blob store name is not valid",
+        ));
     }
     check_store_config(body.kind, &body.config)?;
     if body.kind == BlobStoreKind::Local {
@@ -667,9 +688,9 @@ async fn patch_store(
     let used = repos.iter().any(|repo| repo.blob_store_id == store.id);
     if let Some(config) = body.get("config") {
         let mut merged = store.config.as_object().cloned().unwrap_or_default();
-        let patch = config.as_object().ok_or_else(|| {
-            ApiError::bad_request("invalid_input", "config must be an object")
-        })?;
+        let patch = config
+            .as_object()
+            .ok_or_else(|| ApiError::bad_request("invalid_input", "config must be an object"))?;
         for (key, value) in patch {
             if used && matches!(key.as_str(), "path" | "bucket" | "endpoint") {
                 let current = store.config.get(key);
@@ -742,10 +763,16 @@ async fn test_store(
             "error_code": "blob_store_unavailable"
         })));
     }
-    let path = store.config.get("path").and_then(|value| value.as_str()).unwrap_or("");
+    let path = store
+        .config
+        .get("path")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
     let started = std::time::Instant::now();
     let probe = std::path::Path::new(path).join(".rustryx-probe");
-    let ok = std::fs::write(&probe, b"ok").and_then(|_| std::fs::remove_file(&probe)).is_ok();
+    let ok = std::fs::write(&probe, b"ok")
+        .and_then(|()| std::fs::remove_file(&probe))
+        .is_ok();
     Ok(Json(serde_json::json!({
         "ok": ok,
         "latency_ms": i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX),
@@ -1142,7 +1169,11 @@ async fn store_view(
     }
 }
 
-async fn store_usage(api: &RepoApi, store: &BlobStoreDef, now: OffsetDateTime) -> Option<StoreUsage> {
+async fn store_usage(
+    api: &RepoApi,
+    store: &BlobStoreDef,
+    now: OffsetDateTime,
+) -> Option<StoreUsage> {
     let blobs = api.blobs.as_ref()?;
     let used_bytes = blobs.used_bytes_by_store(store.id).await.ok()?;
     let blob_count = blobs.count_by_store(store.id).await.unwrap_or(0);
@@ -1161,10 +1192,12 @@ async fn local_disk(store: &BlobStoreDef) -> Option<rustryx_blob::DiskUsage> {
         return None;
     }
     let path = store.config.get("path")?.as_str()?.to_owned();
-    tokio::task::spawn_blocking(move || rustryx_blob::StatvfsProbe.usage(std::path::Path::new(&path)))
-        .await
-        .ok()?
-        .ok()
+    tokio::task::spawn_blocking(move || {
+        rustryx_blob::StatvfsProbe.usage(std::path::Path::new(&path))
+    })
+    .await
+    .ok()?
+    .ok()
 }
 
 fn store_matches(store: &BlobStoreDef, query: &ListQuery) -> bool {

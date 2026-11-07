@@ -1,6 +1,6 @@
 # Rustryx wave 2 design: data model and contracts
 
-Status: design draft, 2026-10-24. Owner: architecture. Inputs: [parity-compat-harbor.md](parity-compat-harbor.md) sections 6 to 14, [core-gaps.md](core-gaps.md), [db.md](db.md), [rbac.md](rbac.md), [auth-core.md](auth-core.md), [format-core.md](format-core.md), [server.md](server.md), [config.md](config.md), [slo.md](slo.md), the `rustryx-core` sources, and the Russian specification (README section 8 wins over every role section).
+Status: design draft, 2026-10-24. Owner: architecture. Inputs: [parity-compat.md](parity-compat.md) sections 6 to 14, [core-gaps.md](core-gaps.md), [db.md](db.md), [rbac.md](rbac.md), [auth-core.md](auth-core.md), [format-core.md](format-core.md), [server.md](server.md), [config.md](config.md), [slo.md](slo.md), the `rustryx-core` sources, and the Russian specification (README section 8 wins over every role section).
 
 This document fixes the data model and the contracts of the wave 2 backend streams W2-B, W2-C, W2-D, W2-E, W2-F and W2-H, so that the streams can be built in parallel by different people. It is a design: nothing here has been compiled, and every statement about a third party tool that was not verified is marked `unverified` or listed as a spike in section 10. Vendor behaviour is described only as far as the parity document already summarizes it; nothing is copied from vendor documentation.
 
@@ -2190,7 +2190,7 @@ pub struct CleanupPolicy {
     pub updated_at: OffsetDateTime,
 }
 
-/// Harbor style retention: rules say what to KEEP; items a rule covers and no rule keeps are deleted.
+/// Retain-mode retention: rules say what to KEEP; items a rule covers and no rule keeps are deleted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "template", rename_all = "snake_case")]
 pub enum RetentionTemplate {
@@ -5087,7 +5087,7 @@ A spike has a fixed question, fixtures that exist before the code, pass criteria
 
 **S5 Azure.** With Azurite in testcontainers and the `azure` feature of `object_store`: a staged multi block upload with 3 blocks commits atomically and is invisible before the commit; an abandoned upload leaves nothing visible and the uncommitted blocks are the only residue; ranged reads and `HEAD`; a 5 GiB upload keeps memory at one part; `Drop` and task cancellation clean up; error mapping to `BlobError`; listing pages for `list_keys`; and SAS presign for a GET through the crate's signer or a documented manual construction. The authentication modes `managed_identity` and `workload_identity` cannot run against Azurite; the spike records what was and was not tested. Fallback: the Azure SDK for Rust (if licence and maturity pass) or `azure` marked `later`.
 
-**S6 S3 options.** Against MinIO and Ceph RGW (and, where an account exists, AWS): static keys, session token, web identity, container credentials and instance metadata with IMDSv2 (the ambient chain), SSE-S3, SSE-KMS with a key id, path style and virtual host style addressing, presigned GET with `response-content-type` and `response-content-disposition`, and whether `role_arn` based `AssumeRole` is available. Pass: every row is either supported by `object_store` as pinned or has a stated route (a custom `CredentialProvider` from `aws-config`, already an accepted alternative of 02-rust-engineering). Output: the final shape of the S3 config table of section 7.a.
+**S6 S3 options.** Against SeaweedFS and Ceph RGW (and, where an account exists, AWS): static keys, session token, web identity, container credentials and instance metadata with IMDSv2 (the ambient chain), SSE-S3, SSE-KMS with a key id, path style and virtual host style addressing, presigned GET with `response-content-type` and `response-content-disposition`, and whether `role_arn` based `AssumeRole` is available. Pass: every row is either supported by `object_store` as pinned or has a stated route (a custom `CredentialProvider` from `aws-config`, already an accepted alternative of 02-rust-engineering). Output: the final shape of the S3 config table of section 7.a.
 
 **S7 Outbox relay.** A property test with concurrent writers that commit, roll back and hold open for random durations against a relay with the xid8 horizon rule: no committed event is lost, no event is read twice past its cursor, order follows `(tx_id, seq)`, and a transaction held open for 60 s delays but never skips events. Measures lag at 1000 events per second. Fallback if the horizon rule misbehaves on the pinned PostgreSQL: advisory lock around outbox inserts (serializes writers, rejected unless the rule fails) or logical decoding (rejected for operational weight).
 
@@ -5095,7 +5095,7 @@ A spike has a fixed question, fixtures that exist before the code, pass criteria
 
 **S9 `verify_blobs` scale.** Stage 50 million listed keys into the unlogged table and run both anti joins and the size comparison: time within 2 hours, memory bounded by the batch size, WAL not generated, and the plan uses the primary keys and `uq_blobs_store_key`.
 
-**Unverified in this document, collected.** Trivy local input flags and offline flags (S1); `osv-scanner` offline flags and data layout (S2); coverage and maintenance of the `sigstore` crate and any Notation implementation (S3, S4); `notation` and `cosign` offline local file verification (S3, S4); `object_store` Azure multipart, presign and AssumeRole (S5, S6); the third party license of every delivered binary (Trivy, osv-scanner, cosign, notation; all believed to be permissive, to be confirmed against the allowlist of README 8.6 before they are delivered); the exact compat and Harbor behaviours that parity.md lists as `unverified` (none of the decisions depends on them: each is decided here on its own merits).
+**Unverified in this document, collected.** Trivy local input flags and offline flags (S1); `osv-scanner` offline flags and data layout (S2); coverage and maintenance of the `sigstore` crate and any Notation implementation (S3, S4); `notation` and `cosign` offline local file verification (S3, S4); `object_store` Azure multipart, presign and AssumeRole (S5, S6); the third party license of every delivered binary (Trivy, osv-scanner, cosign, notation; all believed to be permissive, to be confirmed against the allowlist of README 8.6 before they are delivered); the exact compat and OCI-peer behaviours that parity.md lists as `unverified` (none of the decisions depends on them: each is decided here on its own merits).
 
 ---
 

@@ -160,13 +160,13 @@ impl WebhookDeliveryRepo for PgWebhookDeliveryRepo {
         page: &PageRequest,
     ) -> Result<Page<WebhookDelivery>, StoreError> {
         let limit = page.limit.clamp(1, 100);
-        let after = match page.after.as_deref() {
-            None => None,
-            Some(token) => Some(
-                Uuid::parse_str(token)
-                    .map_err(|_| StoreError::Invalid("page token is not a delivery id".to_owned()))?,
-            ),
-        };
+        let after =
+            match page.after.as_deref() {
+                None => None,
+                Some(token) => Some(Uuid::parse_str(token).map_err(|_| {
+                    StoreError::Invalid("page token is not a delivery id".to_owned())
+                })?),
+            };
         let rows: Vec<Row> = sqlx::query_as(
             "SELECT id, webhook_id, event_id, event_kind, attempt, status, next_attempt_at, \
              last_status_code, last_latency_ms, last_error, response_excerpt, created_at, \
@@ -181,7 +181,10 @@ impl WebhookDeliveryRepo for PgWebhookDeliveryRepo {
         .fetch_all(&self.pool)
         .await
         .map_err(|e| map_err("list webhook deliveries", e))?;
-        let items = rows.into_iter().map(decode).collect::<Result<Vec<_>, _>>()?;
+        let items = rows
+            .into_iter()
+            .map(decode)
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Page { items, next: None })
     }
 
@@ -218,7 +221,9 @@ fn decode(row: Row) -> Result<WebhookDelivery, StoreError> {
     delivery.attempt = u8::try_from(row.attempt).unwrap_or(u8::MAX);
     delivery.status = decode_status(&row.status)?;
     delivery.next_attempt_at = row.next_attempt_at;
-    delivery.last_status_code = row.last_status_code.map(|code| u16::try_from(code).unwrap_or(0));
+    delivery.last_status_code = row
+        .last_status_code
+        .map(|code| u16::try_from(code).unwrap_or(0));
     delivery.last_latency_ms = row.last_latency_ms.map(|ms| u32::try_from(ms).unwrap_or(0));
     delivery.last_error = row.last_error;
     delivery.response_excerpt = row.response_excerpt;
@@ -252,5 +257,8 @@ fn clip(text: &str, max: usize) -> String {
 }
 
 fn clean_excerpt(text: &str) -> String {
-    text.chars().filter(|ch| !ch.is_control()).take(1024).collect()
+    text.chars()
+        .filter(|ch| !ch.is_control())
+        .take(1024)
+        .collect()
 }

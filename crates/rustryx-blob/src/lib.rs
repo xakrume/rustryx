@@ -30,11 +30,11 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod config;
+mod dedup;
 mod disk;
 mod error;
 mod hashing;
 mod key;
-mod dedup;
 mod local;
 pub mod metrics;
 mod quota;
@@ -43,11 +43,11 @@ mod registry;
 mod s3;
 mod secrets;
 
-pub use dedup::{DedupReport, dedup_directory};
 pub use config::{
     BuildError, DEFAULT_MIN_FREE_PERCENT, DEFAULT_PART_BYTES, LocalConfig, MAX_PARTS,
     MAX_PRESIGN_TTL_SECS, MIN_PART_BYTES, PresignConfig, PresignSettings, S3Config, S3Settings,
 };
+pub use dedup::{DedupReport, dedup_directory};
 pub use disk::{DEFAULT_PROBE_INTERVAL, DiskProbe, DiskUsage, StatvfsProbe};
 pub use hashing::{BlobHasher, BlobSink, HASH_SLICE_BYTES, HashingWriter, YIELD_EVERY_BYTES};
 pub use key::{KeyError, MAX_COMPONENT_BYTES, MAX_KEY_BYTES, STAGING_DIR, shard_of, validate_key};

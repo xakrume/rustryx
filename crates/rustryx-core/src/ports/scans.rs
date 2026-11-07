@@ -20,8 +20,8 @@ use crate::ports::repos::{Page, PageRequest};
 use crate::scan::{
     AllowlistMode, AllowlistScope, ComponentSecurityState, CveAllowlistEntry, Finding, ProbeResult,
     QuarantineState, RepositoryHealth, ScanPolicy, ScanReport, ScanStatus, ScanSummary,
-    ScannerDataSet, ScannerKind,
-    ScannerRecord, Severity, TrustMaterial, TrustMaterialKind, TrustPolicy,
+    ScannerDataSet, ScannerKind, ScannerRecord, Severity, TrustMaterial, TrustMaterialKind,
+    TrustPolicy,
 };
 use crate::tasks::TaskRunStatus;
 

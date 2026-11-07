@@ -169,7 +169,7 @@ describe('blob store mock', () => {
         name: 'with-refs',
         kind: 's3',
         config: {
-          endpoint: 'https://minio.example.org',
+          endpoint: 'https://seaweedfs.example.org',
           bucket: 'b',
           region: 'r',
           key_prefix: '',

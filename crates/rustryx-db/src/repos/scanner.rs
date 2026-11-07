@@ -51,9 +51,17 @@ struct Row {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum StoredAuth {
     None,
-    Basic { username: String, password_sealed: String },
-    Bearer { token_sealed: String },
-    ApiKey { header: String, value_sealed: String },
+    Basic {
+        username: String,
+        password_sealed: String,
+    },
+    Bearer {
+        token_sealed: String,
+    },
+    ApiKey {
+        header: String,
+        value_sealed: String,
+    },
 }
 
 #[async_trait::async_trait]
@@ -92,7 +100,8 @@ impl ScannerRepo for PgScannerRepo {
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| map_err("read scanner", e))?;
-        row.map(|row| row.into_record(self.sealer.as_ref())).transpose()
+        row.map(|row| row.into_record(self.sealer.as_ref()))
+            .transpose()
     }
 
     async fn list(&self) -> Result<Vec<ScannerRecord>, StoreError> {
@@ -152,14 +161,17 @@ impl ScannerRepo for PgScannerRepo {
     }
 
     async fn set_default(&self, id: ScannerId) -> Result<(), StoreError> {
-        let mut tx = self.pool.begin().await.map_err(|e| map_err("set default scanner", e))?;
-        let chosen: Option<(Vec<String>, Vec<String>)> = sqlx::query_as(
-            "SELECT capabilities, formats FROM scanners WHERE id = $1 FOR UPDATE",
-        )
-        .bind(id.as_uuid())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| map_err("set default scanner", e))?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| map_err("set default scanner", e))?;
+        let chosen: Option<(Vec<String>, Vec<String>)> =
+            sqlx::query_as("SELECT capabilities, formats FROM scanners WHERE id = $1 FOR UPDATE")
+                .bind(id.as_uuid())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| map_err("set default scanner", e))?;
         let Some((capabilities, formats)) = chosen else {
             return Err(StoreError::NotFound("scanner".to_owned()));
         };
@@ -180,7 +192,9 @@ impl ScannerRepo for PgScannerRepo {
             .execute(&mut *tx)
             .await
             .map_err(|e| map_err("set default scanner", e))?;
-        tx.commit().await.map_err(|e| map_err("set default scanner", e))?;
+        tx.commit()
+            .await
+            .map_err(|e| map_err("set default scanner", e))?;
         Ok(())
     }
 
@@ -201,7 +215,8 @@ impl ScannerRepo for PgScannerRepo {
 impl Row {
     fn into_record(self, sealer: &dyn SecretSealer) -> Result<ScannerRecord, StoreError> {
         let id = ScannerId::from_uuid(self.id);
-        let mut record = ScannerRecord::new(id, self.name, parse_kind(&self.kind)?, self.created_at);
+        let mut record =
+            ScannerRecord::new(id, self.name, parse_kind(&self.kind)?, self.created_at);
         record.endpoint = self.endpoint;
         record.auth = open_auth(sealer, id, &self.auth)?;
         record.ca_certificate_ids = self
@@ -223,7 +238,7 @@ impl Row {
         record.enabled = self.enabled;
         record.last_probe = self
             .last_probe
-            .map(|value| serde_json::from_value(value))
+            .map(serde_json::from_value)
             .transpose()
             .map_err(|_| backend("read scanner", "last probe"))?;
         record.version = self.version;
@@ -231,14 +246,20 @@ impl Row {
     }
 }
 
-async fn missing_or_stale(pool: &PgPool, id: ScannerId, context: &'static str) -> Result<(), StoreError> {
+async fn missing_or_stale(
+    pool: &PgPool,
+    id: ScannerId,
+    context: &'static str,
+) -> Result<(), StoreError> {
     let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM scanners WHERE id = $1)")
         .bind(id.as_uuid())
         .fetch_one(pool)
         .await
         .map_err(|e| map_err(context, e))?;
     if exists {
-        Err(StoreError::Conflict("scanner was changed by someone else".to_owned()))
+        Err(StoreError::Conflict(
+            "scanner was changed by someone else".to_owned(),
+        ))
     } else {
         Err(StoreError::NotFound("scanner".to_owned()))
     }
@@ -278,7 +299,10 @@ fn parse_scan_kind(name: &str) -> Result<ScanKind, StoreError> {
 }
 
 fn format_names(formats: &[RepoFormat]) -> Vec<String> {
-    formats.iter().map(|format| format.as_str().to_owned()).collect()
+    formats
+        .iter()
+        .map(|format| format.as_str().to_owned())
+        .collect()
 }
 
 fn parse_format(name: &str) -> Result<RepoFormat, StoreError> {
@@ -300,7 +324,10 @@ fn json_of<T: Serialize>(value: Option<&T>) -> Result<Option<serde_json::Value>,
         .map_err(|_| backend("write scanner", "json"))
 }
 
-fn auth_value(sealer: &dyn SecretSealer, scanner: &ScannerRecord) -> Result<serde_json::Value, StoreError> {
+fn auth_value(
+    sealer: &dyn SecretSealer,
+    scanner: &ScannerRecord,
+) -> Result<serde_json::Value, StoreError> {
     let aad = credential_aad(scanner.id);
     let stored = match &scanner.auth {
         ScannerAuth::None => StoredAuth::None,
@@ -319,19 +346,30 @@ fn auth_value(sealer: &dyn SecretSealer, scanner: &ScannerRecord) -> Result<serd
     serde_json::to_value(stored).map_err(|_| backend("write scanner", "auth"))
 }
 
-fn open_auth(sealer: &dyn SecretSealer, id: ScannerId, value: &serde_json::Value) -> Result<ScannerAuth, StoreError> {
-    let stored: StoredAuth = serde_json::from_value(value.clone()).map_err(|_| backend("read scanner", "auth"))?;
+fn open_auth(
+    sealer: &dyn SecretSealer,
+    id: ScannerId,
+    value: &serde_json::Value,
+) -> Result<ScannerAuth, StoreError> {
+    let stored: StoredAuth =
+        serde_json::from_value(value.clone()).map_err(|_| backend("read scanner", "auth"))?;
     let aad = credential_aad(id);
     Ok(match stored {
         StoredAuth::None => ScannerAuth::None,
-        StoredAuth::Basic { username, password_sealed } => ScannerAuth::Basic {
+        StoredAuth::Basic {
+            username,
+            password_sealed,
+        } => ScannerAuth::Basic {
             username,
             password: sealer.open(&aad, &password_sealed)?,
         },
         StoredAuth::Bearer { token_sealed } => ScannerAuth::Bearer {
             token: sealer.open(&aad, &token_sealed)?,
         },
-        StoredAuth::ApiKey { header, value_sealed } => ScannerAuth::ApiKey {
+        StoredAuth::ApiKey {
+            header,
+            value_sealed,
+        } => ScannerAuth::ApiKey {
             header,
             value: sealer.open(&aad, &value_sealed)?,
         },

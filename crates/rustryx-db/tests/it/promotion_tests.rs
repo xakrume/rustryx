@@ -35,7 +35,9 @@ async fn one_counted_approval_releases_a_promotion() {
         PromotionMode::Copy,
         source.id,
         target_repo.id,
-        PromotionSelector::Label { label_id: LabelId::generate() },
+        PromotionSelector::Label {
+            label_id: LabelId::generate(),
+        },
         requester,
         OffsetDateTime::now_utc(),
     );
@@ -59,7 +61,12 @@ async fn one_counted_approval_releases_a_promotion() {
             .unwrap()
     );
     promotions
-        .finish(request.id, PromotionStatus::Succeeded, OffsetDateTime::now_utc(), &[])
+        .finish(
+            request.id,
+            PromotionStatus::Succeeded,
+            OffsetDateTime::now_utc(),
+            &[],
+        )
         .await
         .unwrap();
     assert_eq!(

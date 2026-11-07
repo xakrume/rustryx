@@ -5,6 +5,9 @@
 fail-fast = false
 # A flaky test is a bug to fix, not to retry: retries would turn red into green.
 retries = 0
+# One test at a time. llvm-cov on a GitHub-hosted runner (~7 GiB) peaks high, and
+# GitLab's test job runs this same profile together with testcontainers.
+test-threads = 1
 slow-timeout = { period = "60s", terminate-after = 5 }
 
 [profile.ci.junit]

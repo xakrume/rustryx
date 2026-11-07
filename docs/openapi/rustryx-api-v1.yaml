@@ -12,7 +12,7 @@ info:
 
     **Base path** `/api/v1`. compat v1 compatibility endpoints live under `/service/rest/v1` and are not described here.
 
-    **Milestones.** Every operation carries `x-milestone`: `UI-M1` is the usable core (sign in, repositories, browse, search, upload, administration of identity and content, audit, status), `UI-M2` is the Harbor parity wave (projects, robot tokens, labels, retention, immutability, quotas, scanning, webhooks, replication, promotion, trust policies, garbage collection, more settings). UI-M2 schemas are deliberately lighter and may gain fields; their names and conventions are stable.
+    **Milestones.** Every operation carries `x-milestone`: `UI-M1` is the usable core (sign in, repositories, browse, search, upload, administration of identity and content, audit, status), `UI-M2` is the registry parity wave (projects, robot tokens, labels, retention, immutability, quotas, scanning, webhooks, replication, promotion, trust policies, garbage collection, more settings). UI-M2 schemas are deliberately lighter and may gain fields; their names and conventions are stable.
 
     **Privileges.** `x-required-privilege` states what the operation needs, in the grammar of docs/api-conventions.md (`anonymous`, `authenticated`, `interactive`, `nx-admin`, `repo.<action>(R)`, `project.<role>(P)`). In phase 1 every administration operation needs `nx-admin`; `x-future-privilege` names the per area privilege that replaces it later (AUTH-46).
 
@@ -135,7 +135,7 @@ tags:
   description: System and project labels on components. The word tag is reserved for OCI tags.
   x-milestone: UI-M2
 - name: Retention
-  description: Retention policies with rule templates, dry run and run now (Harbor style retain semantics).
+  description: Retention policies with rule templates, dry run and run now (retain-mode semantics: keep what a rule matches).
   x-milestone: UI-M2
 - name: Immutability
   description: Rules that protect tags or paths from overwrite, delete and re-tag.
@@ -214,7 +214,7 @@ x-tagGroups:
   - System
   - Dashboard
   - Settings
-- name: UI-M2 Harbor parity
+- name: UI-M2 registry parity
   tags:
   - Projects
   - Project members
@@ -2665,7 +2665,7 @@ paths:
                   name: archive
                   kind: s3
                   config:
-                    endpoint: https://minio.example.org
+                    endpoint: https://seaweedfs.example.org
                     bucket: rustryx-archive
                     region: us-east-1
                     key_prefix: ''
@@ -13433,7 +13433,7 @@ components:
       required: [endpoint, bucket, region]
       additionalProperties: false
       example:
-        endpoint: https://minio.example.org
+        endpoint: https://seaweedfs.example.org
         bucket: rustryx-archive
         region: us-east-1
         key_prefix: ''
@@ -13488,7 +13488,7 @@ components:
         name: archive
         kind: s3
         config:
-          endpoint: https://minio.example.org
+          endpoint: https://seaweedfs.example.org
           bucket: rustryx-archive
           region: us-east-1
           key_prefix: ''

@@ -801,7 +801,7 @@ fn s3_blob_store_requires_its_settings() {
     c.blob.s3_access_key = secret("ak");
     c.blob.s3_secret_key = secret("sk");
     assert_ok(&c);
-    c.blob.s3_endpoint = Some("http://minio:9000".into());
+    c.blob.s3_endpoint = Some("http://seaweedfs:8333".into());
     assert!(warnings(&c).iter().any(|w| w.contains("blob.s3_endpoint")));
     c.blob.s3_endpoint = Some("ftp://x".into());
     assert_fails(&c, "blob.s3_endpoint");

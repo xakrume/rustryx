@@ -1,8 +1,8 @@
 /*
  * Design tokens: light and dark themes as CSS variables.
  *
- * Direction: Apple-style minimalism (DESIGN.md). Quiet neutrals, one blue for action, soft
- * radii, no decoration. docs/ui-design-brief.md still wins on accessibility rules.
+ * Quiet neutrals, one blue for action, soft radii, no decoration. The values are the
+ * contract; docs/ui-design-brief.md still wins on accessibility rules.
  *
  * Invariants (held by scripts/check-contrast.mjs, which runs in `npm run lint`):
  * - The light set is the `@theme` block, the dark set is `:root[data-theme='dark']`. Both
@@ -24,7 +24,7 @@
   /* Drop Tailwind's default palette: a stray bg-blue-500 must fail to compile. */
   --color-*: initial;
 
-  /* ---- Light theme (default): Apple-like neutrals, one blue for action ---- */
+  /* ---- Light theme (default): gray page, white cards, one blue for action ---- */
   --color-background: #f5f5f7;
   --color-foreground: #1d1d1f;
   --color-card: #ffffff;
@@ -67,10 +67,10 @@
   --color-chart-6: #c2410c;
 
   /* ---- Typography ---- */
-  /* SF Pro where the OS has it (Apple's own face), then the closest native face, then the
-     self-hosted Fira Sans. A browser only downloads a @font-face that it actually uses. */
+  /* System face first, then Fira Sans (self-hosted). A browser only downloads a
+     @font-face that it actually uses. */
   --font-sans:
-    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Segoe UI Variable Text',
+    system-ui, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Segoe UI Variable Text',
     'Segoe UI', 'Fira Sans', 'Helvetica Neue', Arial, sans-serif;
   /* Code font only for technical values (coordinates, digests, paths, commands, logs). */
   --font-mono:

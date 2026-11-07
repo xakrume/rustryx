@@ -119,7 +119,7 @@ fn s3_config(blob: &BlobConfig) -> anyhow::Result<Value> {
     });
     if let Some(endpoint) = blob.s3_endpoint.as_deref() {
         config["endpoint"] = json!(endpoint);
-        // The operator typed a plain http endpoint (a MinIO next to the node); the store refuses
+        // The operator typed a plain http endpoint (SeaweedFS next to the node); the store refuses
         // it unless that is said explicitly, and writing the URL is saying it.
         config["allow_http"] = json!(endpoint.starts_with("http://"));
     }
@@ -239,7 +239,7 @@ mod tests {
         blob.kind = BlobKind::S3;
         blob.s3_bucket = Some("b".into());
         blob.s3_region = Some("r".into());
-        blob.s3_endpoint = Some("http://minio:9000".into());
+        blob.s3_endpoint = Some("http://seaweedfs:8333".into());
         let definition = seed_definition(&blob, BlobStoreId::generate(), now()).unwrap();
         assert_eq!(definition.config["allow_http"], true);
     }

@@ -1,8 +1,8 @@
 # Rustryx web UI: page inventory and information architecture
 
-Status: design draft, 2026-10-24. Companion document: [parity-compat-harbor.md](parity-compat-harbor.md), whose capability IDs (for example `SRCH-10`) are cited here.
+Status: design draft, 2026-10-24. Companion document: [parity-compat.md](parity-compat.md), whose capability IDs (for example `SRCH-10`) are cited here.
 
-This document merges the screens a user of Sonatype compat Repository 3 and of Harbor 2 sees into one proposed information architecture for the Rustryx web UI. It lists every page with its purpose, main components, the native API resources it needs, the privilege it requires, the states to design, and the UI milestone it belongs to. Format-specific client configuration (mvn, npm, pip, docker, helm, pub) is one reusable `client setup` panel, not separate pages.
+This document merges the screens a user of compat Repository 3 and of a typical OCI registry sees into one proposed information architecture for the Rustryx web UI. It lists every page with its purpose, main components, the native API resources it needs, the privilege it requires, the states to design, and the UI milestone it belongs to. Format-specific client configuration (mvn, npm, pip, docker, helm, pub) is one reusable `client setup` panel, not separate pages.
 
 Nothing is copied from the vendors' documentation or interfaces; screen names below were read from the public documentation and are summarized in own words. The Rustryx UI is a new design.
 
@@ -19,7 +19,7 @@ Observed in the compat documentation (UI overview, browse, search, upload, admin
 - Settings: repositories, blob stores, cleanup policies, content selectors, routing rules; security (privileges, roles, users, anonymous access, realms, LDAP, SAML, SSL certificates, user tokens, service account tokens, IP allow list); system (capabilities, email, HTTP proxy, tasks, nodes, data store, API explorer, licensing); support (status, logs, system information, support ZIP, metrics).
 - A newer interface runs next to the classic one with a switch; admins can control who sees it.
 
-Observed in the Harbor documentation:
+Observed in typical OCI-registry documentation:
 
 - Projects list; inside a project: repositories, artifacts (digest list with type, annotations, push time, pull command), artifact details (tags, vulnerabilities, accessories such as signatures and SBOM), labels, scanner choice, P2P preheat policies, robot accounts, webhooks, logs, configuration (visibility, pull gate, auto scan, SBOM generation, CVE allowlist, content trust, retention, immutability).
 - Administration: users, robot accounts, labels, project quotas, registries and replications (rules, executions, task logs), interrogation services (scanners, vulnerability schedule, scan all), Security Hub, clean up (garbage collection with dry run, audit log purge), job service dashboard, configuration (authentication, system settings with banner and read-only mode, security allowlist).
@@ -29,10 +29,10 @@ Observed in the Harbor documentation:
 
 | Decision | Reason |
 |---|---|
-| Browse stays repository-centric (compat), projects are an optional grouping layer on top (Harbor) | Rustryx repositories are format typed; a project groups repositories, members and policies (parity doc 11.1) without hiding the repository view |
-| One global search and one global upload, reachable from the header | both are first-class in compat; Harbor users search by project, which is a filter |
+| Browse stays repository-centric (compat), projects are an optional grouping layer on top (OCI peer) | Rustryx repositories are format typed; a project groups repositories, members and policies (parity doc 11.1) without hiding the repository view |
+| One global search and one global upload, reachable from the header | both are first-class in compat; OCI-registry users search by project, which is a filter |
 | OCI artifacts get a dedicated artifact page; every other format uses the component page | OCI has digests, tags, accessories and indexes that do not fit a path tree |
-| Administration is one area with five groups: storage, identity and access, automation, security and compliance, system | merges compat Settings and Harbor Administration without duplicating entries |
+| Administration is one area with five groups: storage, identity and access, automation, security and compliance, system | merges compat Settings and OCI-registry Administration without duplicating entries |
 | Per-project policies live under the project; global defaults and engines live under Administration | matches who may change what (project admin vs `nx-admin`) |
 | `client setup` is a panel reused in four places | removes per-format pages (maven, npm, pip, docker, helm, pub, raw) |
 | No generic capabilities page | parity doc 12.4: typed settings pages instead |
@@ -167,7 +167,7 @@ Common columns: API resources are under `/api/v1/` (resource names only). Privil
 
 ## 8. Page inventory: projects, security, administration, account
 
-### 8.1 Projects (Harbor-style layer)
+### 8.1 Projects (project grouping layer)
 
 | Page and route | Purpose and main components | API resources | Privilege | States to design | Milestone |
 |---|---|---|---|---|---|
@@ -177,11 +177,11 @@ Common columns: API resources are under `/api/v1/` (resource names only). Privil
 | Project repositories `/projects/:p/repositories` | repositories attached to the project with their types; attach existing, create new; OCI image counts | `projects/{id}/repositories`, `repositories` | `project.guest(P)`; attach and create need `project.maintainer(P)` or higher | repository already in another project (409) | M2 |
 | Project members `/projects/:p/members` | table of users and identity-provider groups with project role; add member (user search or group path), change role, remove; shows effective source (manual, mapped from group) | `projects/{id}/members`, `users`, `idp-group-mappings` | read: `project.limited-guest(P)`; write: `project.project-admin(P)` | removing the last project admin (blocked with explanation); group path unknown to the identity provider (accept with warning) | M2 |
 | Project labels `/projects/:p/labels` | label list with colors, create and edit; usage counts; global labels shown read-only first | `labels` | read: `project.guest(P)`; write: `project.project-admin(P)` | label in use on delete (shows count) | M2 |
-| Project policies `/projects/:p/policies` | two tabs. Retention: rule list editor (templates, repository and tag selectors with matching or excluding mode, untagged option), schedule picker, dry-run and run now, history. Immutability: rule list editor with selector tester ("would this tag be protected?"), enable toggles | `retention-policies`, `immutability-rules`, `lifecycle-runs`, `tasks` | read: `project.guest(P)`; retention write: `project.developer(P)` and above (Harbor matrix); immutability write: `project.maintainer(P)` and above | no rules yet; rule limit reached; dry-run report with large lists (paged, CSV); run in progress; protected-by-immutability rows marked in the report | M2 |
+| Project policies `/projects/:p/policies` | two tabs. Retention: rule list editor (templates, repository and tag selectors with matching or excluding mode, untagged option), schedule picker, dry-run and run now, history. Immutability: rule list editor with selector tester ("would this tag be protected?"), enable toggles | `retention-policies`, `immutability-rules`, `lifecycle-runs`, `tasks` | read: `project.guest(P)`; retention write: `project.developer(P)` and above (project role matrix); immutability write: `project.maintainer(P)` and above | no rules yet; rule limit reached; dry-run report with large lists (paged, CSV); run in progress; protected-by-immutability rows marked in the report | M2 |
 | Project security `/projects/:p/security` | scanner choice (or system default), scan on push, pull gate severity threshold, project CVE allowlist with expiry and copy-from-system, trust policy (cosign, notation, both) with trust material, SBOM on push | `scanners`, `cve-allowlists`, `trust-policies`, `projects` | read: `project.guest(P)`; write: `project.project-admin(P)` | no scanner available; allowlist expired entries highlighted; trust policy missing keys (blocking validation, no presence-only mode) | M2 |
 | Project robot tokens `/projects/:p/robots` | token table (name, scopes summary, expiry, last used, enabled); create dialog with a scope picker (repository selector and action matrix, push implies pull), expiry, show-once secret dialog; rotate, disable, delete | `api-tokens?kind=robot&project=` | read: `project.maintainer(P)`; write: `project.project-admin(P)` | scope exceeds the creator's privileges (field error naming the missing privilege); token expired (row greyed with renew); rotation warning that CI will fail until updated | M2 |
 | Project webhooks `/projects/:p/webhooks` | webhook list, create (URL, kind, auth header or secret, event checklist, enabled), test delivery, delivery history with status and response | `webhooks`, `webhook-deliveries` | read: `project.maintainer(P)`; write: `project.project-admin(P)` | URL rejected by SSRF filter; delivery failing (status chip, last error); system-wide switch off (banner) | M2 |
-| Project logs `/projects/:p/logs` | audit events of the project: pull, push, delete, config changes; filters for operation, user, resource, date | `audit-events?project=` | `project.guest(P)` (limited guests cannot see logs, per the Harbor matrix) | no events; large date range | M2 |
+| Project logs `/projects/:p/logs` | audit events of the project: pull, push, delete, config changes; filters for operation, user, resource, date | `audit-events?project=` | `project.guest(P)` (limited guests cannot see logs, per the project role matrix) | no events; large date range | M2 |
 | Project settings `/projects/:p/settings` | visibility, description, quota (admin only), delete project (dependency list, typed name) | `projects`, `quotas` | `project.project-admin(P)`; quota: `nx-admin` | delete blocked while repositories are non-empty | M2 |
 
 ### 8.2 Security center
@@ -304,7 +304,7 @@ Backend preconditions beyond phase 1 (all in W2-A): `/api/v1/` resources for the
 
 Definition of done for M1: every page has the states of section 5; keyboard-only pass on the main flows (sign in, find a component, upload, create a repository, create a token); one end-to-end test per flow against a real node; light and dark themes with contrast validated; English catalog complete and all strings externalized; the command palette works on every page.
 
-### UI-M2 Harbor parity (streams W2-B to W2-E)
+### UI-M2 registry parity (streams W2-B to W2-E)
 
 Pages: projects (all project pages), repository health, OCI artifact page (full), security center, scanners, CVE allowlist, trust policies, quotas, garbage collection with dry run, editable tasks, system and project webhooks, registries, replication, promotion dialogs, group blob stores, authentication provider editing and remote user token, email, HTTP proxy, certificates, nodes, info, token policy.
 
@@ -328,20 +328,20 @@ Pages: jobs queue view, log levels, backup and export, migration wizard, usage d
 | compat Settings: capabilities, email, HTTP, tasks, nodes, data store | typed settings pages (parity doc 12.4), Email, HTTP proxy, Tasks, Nodes; data store page is not needed (PostgreSQL only) |
 | compat Support: status, logs, system information, support ZIP, metrics | Status, Info; logs viewer and support ZIP are not built; metrics via Prometheus |
 | compat API explorer | API explorer (M3) |
-| Harbor Projects list and project tabs: repositories, members, labels, scanner, policy, robot accounts, webhooks, logs, configuration | Projects pages (section 8.1) |
-| Harbor artifact list and artifact details (tags, vulnerabilities, accessories, SBOM) | OCI image page and OCI artifact page |
-| Harbor Administration: users, robot accounts, labels, quotas | Users, API tokens (all), project Labels, Quotas |
-| Harbor Administration: registries and replications | Registries, Replication |
-| Harbor Administration: interrogation services, Security Hub | Scanners, Security overview, Vulnerability search, Scan activity |
-| Harbor Administration: garbage collection, audit log purge | Garbage collection; audit retention is partition based (no purge page) |
-| Harbor Administration: job service dashboard | Jobs (M3) |
-| Harbor Administration: configuration (authentication, system settings, security allowlist) | Authentication providers, System settings, CVE allowlist |
-| Harbor user profile and CLI secret | Profile, Personal tokens |
-| Harbor API explorer | API explorer (M3) |
-| Harbor P2P preheat | not built (`UPL-15` is `later`) |
+| OCI-registry Projects list and project tabs: repositories, members, labels, scanner, policy, robot accounts, webhooks, logs, configuration | Projects pages (section 8.1) |
+| OCI-registry artifact list and artifact details (tags, vulnerabilities, accessories, SBOM) | OCI image page and OCI artifact page |
+| OCI-registry Administration: users, robot accounts, labels, quotas | Users, API tokens (all), project Labels, Quotas |
+| OCI-registry Administration: registries and replications | Registries, Replication |
+| OCI-registry Administration: interrogation services, Security Hub | Scanners, Security overview, Vulnerability search, Scan activity |
+| OCI-registry Administration: garbage collection, audit log purge | Garbage collection; audit retention is partition based (no purge page) |
+| OCI-registry Administration: job service dashboard | Jobs (M3) |
+| OCI-registry Administration: configuration (authentication, system settings, security allowlist) | Authentication providers, System settings, CVE allowlist |
+| OCI-registry user profile and CLI secret | Profile, Personal tokens |
+| OCI-registry API explorer | API explorer (M3) |
+| OCI-registry P2P preheat | not built (`UPL-15` is `later`) |
 
 ## 13. Sources and open points
 
-- The product screens above come from the pages listed in the Sources section of [parity-compat-harbor.md](parity-compat-harbor.md): the compat UI overview, browsing, searching, uploading, administration and support pages, and the Harbor administration, project configuration, working with images and security pages. No live instance of either product was used, so exact menu labels and layout are unverified; the IA above is a Rustryx design that covers the capabilities, not a copy of the layouts.
+- The product screens above come from the pages listed in the Sources section of [parity-compat.md](parity-compat.md): the compat UI overview, browsing, searching, uploading, administration and support pages, and the OCI-registry administration, project configuration, working with images and security pages. No live instance of either product was used, so exact menu labels and layout are unverified; the IA above is a Rustryx design that covers the capabilities, not a copy of the layouts.
 - Open points for the product owner: the creation policy for projects (everyone or administrators), whether group repositories may accept publishes later (`REPO-45`), whether the uploader IP is shown in asset detail (privacy), and the default language of the interface.
 - Dependencies on the parity document: page states for scans, trust and quotas assume the designs in sections 11.5, 11.7 and 11.10 of that document.

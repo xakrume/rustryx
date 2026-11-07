@@ -139,9 +139,8 @@ async fn promote_one(
     if source.repository_id != request.source_repository_id {
         return ItemOutcome::Failed("missing");
     }
-    let files = match assets.list_by_component(component_id).await {
-        Ok(files) => files,
-        Err(_) => return ItemOutcome::Failed("store"),
+    let Ok(files) = assets.list_by_component(component_id).await else {
+        return ItemOutcome::Failed("store");
     };
     if files.is_empty() {
         return ItemOutcome::Skipped("empty");
@@ -154,9 +153,8 @@ async fn promote_one(
     coordinate.group_id = source.group_id.clone();
     coordinate.version = source.version.clone();
     coordinate.created_by = source.created_by;
-    let target = match components.find_or_create(&coordinate).await {
-        Ok(target) => target,
-        Err(_) => return ItemOutcome::Failed("store"),
+    let Ok(target) = components.find_or_create(&coordinate).await else {
+        return ItemOutcome::Failed("store");
     };
     for file in &files {
         if let Ok(Some(existing)) = assets
@@ -181,10 +179,10 @@ async fn promote_one(
             return ItemOutcome::Failed(reason_of(&error));
         }
     }
-    if request.mode == PromotionMode::Move {
-        if let Err(error) = components.delete(component_id).await {
-            return ItemOutcome::Failed(store_reason(&error));
-        }
+    if request.mode == PromotionMode::Move
+        && let Err(error) = components.delete(component_id).await
+    {
+        return ItemOutcome::Failed(store_reason(&error));
     }
     ItemOutcome::Done
 }

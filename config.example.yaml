@@ -114,7 +114,7 @@ blob:
   # S3 secret access key. SECRET. Required for s3.
   # Env: RUSTRYX_BLOB_S3_SECRET_KEY or RUSTRYX_BLOB_S3_SECRET_KEY_FILE.
   s3_secret_key: null
-  # Path-style addressing (MinIO, Ceph). Env: RUSTRYX_BLOB_S3_PATH_STYLE.
+  # Path-style addressing (SeaweedFS, Ceph). Env: RUSTRYX_BLOB_S3_PATH_STYLE.
   # Default: true.
   s3_path_style: true
   # Multipart part size in MiB (5 to 5120). Memory per upload is bounded by one
