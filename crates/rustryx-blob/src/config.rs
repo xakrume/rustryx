@@ -121,14 +121,14 @@ impl LocalConfig {
 pub struct S3Config {
     /// Bucket name.
     pub bucket: String,
-    /// Region used for request signing. SeaweedFS and Ceph accept any non-empty value.
+    /// Region used for request signing. `SeaweedFS` and Ceph accept any non-empty value.
     #[serde(default = "default_region")]
     pub region: String,
-    /// Custom endpoint (SeaweedFS, Ceph RGW). Absent means AWS.
+    /// Custom endpoint (`SeaweedFS`, Ceph RGW). Absent means AWS.
     #[serde(default)]
     pub endpoint: Option<String>,
     /// Path-style addressing (`https://host/bucket/key`). Defaults to true when an
-    /// endpoint is set (SeaweedFS, Ceph) and to false for AWS.
+    /// endpoint is set (`SeaweedFS`, Ceph) and to false for AWS.
     #[serde(default)]
     pub path_style: Option<bool>,
     /// Permit a plain `http://` endpoint. Off by default; only for a trusted network.

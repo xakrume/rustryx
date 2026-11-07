@@ -1,4 +1,4 @@
-//! `S3BlobStore` against SeaweedFS (S3 API) started with testcontainers.
+//! `S3BlobStore` against `SeaweedFS` (S3 API) started with testcontainers.
 //!
 //! Gating:
 //! - `RUSTRYX_IT=1`: the test is required; a missing Docker or image is a failure.
@@ -80,7 +80,7 @@ fn seaweed_script() -> String {
     format!(
         r#"set -eu
 cat > /tmp/s3.json <<'JSON'
-{{"identities":[{{"name":"rustryx","credentials":[{{"accessKey":"{key}","secretKey":"{secret}"}}],"actions":["Admin","Read","Write","List","Tagging"]}}]}}
+{{"identities":[{{"name":"rustryx","credentials":[{{"accessKey":"{ACCESS_KEY}","secretKey":"{SECRET_KEY}"}}],"actions":["Admin","Read","Write","List","Tagging"]}}]}}
 JSON
 /usr/bin/weed -logtostderr=true server -dir=/data -volume.max=0 -master.volumeSizeLimitMB=1024 -s3 -s3.config=/tmp/s3.json -ip.bind=0.0.0.0 &
 pid=$!
@@ -101,7 +101,7 @@ fi
 created=0
 j=0
 while [ "$j" -lt 40 ]; do
-  if echo "s3.bucket.create -name {bucket}" | /usr/bin/weed shell -master=127.0.0.1:9333; then
+  if echo "s3.bucket.create -name {BUCKET}" | /usr/bin/weed shell -master=127.0.0.1:9333; then
     created=1
     break
   fi
@@ -114,10 +114,7 @@ if [ "$created" != 1 ]; then
 fi
 echo "rustryx seaweedfs bucket ready" >&2
 wait "$pid"
-"#,
-        key = ACCESS_KEY,
-        secret = SECRET_KEY,
-        bucket = BUCKET,
+"#
     )
 }
 
@@ -125,10 +122,10 @@ async fn start_one(image: &str) -> Result<ContainerAsync<GenericImage>, String> 
     let (name, tag) = image.rsplit_once(':').unwrap_or((image, "latest"));
     let script = seaweed_script();
     GenericImage::new(name, tag)
+        .with_entrypoint("/bin/sh")
         .with_exposed_port(8333.tcp())
         .with_wait_for(WaitFor::message_on_stderr("rustryx seaweedfs bucket ready"))
         .with_user("0")
-        .with_entrypoint("/bin/sh")
         .with_cmd(["-c", script.as_str()])
         .start()
         .await

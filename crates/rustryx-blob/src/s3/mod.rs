@@ -1,4 +1,4 @@
-//! S3-compatible blob store (AWS S3, SeaweedFS, Ceph RGW) on top of `object_store`.
+//! S3-compatible blob store (AWS S3, `SeaweedFS`, Ceph RGW) on top of `object_store`.
 //!
 //! Why `object_store` and not the AWS SDK: it is one small trait with multipart,
 //! streaming and retry built in, it speaks to every S3 dialect we need, and its TLS
