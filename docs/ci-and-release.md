@@ -372,11 +372,10 @@ no second, shorter pipeline.
 | `verify` | verify | signature and provenance |
 
 Jobs marked `allow_failure: true # OBSERVATION MODE` report without failing the
-pipeline. Removing that line makes the check blocking. `build-arm64` needs a
-runner whose tag is `saas-linux-medium-arm64` (or the instance's own tag in
-`RUNNER_ARM64`). `fixtures` needs the shell-executor tag in
-`FIXTURES_RUNNER_TAG` (default `docker-shell`). The other jobs use a Docker
-executor.
+pipeline. Removing that line makes the check blocking. On `gitlab.xakru.me` the Docker jobs use the runner tag `docker` (`gw-docker`),
+and `fixtures` uses the shell runner tag `shell` (`gw-shell`). `build-arm64`
+runs only when `RUNNER_ARM64` names an arm64 runner; it is empty on this
+instance, so that job is skipped.
 
 Same stages and scripts. Differences worth knowing:
 
@@ -388,8 +387,7 @@ Same stages and scripts. Differences worth knowing:
   another host. `test` uses docker-in-docker with `TESTCONTAINERS_HOST_OVERRIDE`
   and `RUSTRYX_IT=1`, so it still runs the Docker integration tests that GitHub's
   `test` job skips.
-* The arm64 jobs use the tag `saas-linux-medium-arm64`; change it on a
-  self-managed instance.
+* `build-arm64` uses the tag in `RUNNER_ARM64`. An empty value skips the job.
 * Keyless signing uses the job's `SIGSTORE_ID_TOKEN`; the verification identity is
   `<server>/<project>//.gitlab-ci.yml@refs/...`.
 * GitLab validates the stage of a job before its rules, so a stage missing from
