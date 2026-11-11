@@ -8,9 +8,10 @@ import { cn } from '@/lib/utils'
  * Fully rounded. Primary actions use the accent token. Hover only changes brightness
  * or a quiet fill: a transform on hover shifts layout under the pointer.
  * Height comes from --control-h, so density and the 44px touch minimum apply everywhere.
+ * The pointer cursor is explicit: Tailwind 4 does not set it on buttons.
  */
 export const buttonVariants = cva(
-  'inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full text-sm font-medium tracking-[-0.01em] transition-[background-color,filter,border-color,color] duration-200 ease-standard active:brightness-95 disabled:pointer-events-none disabled:opacity-40 aria-busy:opacity-100! [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
+  'inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-full text-sm font-medium tracking-[-0.01em] transition-[background-color,filter,border-color,color] duration-200 ease-standard active:brightness-95 disabled:pointer-events-none disabled:opacity-40 aria-busy:opacity-100! [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
   {
     variants: {
       variant: {
