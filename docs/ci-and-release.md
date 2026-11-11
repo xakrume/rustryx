@@ -2,8 +2,10 @@
 
 How the delivery pipeline works, which gates block and which only report, how a
 gate is switched to blocking, and how a release is made, signed and verified.
-GitHub Actions is the primary CI (`.github/workflows/`), GitLab CI is an option
-(`.gitlab-ci.yml`) with the same stages and the same scripts. Supply-chain policy
+GitHub Actions is the primary CI (`.github/workflows/`). The same stages and
+scripts also run on the self-managed GitLab at
+<https://gitlab.xakru.me/rustryx/rustryx> (group `rustryx`, project `rustryx`,
+file `.gitlab-ci.yml`). Supply-chain policy
 (licences, advisories, SLA, exceptions) is in [supply-chain.md](supply-chain.md),
 the developer environment in [local-development.md](local-development.md).
 
@@ -14,7 +16,7 @@ the developer environment in [local-development.md](local-development.md).
 | `.github/workflows/ci.yml` | lint, ui, test, code-security, build, image-security, publish, sign, provenance, verify |
 | `.github/workflows/nightly.yml` | nightly `cargo audit`, expiry of exceptions, `cargo fuzz` (10 minutes per target) |
 | `.github/dependabot.yml` | keeps the SHA pins of actions and base images current, with a 14 day cooldown |
-| `.gitlab-ci.yml` | the same pipeline for GitLab |
+| `.gitlab-ci.yml` | the same pipeline on `gitlab.xakru.me`, group `rustryx` |
 | `Dockerfile`, `Dockerfile.musl` | glibc image (distroless/cc) and static image (distroless/static) |
 | `deny.toml`, `.cargo/audit.toml` | `cargo deny` and `cargo audit` configuration |
 | `ci/*` | the scripts both pipelines run (table below) |
@@ -338,14 +340,49 @@ the GitLab `ui` job, builders, distroless) by digest. To update, take the
 Dependabot pull request or repeat the resolution by hand and run
 `ci/check-toolchain-pin.sh`.
 
-## GitLab option
+## GitLab (`gitlab.xakru.me`)
+
+The GitLab home of this tree is its own group:
+<https://gitlab.xakru.me/rustryx/rustryx>. Creating that group and project needs
+a personal access token with the `api` scope on `gitlab.xakru.me`. This
+repository does not store that token. After the first push of the default
+branch, merge requests and version tags start `.gitlab-ci.yml`.
+The `workflow` rules already limit pipelines to merge requests, the default
+branch, and version tags, so every check below is the project's CI. There is
+no second, shorter pipeline.
+
+| Check | Stage | What it gates |
+|---|---|---|
+| `lint` | lint | `cargo fmt`, Clippy, hadolint, yamllint, actionlint, shellcheck, OpenAPI, toolchain pins |
+| `architecture` | lint | `easement check` |
+| `ui` | lint | typecheck, lint, unit tests, production UI build |
+| `test` | test | workspace tests, including Docker integration tests (`RUSTRYX_IT=1`) |
+| `coverage-gate` | test | coverage report (observation until the marker is removed) |
+| `fixtures` | test | compose fixtures on a shell runner (`FIXTURES_RUNNER_TAG`) |
+| `cargo-audit` | code-security | Rust advisories |
+| `cargo-deny` | code-security | licences and bans |
+| `secret-detection` | code-security | gitleaks |
+| `dependency-scan` | code-security | Trivy on the lockfiles |
+| `sbom` | code-security | CycloneDX from the Rust build |
+| `build-amd64`, `build-arm64` | build | glibc and musl images, untagged digests |
+| `image-security` | image-security | Trivy on the built images |
+| `publish` | publish | tags the images (default branch and `vX.Y.Z` only) |
+| `sign` | sign | cosign |
+| `provenance` | sign | SLSA-style predicate (`ci/gitlab-provenance.sh`) |
+| `verify` | verify | signature and provenance |
+
+Jobs marked `allow_failure: true # OBSERVATION MODE` report without failing the
+pipeline. Removing that line makes the check blocking. `build-arm64` needs a
+runner whose tag is `saas-linux-medium-arm64` (or the instance's own tag in
+`RUNNER_ARM64`). `fixtures` needs the shell-executor tag in
+`FIXTURES_RUNNER_TAG` (default `docker-shell`). The other jobs use a Docker
+executor.
 
 Same stages and scripts. Differences worth knowing:
 
 * Every stage a job uses is declared in `stages`; `ci/check-gitlab-ci.py` checks
   it in `lint`, and the merged YAML can be checked on the server with
-  `POST /projects/:id/ci/lint?include_merged_yaml=true` (this file has been
-  reviewed and statically checked, not run on a GitLab server).
+  `POST /projects/:id/ci/lint?include_merged_yaml=true`.
 * `fixtures` needs a shell-executor runner (tag in `FIXTURES_RUNNER_TAG`), because
   the stack is queried on `localhost`; docker-in-docker publishes its ports on
   another host. `test` uses docker-in-docker with `TESTCONTAINERS_HOST_OVERRIDE`

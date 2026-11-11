@@ -110,6 +110,15 @@ Never commit a real secret. The supply-chain rules are in
 | `rustryx-testkit` | in-memory ports and fixtures for tests |
 | `ui` | the web UI embedded by the server |
 
+## Source
+
+* GitHub: <https://github.com/xakrume/rustryx>
+* GitLab: <https://gitlab.xakru.me/rustryx/rustryx> (group `rustryx`)
+
+GitLab runs the full check list in `.gitlab-ci.yml` on merge requests, the
+default branch, and version tags. The job table is in
+[docs/ci-and-release.md](docs/ci-and-release.md).
+
 ## More documentation
 
 | Guide | What it covers |

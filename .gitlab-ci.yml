@@ -1,6 +1,6 @@
-# GitLab CI option of the Rustryx pipeline. GitHub Actions (.github/workflows/ci.yml)
-# is the primary CI; this file has the same stages and the same gates, built from
-# the same scripts in ci/. Reading guide: docs/ci-and-release.md.
+# GitLab CI for https://gitlab.xakru.me/rustryx/rustryx (group rustryx).
+# GitHub Actions (.github/workflows/ci.yml) is the other copy of this pipeline.
+# Same stages and the same scripts in ci/. Reading guide: docs/ci-and-release.md.
 #
 # Rules this file follows, each for a reason:
 #  - GitLab validates a job's `stage` BEFORE it evaluates `rules`, so every stage
