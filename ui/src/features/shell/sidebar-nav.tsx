@@ -1,5 +1,5 @@
 import { Link, useLocation } from '@tanstack/react-router'
-import { ChevronDown, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { ChevronDown, Package, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { useEffect, useState, type KeyboardEvent } from 'react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -35,7 +35,7 @@ function NavLink({
       activeOptions={{ exact: item.exact === true }}
       aria-label={collapsed ? label : undefined}
       onClick={onNavigate}
-      className="group relative flex min-h-(--control-h) items-center gap-2.5 rounded-md px-3 text-sm text-foreground transition-colors duration-150 hover:bg-foreground/[0.05] data-[status=active]:bg-secondary data-[status=active]:font-medium data-[status=active]:text-on-secondary dark:hover:bg-foreground/[0.08]"
+      className="group relative flex min-h-(--control-h) items-center gap-2.5 rounded-md px-3 text-sm text-foreground transition-colors duration-150 hover:bg-foreground/[0.05] data-[status=active]:bg-info-subtle data-[status=active]:font-medium data-[status=active]:text-info-text data-[status=active]:shadow-[inset_3px_0_0_var(--color-accent)] dark:hover:bg-foreground/[0.08]"
       activeProps={{ 'aria-current': 'page' }}
     >
       <Icon
@@ -152,10 +152,26 @@ export function SidebarNav({ collapsed = false, onNavigate, onToggleCollapsed }:
       {/* The key handler only adds arrow navigation between the real links inside; every link is
           still reachable with Tab, so the landmark itself is not an interactive widget. */}
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- see above */}
+      <div className={cn('px-3 pt-4', collapsed && 'px-2')}>
+        <Link
+          to="/"
+          aria-label={t('common.appName')}
+          className="flex min-h-(--control-h) items-center gap-2.5 rounded-md px-2 text-foreground hover:bg-foreground/[0.05]"
+        >
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent text-on-accent">
+            <Package className="size-4" aria-hidden="true" />
+          </span>
+          {collapsed ? null : (
+            <span className="truncate text-sm font-semibold tracking-[-0.02em]">
+              {t('common.appName')}
+            </span>
+          )}
+        </Link>
+      </div>
       <nav
         aria-label={t('a11y.mainNavigation')}
         onKeyDown={onKeyDown}
-        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-3 py-4"
+        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-3 py-2"
       >
         {sections.map(({ section, items }) => (
           <Section

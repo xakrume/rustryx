@@ -35,7 +35,7 @@ export function AppShell() {
       <CommandPaletteProvider>
         <div className="flex h-dvh bg-background">
           <aside
-            className="hidden shrink-0 border-r border-border/70 bg-background transition-[width] duration-300 ease-standard md:block"
+            className="hidden shrink-0 border-r border-border/70 bg-card transition-[width] duration-300 ease-standard md:block"
             style={{ width: collapsed ? 'var(--sidebar-w-collapsed)' : 'var(--sidebar-w)' }}
           >
             <SidebarNav collapsed={collapsed} onToggleCollapsed={toggle} />
