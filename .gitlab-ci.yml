@@ -53,6 +53,9 @@ variables:
   FIXTURES_RUNNER_TAG: shell
   # Set to an arm64 runner tag to build arm64 images. Empty skips build-arm64.
   RUNNER_ARM64: ""
+  # ci/install-tool.sh writes binaries here. GitHub adds that directory to PATH;
+  # GitLab does not, so hadolint, actionlint, easement, trivy and cosign were not found.
+  PATH: "$HOME/.local/bin:$PATH"
 
 default:
   # gitlab.xakru.me: jobs that pull an image run on gw-docker (`docker`).
