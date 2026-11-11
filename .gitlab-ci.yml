@@ -53,9 +53,6 @@ variables:
   FIXTURES_RUNNER_TAG: shell
   # Set to an arm64 runner tag to build arm64 images. Empty skips build-arm64.
   RUNNER_ARM64: ""
-  # ci/install-tool.sh writes binaries here. GitHub adds that directory to PATH;
-  # GitLab does not, so hadolint, actionlint, easement, trivy and cosign were not found.
-  PATH: "$HOME/.local/bin:$PATH"
 
 default:
   # gitlab.xakru.me: jobs that pull an image run on gw-docker (`docker`).
@@ -96,12 +93,12 @@ lint:
     - apt-get update -qq && apt-get install -y -qq --no-install-recommends shellcheck python3-venv >/dev/null
     - ci/install-tool.sh hadolint
     - ci/install-tool.sh actionlint
-    - hadolint Dockerfile Dockerfile.musl deploy/compose/ldap/Dockerfile
+    - $HOME/.local/bin/hadolint Dockerfile Dockerfile.musl deploy/compose/ldap/Dockerfile
     - python3 -m venv /tmp/lint-venv
     - /tmp/lint-venv/bin/pip install --quiet --require-hashes --no-deps -r ci/requirements-lint.txt
     - /tmp/lint-venv/bin/yamllint -c ci/yamllint.yml --strict .github deploy/compose ci .gitlab-ci.yml
     - /tmp/lint-venv/bin/python ci/check-gitlab-ci.py .gitlab-ci.yml
-    - actionlint
+    - $HOME/.local/bin/actionlint
     - shellcheck ci/*.sh ci/tests/*.sh deploy/compose/ldap/*.sh
     - python3 -I -m unittest discover -s ci/tests -v
     - ci/check-toolchain-pin.sh
@@ -122,9 +119,9 @@ architecture:
     - |
       if [ "$CI_PIPELINE_SOURCE" = merge_request_event ]; then
         git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
-        easement check --diff "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+        $HOME/.local/bin/easement check --diff "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
       else
-        easement check
+        $HOME/.local/bin/easement check
       fi
 
 # Same gates as `make ui-check` and `make ui-build`. Playwright e2e stays local.
@@ -250,7 +247,7 @@ secret-detection:
       set +e
       rc=0
       for mode in git dir; do
-        gitleaks "$mode" --config ci/gitleaks.toml --redact --no-banner \
+        $HOME/.local/bin/gitleaks "$mode" --config ci/gitleaks.toml --redact --no-banner \
           --report-format json --report-path "gitleaks-$mode.json" . 2>&1 | tee "gitleaks-$mode.log"
         [ "${PIPESTATUS[0]}" -eq 0 ] || rc=1
         bytes=$(sed -n 's/.*scanned ~\([0-9][0-9]*\) bytes.*/\1/p' "gitleaks-$mode.log" | tail -n 1)
@@ -269,7 +266,7 @@ dependency-scan:
     - ci/install-tool.sh trivy
     - |
       set +e
-      trivy fs --scanners vuln --list-all-pkgs --skip-dirs target --skip-dirs .cargo-home \
+      $HOME/.local/bin/trivy fs --scanners vuln --list-all-pkgs --skip-dirs target --skip-dirs .cargo-home \
         --ignorefile ci/trivyignore.yaml --exit-code 0 --format json --output trivy-fs.json .
       scan_rc=$?
       python3 ci/check-trivy.py --label trivy-fs --scanner-exit-code "$scan_rc" --min-components 50 \
@@ -410,7 +407,7 @@ image-security:
       export TRIVY_USERNAME=$CI_REGISTRY_USER TRIVY_PASSWORD=$CI_REGISTRY_PASSWORD
       for id in glibc-amd64 glibc-arm64 musl-amd64 musl-arm64; do
         ref="$CI_REGISTRY_IMAGE@$(cat "digests/$id")"
-        trivy image --scanners vuln --list-all-pkgs --ignorefile ci/trivyignore.yaml \
+        $HOME/.local/bin/trivy image --scanners vuln --list-all-pkgs --ignorefile ci/trivyignore.yaml \
           --exit-code 0 --format json --output "trivy-$id.json" "$ref"
         scan_rc=$?
         python3 ci/check-trivy.py --label "trivy-$id" --scanner-exit-code "$scan_rc" --min-components 10 \
@@ -418,7 +415,7 @@ image-security:
         rc=$?
         if [ "$rc" -eq 2 ]; then rc=0; fi
         [ "$rc" -eq 0 ] || { echo "image scan of $ref failed with $rc"; status=$rc; }
-        trivy image --format cyclonedx --output "sbom-$id.cdx.json" "$ref" || status=3
+        $HOME/.local/bin/trivy image --format cyclonedx --output "sbom-$id.cdx.json" "$ref" || status=3
         python3 ci/check-sbom.py --min 10 --expect-purl-prefix pkg:cargo/ "sbom-$id.cdx.json" || status=3
       done
       exit "$status"
@@ -504,7 +501,7 @@ sign:
   before_script:
     - apk add --no-cache bash curl jq tar coreutils
     - ci/install-tool.sh cosign
-    - echo "$CI_REGISTRY_PASSWORD" | cosign login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - echo "$CI_REGISTRY_PASSWORD" | $HOME/.local/bin/cosign login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
     - |
       set -eu
@@ -516,15 +513,15 @@ sign:
       ref="$CI_REGISTRY_IMAGE@$digest"
       sbom="sbom-$VARIANT-amd64.cdx.json"
       if [ "$RUSTRYX_SIGNING" = keyless ] || [ "$RUSTRYX_SIGNING" = both ]; then
-        cosign sign --yes "$ref"
-        cosign attest --yes --type cyclonedx --predicate "$sbom" "$ref"
+        $HOME/.local/bin/cosign sign --yes "$ref"
+        $HOME/.local/bin/cosign attest --yes --type cyclonedx --predicate "$sbom" "$ref"
       fi
       if [ "$RUSTRYX_SIGNING" = kms ] || [ "$RUSTRYX_SIGNING" = both ]; then
         VAULT_TOKEN=$(curl -fsS --request POST --data "{\"jwt\": \"$VAULT_ID_TOKEN\", \"role\": \"${VAULT_JWT_ROLE:?}\"}" \
           "${VAULT_ADDR:?}/v1/auth/jwt/login" | jq -r .auth.client_token)
         export VAULT_TOKEN VAULT_ADDR
-        cosign sign --yes --key "$COSIGN_KMS_KEY_REF" "$ref"
-        cosign attest --yes --key "$COSIGN_KMS_KEY_REF" --type cyclonedx --predicate "$sbom" "$ref"
+        $HOME/.local/bin/cosign sign --yes --key "$COSIGN_KMS_KEY_REF" "$ref"
+        $HOME/.local/bin/cosign attest --yes --key "$COSIGN_KMS_KEY_REF" --type cyclonedx --predicate "$sbom" "$ref"
       fi
 
 # SLSA provenance (in-toto v1) attested to the index, signed with the job identity.
@@ -546,13 +543,13 @@ provenance:
   before_script:
     - apk add --no-cache bash curl jq tar coreutils
     - ci/install-tool.sh cosign
-    - echo "$CI_REGISTRY_PASSWORD" | cosign login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - echo "$CI_REGISTRY_PASSWORD" | $HOME/.local/bin/cosign login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
     - |
       set -eu
       digest=$INDEX_DIGEST_MUSL; [ "$VARIANT" = glibc ] && digest=$INDEX_DIGEST_GLIBC
       ci/gitlab-provenance.sh "$VARIANT" >provenance.json
-      cosign attest --yes --type slsaprovenance1 --predicate provenance.json "$CI_REGISTRY_IMAGE@$digest"
+      $HOME/.local/bin/cosign attest --yes --type slsaprovenance1 --predicate provenance.json "$CI_REGISTRY_IMAGE@$digest"
 
 # ---------------------------------------------------------------- verify
 verify:
@@ -570,7 +567,7 @@ verify:
   before_script:
     - apk add --no-cache bash curl jq tar coreutils
     - ci/install-tool.sh cosign
-    - echo "$CI_REGISTRY_PASSWORD" | cosign login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - echo "$CI_REGISTRY_PASSWORD" | $HOME/.local/bin/cosign login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
     - |
       set -eu
@@ -579,14 +576,14 @@ verify:
       if [ "$RUSTRYX_SIGNING" = keyless ] || [ "$RUSTRYX_SIGNING" = both ]; then
         # The signer is THIS file of THIS project, on the default branch or a release tag.
         identity="^${CI_SERVER_URL}/${CI_PROJECT_PATH}//\.gitlab-ci\.yml@refs/(heads/${CI_DEFAULT_BRANCH}|tags/v[0-9]+\.[0-9]+\.[0-9]+)\$"
-        cosign verify "$ref" --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$CI_SERVER_URL"
+        $HOME/.local/bin/cosign verify "$ref" --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$CI_SERVER_URL"
         for type in cyclonedx slsaprovenance1; do
-          cosign verify-attestation "$ref" --type "$type" \
+          $HOME/.local/bin/cosign verify-attestation "$ref" --type "$type" \
             --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$CI_SERVER_URL" >/dev/null
         done
       fi
       if [ "$RUSTRYX_SIGNING" = kms ] || [ "$RUSTRYX_SIGNING" = both ]; then
         test -s ci/cosign.pub || { echo "ci/cosign.pub is missing: commit the public key of the KMS key"; exit 1; }
-        cosign verify --key ci/cosign.pub "$ref"
-        cosign verify-attestation --key ci/cosign.pub --type cyclonedx "$ref" >/dev/null
+        $HOME/.local/bin/cosign verify --key ci/cosign.pub "$ref"
+        $HOME/.local/bin/cosign verify-attestation --key ci/cosign.pub --type cyclonedx "$ref" >/dev/null
       fi
