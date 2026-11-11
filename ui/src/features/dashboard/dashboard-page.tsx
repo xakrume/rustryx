@@ -68,18 +68,18 @@ function JobGroup({ title, jobs }: { title: string; jobs: JobLink[] }) {
   if (jobs.length === 0) return null
   return (
     <div>
-      <h3 className="text-sm font-semibold">{title}</h3>
-      <ul className="mt-2 space-y-3">
+      <h3 className="px-3 text-xs font-semibold text-muted-foreground">{title}</h3>
+      <ul className="mt-1 space-y-0.5">
         {jobs.map((job) => (
-          <li key={job.label}>
+          <li key={job.label} className="relative rounded-lg hover:bg-muted">
             <Link
               to={job.to}
               search={job.search ?? {}}
-              className="font-medium text-link underline-offset-2 hover:underline"
+              className="block px-3 pt-2 font-medium text-foreground after:absolute after:inset-0"
             >
               {job.label}
             </Link>
-            <p className="text-sm text-muted-foreground">{job.hint}</p>
+            <p className="px-3 pb-2 text-sm text-muted-foreground">{job.hint}</p>
           </li>
         ))}
       </ul>
@@ -174,7 +174,7 @@ function EngineerJobs() {
   return (
     <section
       aria-labelledby="engineer-jobs"
-      className="mb-8 rounded-xl border border-transparent bg-card p-5 md:p-6 dark:border-border/60"
+      className="mb-8 rounded-xl border border-border/50 bg-card p-5 shadow-sm md:p-6 dark:border-border/60 dark:shadow-none"
     >
       <h2 id="engineer-jobs" className="text-base font-semibold">
         {t('dashboard.jobs.title')}
