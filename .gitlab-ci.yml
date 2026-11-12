@@ -108,12 +108,13 @@ architecture:
   image: $RUST_IMAGE
   interruptible: true
   # gw-shell is a 4 GiB slice, so this job stays on the docker runner.
-  # rust-analyzer is SIGKILL'd there while RAM and swap are still free:
-  # vm.overcommit_memory=0 and Committed_AS is already near CommitLimit.
-  # The container cannot change that sysctl (read-only). The host has to
-  # set vm.overcommit_memory=1. See docs/ci-and-release.md.
+  # The host has vm.overcommit_memory=1. One cargo thread keeps rustc from
+  # stacking several compilers in this job.
   variables:
     GIT_DEPTH: "0"
+    CARGO_BUILD_JOBS: "1"
+    RAYON_NUM_THREADS: "1"
+    RA_MAX_THREADS: "1"
   script:
     - |
       set -eu
@@ -137,14 +138,19 @@ architecture:
       ci/install-tool.sh easement
       export PATH="$HOME/.local/bin:$PATH"
       memlog="$CI_PROJECT_DIR/architecture-memory.log"
-      ( while true; do
+      # The runner shell has pipefail. `ps` exits 1 when rust-analyzer is not
+      # up yet, which would stop the sampler on the first miss.
+      ( set +e
+        set +o pipefail
+        while true; do
           printf '%s ' "$(date +%H:%M:%S)"
           awk '/MemAvailable:|CommitLimit:|Committed_AS:/ {printf "%s=%sMB ", $1, int($2/1024)}' /proc/meminfo
-          awk '/oom_kill/ {printf "oom_kill=%s ", $2}' /sys/fs/cgroup/memory.events 2>/dev/null || true
+          awk '/oom_kill/ {printf "oom_kill=%s ", $2}' /sys/fs/cgroup/memory.events 2>/dev/null
           ps -C rust-analyzer -o rss=,vsz= --no-headers 2>/dev/null | awk '{printf "ra_rss=%dMB ra_vsz=%dMB ", $1/1024, $2/1024}'
           echo
           sleep 15
-        done ) >"$memlog" 2>&1 &
+        done
+      ) >"$memlog" 2>&1 &
       mempid=$!
       set +e
       if [ "$CI_PIPELINE_SOURCE" = merge_request_event ]; then

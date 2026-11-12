@@ -375,11 +375,12 @@ Jobs marked `allow_failure: true # OBSERVATION MODE` report without failing the
 pipeline. Removing that line makes the check blocking. On `gitlab.xakru.me` the Docker jobs use the runner tag `docker` (`gw-docker`),
 and `fixtures` uses the shell runner tag `shell` (`gw-shell`). `build-arm64`
 runs only when `RUNNER_ARM64` names an arm64 runner; it is empty on this
-instance, so that job is skipped. `architecture` needs
-`vm.overcommit_memory=1` on the docker host: with the default `0`,
-`Committed_AS` on that machine sits near `CommitLimit`, and the kernel
-SIGKILLs `rust-analyzer` while RAM and swap are still free. The job
-cannot change the sysctl. On the host:
+instance, so that job is skipped. `architecture` runs one cargo thread
+(`CARGO_BUILD_JOBS`, `RAYON_NUM_THREADS`, `RA_MAX_THREADS`) so rustc does not
+stack several compilers. The docker host also needs `vm.overcommit_memory=1`:
+with the default `0`, `Committed_AS` on that machine sits near `CommitLimit`,
+and the kernel SIGKILLs `rust-analyzer` while RAM and swap are still free.
+The job cannot change the sysctl. On the host:
 
 ```
 printf 'vm.overcommit_memory=1\n' | sudo tee /etc/sysctl.d/99-overcommit.conf
