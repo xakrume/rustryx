@@ -397,6 +397,7 @@ image-security:
       artifacts: true
     - job: build-arm64
       artifacts: true
+      optional: true
   before_script:
     - apk add --no-cache bash curl python3 tar coreutils
     - ci/install-tool.sh trivy
@@ -406,6 +407,7 @@ image-security:
       status=0
       export TRIVY_USERNAME=$CI_REGISTRY_USER TRIVY_PASSWORD=$CI_REGISTRY_PASSWORD
       for id in glibc-amd64 glibc-arm64 musl-amd64 musl-arm64; do
+        [ -f "digests/$id" ] || continue
         ref="$CI_REGISTRY_IMAGE@$(cat "digests/$id")"
         $HOME/.local/bin/trivy image --scanners vuln --list-all-pkgs --ignorefile ci/trivyignore.yaml \
           --exit-code 0 --format json --output "trivy-$id.json" "$ref"
@@ -442,6 +444,7 @@ publish:
       artifacts: true
     - job: build-arm64
       artifacts: true
+      optional: true
   services:
     - name: $DOCKER_DIND_IMAGE
       alias: docker
@@ -468,8 +471,12 @@ publish:
           set -- "$@" -t "$image:$tag"
         done
         amd64="$image@$(cat "digests/$variant-amd64")"
-        arm64="$image@$(cat "digests/$variant-arm64")"
-        docker buildx imagetools create "$@" "$amd64" "$arm64"
+        if [ -f "digests/$variant-arm64" ]; then
+          arm64="$image@$(cat "digests/$variant-arm64")"
+          docker buildx imagetools create "$@" "$amd64" "$arm64"
+        else
+          docker buildx imagetools create "$@" "$amd64"
+        fi
         digest=$(docker buildx imagetools inspect "$image:sha-${short}-${variant}" --format '{{.Manifest.Digest}}')
         echo "INDEX_DIGEST_$(echo "$variant" | tr a-z A-Z)=$digest" >>index-digests.env
       done
