@@ -106,37 +106,44 @@ lint:
 architecture:
   stage: lint
   interruptible: true
-  # The Docker runner's cgroup kills rust-analyzer (SIGKILL) while it indexes the
-  # workspace. The shell runner is the host, which has the memory the index needs.
-  # A shell executor ignores `image`, so the toolchain is installed into the job dir.
+  # The Docker executor caps memory and SIGKILLs rust-analyzer. The shell runner
+  # is that host without the cap, but it has no compiler. Run the index in the
+  # Rust image via the host Docker daemon, with no memory limit.
   tags: [shell]
   variables:
     GIT_DEPTH: "0"
-    CARGO_HOME: "$CI_PROJECT_DIR/.cargo-home"
-    RUSTUP_HOME: "$CI_PROJECT_DIR/.rustup"
-    CARGO_BUILD_JOBS: "1"
   script:
     - |
       set -eu
-      export PATH="$CARGO_HOME/bin:$HOME/.local/bin:$PATH"
-      if ! command -v rustup >/dev/null; then
-        curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
-      fi
-      rustup toolchain install --profile minimal
-      rustup component add rust-analyzer
-      node_ver=22.21.1
-      curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v${node_ver}/node-v${node_ver}-linux-x64.tar.xz"
-      tar -xJf /tmp/node.tar.xz -C "$CI_PROJECT_DIR"
-      export PATH="$CI_PROJECT_DIR/node-v${node_ver}-linux-x64/bin:$PATH"
-      npm install -g @sourcegraph/scip-typescript
-      npm ci --prefix ui
-      ci/install-tool.sh easement
       if [ "$CI_PIPELINE_SOURCE" = merge_request_event ]; then
         git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
-        "$HOME/.local/bin/easement" check --diff "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+        diff_base="origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
       else
-        "$HOME/.local/bin/easement" check
+        diff_base=""
       fi
+      docker run --rm \
+        -v "$CI_PROJECT_DIR:/work" -w /work \
+        -e CARGO_BUILD_JOBS=1 \
+        -e DIFF_BASE="$diff_base" \
+        "$RUST_IMAGE" \
+        bash -eu -c '
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends curl ca-certificates xz-utils
+          rustup toolchain install --profile minimal
+          rustup component add rust-analyzer
+          node_ver=22.21.1
+          curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v${node_ver}/node-v${node_ver}-linux-x64.tar.xz"
+          tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1
+          npm install -g @sourcegraph/scip-typescript
+          npm ci --prefix ui
+          ci/install-tool.sh easement
+          export PATH="$HOME/.local/bin:$PATH"
+          if [ -n "$DIFF_BASE" ]; then
+            easement check --diff "$DIFF_BASE"
+          else
+            easement check
+          fi
+        '
 
 # Same gates as `make ui-check` and `make ui-build`. Playwright e2e stays local.
 ui:
