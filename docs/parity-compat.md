@@ -1,18 +1,18 @@
-# Rustryx parity matrix: compat Repository and Harbor
+# Rustryx parity matrix: compat Repository and OCI registry
 
 Status: research draft, 2026-10-24. Owner: product. Companion document: [ui-page-inventory.md](ui-page-inventory.md).
 
-Purpose: the product owner requires that Rustryx covers at least the capabilities of Sonatype compat Repository 3.x (Community feature set) and Harbor 2.x, with a quality web UI. This document lists what the two products offer according to their public documentation, assigns each capability a Rustryx target, and proposes where it lands in the codebase and in the native API.
+Purpose: the product owner requires that Rustryx covers at least the capabilities of compat Repository 3.x (Community feature set) and a typical OCI registry, with a quality web UI. This document lists what the two products offer according to their public documentation, assigns each capability a Rustryx target, and proposes where it lands in the codebase and in the native API.
 
 ## 1. Method and rules
 
 - Only capabilities seen in the official documentation pages listed in the Sources section are included. A statement that could not be confirmed is written `unverified`.
 - Vendor text is summarized in own words. Nothing is copied from the vendor documentation. Both products are only observed as public contracts; no vendor code, schema or UI is reused (README section 2, clean-room rule).
-- compat documentation observed: help.sonatype.com (English site), features up to release 3.97.0 are mentioned (service account tokens are marked new in 3.97.0). Harbor documentation observed: goharbor.io `docs/main`, whose selector marks 2.15.0 as the latest release.
+- compat documentation observed: the English compat help site, features up to release 3.97.0 are mentioned (service account tokens are marked new in 3.97.0). OCI-registry documentation observed: that product's public docs, whose selector marks 2.15.0 as the latest release.
 - "ТЗ" is the Russian technical specification in `docs/TZ/nexspence-rust/` of the project docs (README.md first). "README" below always means that specification's README.
 - The Rustryx scope baseline is README section 3 and section 8 of the specification, plus the iteration list in `07-implementation-prompt.md`. Where `01-architecture.md` lists something in its phase 1 table that README section 3 does not, the cell says `phase1` and the note names the source. README wins on a conflict (README section 8, norm at conflict).
 
-### Legend for the compat Repository and Harbor columns
+### Legend for the compat Repository and OCI-peer columns
 
 | Value | Meaning |
 |---|---|
@@ -21,7 +21,7 @@ Purpose: the product owner requires that Rustryx covers at least the capabilitie
 | yes (Pro) | compat: Pro license only according to the matrix, the Pro features page or the page itself |
 | yes (Pro+) | compat: Pro+ or Pro with the Repository Firewall add-on |
 | yes (edition not stated) | compat: described, but absent from the matrix lists |
-| yes | Harbor: described in the Harbor docs; or compat when the feature is edition-neutral |
+| yes | OCI peer: described in that product's docs; or compat when the feature is edition-neutral |
 | no | the product has no such feature on the pages that were read |
 | unverified | a page title exists or a snippet mentions it, but the content was not confirmed |
 
@@ -32,7 +32,7 @@ compat Community Edition is the free tier. The tiers page states an operational 
 | Target | Meaning |
 |---|---|
 | `phase1` | already in the ТЗ phase 1 scope (README section 3.1, section 8.6, iterations 1 to 4 of the implementation prompt, or the 01-architecture phase 1 table) |
-| `wave2` | to build next, after phase 1. Many of these are ТЗ phase 2 items (README section 3.2); the others are new requirements from the compat and Harbor parity requirement |
+| `wave2` | to build next, after phase 1. Many of these are ТЗ phase 2 items (README section 3.2); the others are new requirements from the compat and OCI-registry parity requirement |
 | `later` | worth building, not next; the reason is given |
 | `out` | will not be built; the reason is given |
 
@@ -63,9 +63,9 @@ All proposed native resources live under `/api/v1/`, REST style, cursor paginati
 
 ## 2. Repositories and formats
 
-Harbor has no repository types in the compat sense: its unit is a project that holds OCI repositories. The project model is discussed in section 11.1.
+The OCI peer has no repository types in the compat sense: its unit is a project that holds OCI repositories. The project model is discussed in section 11.1.
 
-| Capability | compat Repository | Harbor | Rustryx target | Rustryx implementation note |
+| Capability | compat Repository | OCI peer | Rustryx target | Rustryx implementation note |
 |---|---|---|---|---|
 | `REPO-01` Hosted repository (authoritative store for own artifacts) | yes (CE) | yes: pushed content inside a project | `phase1` | `rustryx-core` Repository type hosted; `/api/v1/repositories` |
 | `REPO-02` Proxy repository (cache on first request, serve from cache afterwards) | yes (CE) | yes, OCI only: proxy cache project | `phase1` | `rustryx-format-core` proxy pipeline; remote URL checked by the SSRF allowlist |
@@ -123,17 +123,17 @@ Sources: N-types, N-fields, N-formats, N-matrix, N-pub, N-docker, N-routing, N-a
 
 ## 3. Blob stores and storage
 
-| Capability | compat Repository | Harbor | Rustryx target | Rustryx implementation note |
+| Capability | compat Repository | OCI peer | Rustryx target | Rustryx implementation note |
 |---|---|---|---|---|
 | `BLOB-01` File blob store on a local or network path (NFS v4, EFS) | yes (npl) | yes: filesystem backend (default) | `phase1` | `rustryx-blob` local store; HA needs a shared RWX volume (SRE-34) |
 | `BLOB-02` S3 blob store: bucket, region, key prefix | yes (CE) | yes: S3 backend | `phase1` | `rustryx-blob` S3 store, multipart parts of 16 MiB (01-architecture 1.4) |
-| `BLOB-03` S3-compatible endpoint URL and path-style access | yes (CE) | `unverified` (S3 backend is listed, endpoint option not seen) | `phase1` | MinIO and Ceph per README 3.1; `endpoint` and `path_style` in `rustryx-config` |
+| `BLOB-03` S3-compatible endpoint URL and path-style access | yes (CE) | `unverified` (S3 backend is listed, endpoint option not seen) | `phase1` | SeaweedFS in the local stack, Ceph RGW and AWS S3 the same way; `endpoint` and `path_style` in `rustryx-config` |
 | `BLOB-04` S3 credentials: static keys, session token, assume-role, instance metadata, environment | yes (CE) | unverified | `wave2` | phase 1 takes static keys and environment; assume-role and instance metadata added in `rustryx-blob` |
 | `BLOB-05` S3 server-side encryption (SSE-S3, SSE-KMS with full key id) | yes (CE) | unverified | `wave2` | `encryption` block on the S3 blob store definition |
 | `BLOB-06` S3 connection pool size and extra tuning | yes (CE) | thread limits in the storage section | `wave2` | pool settings in `BlobStoreDef` |
 | `BLOB-07` Azure Blob blob store | yes (Pro) | yes (Azure backend) | `wave2` | new store in `rustryx-blob`; ТЗ phase 2 and 3 |
 | `BLOB-08` Google Cloud Storage blob store | yes (Pro) | yes (GCS backend) | `later` | not in the ТЗ (only Azure is listed); add on demand behind the same `BlobStore` trait |
-| `BLOB-09` Swift or Alibaba OSS storage | no | yes (Swift, OSS backends) | `out` | Harbor-only backends with no compat parity need; revisit on demand |
+| `BLOB-09` Swift or Alibaba OSS storage | no | yes (Swift, OSS backends) | `out` | peer-only backends with no compat parity need; revisit on demand |
 | `BLOB-10` Blob store group with fill policy (round robin, write to first) | yes (Pro) | no | `wave2` | `BlobStoreGroup` in `rustryx-blob`; ТЗ phase 2. Design in section 12.9 |
 | `BLOB-11` Convert a blob store into a group (irreversible) and remove a member with data migration | yes (Pro) | no | `wave2` | admin operation plus a task `remove-blob-store-member`; irreversible conversion needs a confirmation step in the UI |
 | `BLOB-12` Soft quota per blob store (alert only; limit by used space or by remaining space) | yes (npl) | no (quotas are per project, see `RET-11`) | `wave2` | `quota` on the blob store; surfaces in `/readyz` details, metric and `/api/v1/system/status`; never blocks writes |
@@ -150,7 +150,7 @@ Sources: N-blob, N-s3, N-assetinfo, N-cleanup, N-changebs, N-tasks, N-pro, H-ins
 
 ## 4. Search and browse
 
-| Capability | compat Repository | Harbor | Rustryx target | Rustryx implementation note |
+| Capability | compat Repository | OCI peer | Rustryx target | Rustryx implementation note |
 |---|---|---|---|---|
 | `SRCH-01` Keyword quick search over component metadata (trailing wildcard with a minimum prefix, quoted phrase) | yes (CE) | list filters only (type, tag, label); a global keyword search `unverified` | `phase1` | PostgreSQL full text plus trigram indexes (01-architecture 1.3); `GET /api/v1/search/components?q=` |
 | `SRCH-02` Advanced search by format, repository, group, name, version | yes (CE) | filters on the artifact list (type, tags, labels) | `phase1` | same endpoint with filter parameters; compat v1 `search` compat under `/service/rest/v1/search` (README 3.1) |
@@ -178,7 +178,7 @@ Sources: N-search, N-sql, N-browse, N-compinfo, N-assetinfo, N-tagging, N-tiers,
 
 ## 5. Upload and component management
 
-| Capability | compat Repository | Harbor | Rustryx target | Rustryx implementation note |
+| Capability | compat Repository | OCI peer | Rustryx target | Rustryx implementation note |
 |---|---|---|---|---|
 | `UPL-01` Upload components through the web UI (hosted repositories only, format-specific forms, allowed file types per format) | yes (CE) | no: images enter by `docker push`; no UI upload | `wave2` | `POST /api/v1/components?repository=` multipart with streaming body; UI Upload page |
 | `UPL-02` Multi-file upload for Maven and Raw, Maven coordinates form, POM read for coordinates | yes (CE) | no | `wave2` | coordinates from `pom.xml` in the uploaded set; no POM generation (same as compat) |
@@ -203,7 +203,7 @@ Sources: N-upload, N-tagging, N-staging, N-auto, N-matrix, H-images, H-p2p, H-oc
 
 ### 6.1 Authentication realms, users and identity providers
 
-| Capability | compat Repository | Harbor | Rustryx target | Rustryx implementation note |
+| Capability | compat Repository | OCI peer | Rustryx target | Rustryx implementation note |
 |---|---|---|---|---|
 | `AUTH-01` Local users (create, active or disabled status, roles, set password) | yes (npl) | yes: database auth, admin creates users | `phase1` | `rustryx-auth` local provider, argon2id; `/api/v1/users` and compat v1 `security/users` |
 | `AUTH-02` Several identity sources active at once, tried in a configurable order | yes (npl): ordered realm list | no: one mode only; database mode is locked once local users exist | `phase1` | the credential chain in `rustryx-auth`; ordering is fixed by code in phase 1, editable list `/api/v1/auth/realms` in `wave2` |
@@ -227,19 +227,19 @@ Sources: N-upload, N-tagging, N-staging, N-auto, N-matrix, H-images, H-p2p, H-oc
 | `AUTH-20` SAML 2.0 single sign-on (UI only, tokens needed for tools) | yes (Pro) | no | `later` | README 3.3 excludes it and 01-architecture lists it in phase 3; Keycloak can broker SAML identity providers into OIDC |
 | `AUTH-21` Atlassian Crowd realm | yes (Pro) | no | `out` | vendor-specific directory; LDAP and OIDC cover the need |
 | `AUTH-22` Remote user token realm (identity taken from a trusted reverse proxy header) | yes (CE) | no | `wave2` | accept the header only from a configured trusted-proxy CIDR list, otherwise ignore it; authorization still from groups |
-| `AUTH-23` UAA authentication | no | listed in the UI, not recommended, undocumented | `out` | undocumented and not recommended by Harbor itself |
+| `AUTH-23` UAA authentication | no | listed in the UI, not recommended, undocumented | `out` | undocumented and not recommended by that product itself |
 | `AUTH-24` Default role granted to every authenticated user | yes (npl): capability | no | `wave2` | explicit setting, must never grant `nx-admin`, audited; OIDC `default_role` for unmatched users already exists in README 5 |
 | `AUTH-25` Self-registration of users from the login page | no | yes: optional, off by default | `out` | identity comes from the identity provider or an admin; no public sign-up surface |
 | `AUTH-26` Admin account recovery (reset the admin password procedure) | yes (npl): page exists, content not read | no | `phase1` | break-glass local admin from a bootstrap secret (README 8.3); runbook step |
 | `AUTH-27` Authentication attempt limiting (429 with Retry-After, growing delay, counter reset on success; per node in compat) | yes (npl): defaults 3 attempts, 30 s base, 900 s cap | no | `phase1` | login guard in PostgreSQL shared across nodes (README 8.5); stronger than the per-node compat counter |
 | `AUTH-28` IP allow list (monitor or enforce, CIDR entries, CSV import, 256 entries) | yes (Pro) | no | `later` | Pro only; ingress or network policy covers it; revisit with a trusted-proxy design |
 | `AUTH-29` Session settings (UI timeouts, session length, title) | yes (npl): UI settings capability | no | `phase1` | fixed by README 8.3: 30 minutes idle, 8 hours absolute |
-| `AUTH-30` User list with source filter; edit roles of external users locally | yes (npl) | users tab, delete removes Harbor data only | `phase1` | `/api/v1/users?source=`; external identity rows are read-only except roles with origin `manual` |
+| `AUTH-30` User list with source filter; edit roles of external users locally | yes (npl) | users tab, delete removes peer-registry data only | `phase1` | `/api/v1/users?source=`; external identity rows are read-only except roles with origin `manual` |
 | `AUTH-31` Self-service profile: change name, email and password; tokens | yes (npl): password only for the local realm | profile page with CLI secret | `wave2` | `/api/v1/me` and `/api/v1/me/tokens` |
 
 ### 6.2 Roles, privileges and content selectors
 
-| Capability | compat Repository | Harbor | Rustryx target | Rustryx implementation note |
+| Capability | compat Repository | OCI peer | Rustryx target | Rustryx implementation note |
 |---|---|---|---|---|
 | `AUTH-40` Roles with nesting (a role includes other roles); built-in admin and anonymous roles not editable | yes (CE): custom access controls | no: five fixed project roles | `phase1` | `role_roles` table, `nx-admin`, `nx-anonymous`, `nx-developer` (01-architecture 1.5) |
 | `AUTH-41` External role mapping (identity provider group to role) | yes (npl) | partly: admin group for LDAP and OIDC; group to project role mapping not confirmed (`unverified`) | `phase1` | `idp_group_mappings` table, edited through the API and audited (README 8.5) |
@@ -261,7 +261,7 @@ Sources: N-upload, N-tagging, N-staging, N-auto, N-matrix, H-images, H-p2p, H-oc
 
 ### 6.3 Tokens, robot accounts and keys
 
-| Capability | compat Repository | Harbor | Rustryx target | Rustryx implementation note |
+| Capability | compat Repository | OCI peer | Rustryx target | Rustryx implementation note |
 |---|---|---|---|---|
 | `AUTH-60` Per-user token as a credential pair instead of a password (expiry 1 to 999 days, reset, admin can reset all) | yes (Pro): user tokens | yes: per-user CLI secret for OIDC users | `phase1` | `ryx_` API tokens with SHA-256 storage, expiry, revoke, last used (07 iteration 1) |
 | `AUTH-61` Require tokens for all repository access (no password use by tools) | yes (Pro) | no | `wave2` | setting that rejects Basic with passwords on format routes; interacts with the Docker exception |
@@ -271,14 +271,14 @@ Sources: N-upload, N-tagging, N-staging, N-auto, N-matrix, H-images, H-p2p, H-oc
 | `AUTH-65` Robot permissions combine system-level and project-level actions; push requires pull; cannot exceed the creator's permissions; cannot sign in to the UI | no | yes | `wave2` | validate at creation against the creator's effective privileges; robot principals are rejected on the session login route |
 | `AUTH-66` Robot secret shown once, refresh secret (random or manual), disable without delete | no | yes | `wave2` | `POST /api/v1/api-tokens/{id}/actions/rotate`; only SHA-256 is stored |
 | `AUTH-67` Default robot expiry (30 days) and name prefix are system settings; never-expire option | no | yes | `wave2` | `settings.security.token_default_ttl`, `token_name_prefix` |
-| `AUTH-68` Legacy robot accounts from before Harbor 2.2 | no | yes (limited, cannot be edited) | `out` | legacy format of another product |
+| `AUTH-68` Legacy robot accounts from before that product's 2.2 | no | yes (limited, cannot be edited) | `out` | legacy format of another product |
 | `AUTH-69` Token revocation and "valid after" cut-off for sessions | yes (Pro): revoke | yes: disable and delete | `phase1` | `tokens_valid_after` (01-architecture 1.3) and `tid` revocation |
 | `AUTH-70` Per-format credentials: npm bearer, NuGet API key, Conan, Ansible, OCI, pub, Terraform and Hugging Face tokens as realms | yes (npl) | docker and helm login with user or robot credentials | `phase1` | `ryx_` as password for Basic or Bearer works for maven, npm, pypi, pub, raw (README 3.1); NuGet API key `wave2` with the nuget crate |
 | `AUTH-71` Token endpoint for `docker login` and `helm registry login` | yes (npl): Docker and OCI bearer realms | yes | `phase1` | `/v2/token` (01-architecture 1.6) |
 
 ### 6.4 Anonymous access and TLS
 
-| Capability | compat Repository | Harbor | Rustryx target | Rustryx implementation note |
+| Capability | compat Repository | OCI peer | Rustryx target | Rustryx implementation note |
 |---|---|---|---|---|
 | `AUTH-80` Anonymous access switch, anonymous user, read-only default role | yes (npl) | yes: public projects are readable by anyone | `phase1` | both `auth.anonymous_enabled` and repository `allow_anonymous` must agree; anonymous write is never allowed (01-architecture 1.5) |
 | `AUTH-81` Docker anonymous pull needs a per-repository setting in addition | yes (npl) | public project flag | `phase1` | same two-switch model, plus the `/v2/` challenge behaviour |
@@ -292,7 +292,7 @@ Sources: N-realms, N-users, N-roles, N-privileges, N-selectors, N-anon, N-ldap, 
 
 ## 7. Cleanup, retention, immutability, quotas, garbage collection, scheduled tasks
 
-| Capability | compat Repository | Harbor | Rustryx target | Rustryx implementation note |
+| Capability | compat Repository | OCI peer | Rustryx target | Rustryx implementation note |
 |---|---|---|---|---|
 | `RET-01` Cleanup policy with criteria: component age, days since last download, release type, retained versions, asset name matcher; all criteria must match; criteria differ per format | yes (npl); retained versions is Pro | tag retention rules (see `RET-05`) | `phase1` | README 3.1; `cleanup_policies` table; phase 1 criteria: age, version count, name matcher; `last_downloaded` needs `BLOB-20` |
 | `RET-02` Several policies attached to one repository; policies created by admins, attached by repository editors | yes (npl) | project-level rules | `phase1` | `cleanup_policy_ids` on the repository (01-architecture 1.3) |
@@ -324,7 +324,7 @@ Sources: N-cleanup, N-tasks, N-mvnsnap, N-tagging, N-export, N-recovery, N-matri
 
 ## 8. Proxy, routing rules, replication and registry endpoints
 
-| Capability | compat Repository | Harbor | Rustryx target | Rustryx implementation note |
+| Capability | compat Repository | OCI peer | Rustryx target | Rustryx implementation note |
 |---|---|---|---|---|
 | `PRX-01` Proxy cache with maximum component age and maximum metadata age (minutes) | yes (npl) | revalidation by a lightweight HEAD on each pull | `phase1` | per-repository `proxy_config`; metadata TTL differs from blob TTL |
 | `PRX-02` Negative cache of not-found responses with TTL | yes (npl) | no | `phase1` | iteration 2 of the implementation prompt |
@@ -337,14 +337,14 @@ Sources: N-cleanup, N-tasks, N-mvnsnap, N-tagging, N-export, N-recovery, N-matri
 | `PRX-10` Routing rules: allow or block mode, regular expression on the request path, one rule per proxy, shared between proxies, applies inside groups | yes (CE) | no | `phase1` | 01-architecture phase 1 table; `routing_rule_id` on the repository; use a linear-time regex engine because compat warns about ReDoS |
 | `PRX-11` Routing rule test tool (enter paths, see allow or block) | yes (CE) | no | `wave2` | `POST /api/v1/routing-rules/{id}/test` |
 | `PRX-12` Proxy cache projects for OCI (upstream chosen from an endpoint; pull through the project prefix; no push; speed limit to upstream; default 7-day retention for new proxy projects) | yes (npl): Docker proxy repositories | yes | `phase1` | OCI proxy repositories (REPO-02); bandwidth limit and default retention are `wave2` |
-| `PRX-13` Proxy of Docker Hub and other registries | yes (npl) | yes: Harbor, Docker Hub, generic registry, ECR, ACR, GCR, Quay, GHCR, Artifactory | `phase1` | generic OCI upstream with basic or bearer auth; vendor token exchange adapters `later` |
+| `PRX-13` Proxy of Docker Hub and other registries | yes (npl) | yes: OCI registry, Docker Hub, generic registry, ECR, ACR, GCR, Quay, GHCR, Artifactory | `phase1` | generic OCI upstream with basic or bearer auth; vendor token exchange adapters `later` |
 | `PRX-14` Registry endpoints as named, reusable upstream connections (type, URL, credentials, verify certificate, test connection) | no (per-proxy settings only) | yes | `wave2` | `/api/v1/registries`; proxy repositories, replication rules and scanners reference an endpoint by id |
 | `PRX-15` Replication rules: push or pull; filters by name, tag, label, resource type; destination namespace; flatten levels; override; bandwidth limit; delete remote | no | yes | `wave2` | `rustryx-replication` (new), `/api/v1/replication-rules`; OCI first |
 | `PRX-16` Replication triggers: manual, scheduled, event based (push, retag, delete); one active run per rule | no | yes | `wave2` | scheduler trigger plus an event bus on component events; event-based skips signed artifacts until the referrer is present |
 | `PRX-17` Replication executions with task list, per-task log, stop; rule edit blocked while running | no | yes | `wave2` | `/api/v1/replication-executions` with tasks and logs |
-| `PRX-18` Copy blobs in chunks (Harbor to Harbor only) | no | yes | `later` | optimization; plain monolithic or chunked blob upload first |
-| `PRX-19` Replicate signatures and SBOMs together with the artifact | no | yes (Harbor to Harbor keeps the link) | `wave2` | copy referrers with the subject; document the limit for third-party targets |
-| `PRX-20` Replication provider adapters (Harbor, Docker Hub, ECR, ACR, GCR and Artifact Registry, GHCR, Quay, GitLab Registry, Artifactory, Artifact Hub pull only, Alibaba, Huawei, Tencent, VolcEngine) | no | yes | `wave2` | generic OCI distribution first; vendor adapters other than OCI auth are `later`; Alibaba, Huawei, Tencent and VolcEngine adapters are `out` (vendor specific, no compat parity) |
+| `PRX-18` Copy blobs in chunks (peer to peer only) | no | yes | `later` | optimization; plain monolithic or chunked blob upload first |
+| `PRX-19` Replicate signatures and SBOMs together with the artifact | no | yes (peer to peer keeps the link) | `wave2` | copy referrers with the subject; document the limit for third-party targets |
+| `PRX-20` Replication provider adapters (OCI registry, Docker Hub, ECR, ACR, GCR and Artifact Registry, GHCR, Quay, GitLab Registry, Artifactory, Artifact Hub pull only, Alibaba, Huawei, Tencent, VolcEngine) | no | yes | `wave2` | generic OCI distribution first; vendor adapters other than OCI auth are `later`; Alibaba, Huawei, Tencent and VolcEngine adapters are `out` (vendor specific, no compat parity) |
 | `PRX-21` Replication between different product versions is not supported | no | yes (documented limitation) | `wave2` | version the replication protocol and reject unknown versions |
 | `PRX-22` Content replication for non-OCI formats: hosted source, proxy target pre-fetches new components on a one-minute check; service account for auth; PostgreSQL required | yes (Pro): Apt, Docker, Conan, Helm, Maven, npm, NuGetV3, R, Raw, RubyGems, Cargo | no | `later` | after OCI replication; the same engine over a component change feed; ТЗ phase 2 lists content replication |
 | `PRX-23` Replication is not a disaster recovery mechanism (documented caveat: no configuration copied, cleanup must be managed on the target) | yes (Pro) | no | `wave2` | document the same caveat in the runbook |
@@ -353,20 +353,20 @@ Sources: N-types, N-fields, N-http, N-routing, N-repl, N-docker, N-matrix, H-pro
 
 ## 9. Vulnerability scanning, CVE allowlists, signing and content trust, SBOM
 
-| Capability | compat Repository | Harbor | Rustryx target | Rustryx implementation note |
+| Capability | compat Repository | OCI peer | Rustryx target | Rustryx implementation note |
 |---|---|---|---|---|
-| `SCN-01` Built-in image scanner (Trivy, optional component at install time) | no: health check relies on a Sonatype data service | yes | `wave2` | `rustryx-scan` (new) with a `Scanner` trait; Trivy adapter for docker and oci (01-architecture phase 2) |
-| `SCN-03` Pluggable external scanners: register by name and endpoint, auth none, basic, bearer or API key, skip certificate verification option, test connection, several instances, default scanner, per-project scanner | no (IQ Server integration is separate) | yes | `wave2` | `/api/v1/scanners`; HTTP adapter contract defined by Rustryx; Harbor's own adapter contract is `unverified` in the pages read, so interoperability is not promised |
+| `SCN-01` Built-in image scanner (Trivy, optional component at install time) | no: health check relies on a vendor data service | yes | `wave2` | `rustryx-scan` (new) with a `Scanner` trait; Trivy adapter for docker and oci (01-architecture phase 2) |
+| `SCN-03` Pluggable external scanners: register by name and endpoint, auth none, basic, bearer or API key, skip certificate verification option, test connection, several instances, default scanner, per-project scanner | no (IQ Server integration is separate) | yes | `wave2` | `/api/v1/scanners`; HTTP adapter contract defined by Rustryx; the peer's own adapter contract is `unverified` in the pages read, so interoperability is not promised |
 | `SCN-04` Scan on push, enabled per project | no (hourly health check task for proxies) | yes | `wave2` | project and repository setting `auto_scan`; queue with `SKIP LOCKED` leases (01-architecture 1.3) |
 | `SCN-05` Manual scan of one or several artifacts; scan all; scheduled scan all (none, hourly, daily, weekly, cron); stop scan and stop scan all | no | yes | `wave2` | `POST /api/v1/scans`, `/api/v1/scans/actions/scan-all`, schedule as a task |
 | `SCN-06` Scan status per artifact (not scanned, queued, scanning, complete, failed with log) | no | yes | `wave2` | `scan_status` on the component; log link per scan |
 | `SCN-07` Scan summary: highest severity colour, counts per severity, fixable count | yes (CE): health check summary counts critical, severe, moderate | yes | `wave2` | `GET /api/v1/components/{id}/vulnerabilities/summary` |
-| `SCN-08` Detailed per-CVE report with CVSS and descriptions | yes (Pro): detailed report | yes: full list of the last scan, sortable and filterable | `wave2` | `GET /api/v1/components/{id}/vulnerabilities`; column set (CVE id, package, installed, fixed, severity, score) is my design, Harbor's column list was `unverified` |
+| `SCN-08` Detailed per-CVE report with CVSS and descriptions | yes (Pro): detailed report | yes: full list of the last scan, sortable and filterable | `wave2` | `GET /api/v1/components/{id}/vulnerabilities`; column set (CVE id, package, installed, fixed, severity, score) is my design, the peer's column list was `unverified` |
 | `SCN-09` Image index scanning: each referenced image scanned, index result aggregates (success, limited, failed) | no | yes | `wave2` | aggregate rule documented in the scanner contract |
 | `SCN-10` Export vulnerabilities to CSV per project with filters (repository, tag, label, CVE id), file removed after download | no | yes | `wave2` | async export job; `POST /api/v1/vulnerabilities/exports`, download once |
-| `SCN-11` Security Hub: registry-wide totals by severity, top 5 artifacts, top 5 CVEs, search by CVE id with filters (severity, score range, project, repository, digest, package, tag) | no | yes: admin only | `wave2` | `GET /api/v1/vulnerabilities?cve=` over a `findings` table with indexes; CVE id mandatory for performance, as Harbor does |
+| `SCN-11` Security Hub: registry-wide totals by severity, top 5 artifacts, top 5 CVEs, search by CVE id with filters (severity, score range, project, repository, digest, package, tag) | no | yes: admin only | `wave2` | `GET /api/v1/vulnerabilities?cve=` over a `findings` table with indexes; CVE id mandatory for performance, as the OCI peer does |
 | `SCN-12` System-wide CVE allowlist with optional expiry date | no | yes | `wave2` | `/api/v1/cve-allowlists` with `scope=system`; every entry audited |
-| `SCN-13` Per-project CVE allowlist overriding the system list, copy from system, expiry | no | yes | `wave2` | `scope=project`; a copy does not track later system removals (same behaviour documented by Harbor) |
+| `SCN-13` Per-project CVE allowlist overriding the system list, copy from system, expiry | no | yes | `wave2` | `scope=project`; a copy does not track later system removals (same behaviour documented by the OCI peer) |
 | `SCN-14` Pull gate: block pulls of artifacts with findings at or above a severity; checked at pull time per artifact; indexes judged by their children; negligible never blocks | yes (Pro+): Firewall policies | yes: "prevent vulnerable images" | `wave2` | ТЗ phase 2 pull gate; evaluated in the OCI pull path with a cached verdict keyed by digest and allowlist version |
 | `SCN-15` Repository health check for proxies: vulnerability and license risk summary for Maven, npm, NuGet, PyPI, RubyGems, Yum; hourly check, report at most daily | yes (CE): summary; Pro: detailed | no | `wave2` | vulnerability part from the OSV and Trivy findings (section 11.7); the license risk part is `later` because it needs a license data source |
 | `SCN-16` Component age and popularity indicators from the health check | yes (CE) | no | `later` | needs external popularity data; see `SRCH-13` |
@@ -378,7 +378,7 @@ Sources: N-types, N-fields, N-http, N-routing, N-repl, N-docker, N-matrix, H-pro
 | `SCN-22` Cosign and Notation signatures stored as accessories linked to the signed artifact; shown in an accessories table; deleting the artifact deletes them | no | yes | `phase1` | OCI Referrers API and tag-schema fallback (iteration 3); storage and linking are phase 1, UI and lifecycle coupling `wave2` |
 | `SCN-23` Retention, immutability and replication apply to an artifact and its signatures together; signatures are not scanned | no | yes | `wave2` | lifecycle jobs treat referrers as part of the subject |
 | `SCN-24` Content trust per project: block pulls of unsigned artifacts; Cosign, Notation or both; both enabled means both must verify | no | yes | `wave2` | `/api/v1/trust-policies` with trust material; see section 11.10; a presence-only check is not accepted |
-| `SCN-25` Notation trust policy (trusted signers, verification level) and Cosign key or keyless identity as policy input | no | Notation: yes, trust policy created by the client; verification inside Harbor not explained in the pages read (`unverified`) | `wave2` | the server needs its own verification library; selection needs a spike (not verified) |
+| `SCN-25` Notation trust policy (trusted signers, verification level) and Cosign key or keyless identity as policy input | no | Notation: yes, trust policy created by the client; verification inside the OCI peer not explained in the pages read (`unverified`) | `wave2` | the server needs its own verification library; selection needs a spike (not verified) |
 | `SCN-26` Server-side signing (APT hosted metadata signed with a GPG key) | yes (npl): APT hosted repositories | no | `wave2` | with the APT crate (`REPO-22`); key as a secret reference |
 | `SCN-27` SBOM generation (SPDX through the default scanner), automatic on push per project, manual from the artifact list, stop | no | yes | `wave2` | `rustryx-scan` SBOM job; stored as an OCI accessory; format SPDX JSON first |
 | `SCN-28` SBOM display (package names, versions, licenses) and download of the full file | no | yes | `wave2` | `GET /api/v1/components/{id}/sbom` |
@@ -389,14 +389,14 @@ Sources: N-rhc, N-malware, N-compinfo, N-matrix, N-fields, H-scan, H-pluggable, 
 
 ## 10. Webhooks, audit, observability, system configuration, HA, API surface, CLI
 
-| Capability | compat Repository | Harbor | Rustryx target | Rustryx implementation note |
+| Capability | compat Repository | OCI peer | Rustryx target | Rustryx implementation note |
 |---|---|---|---|---|
 | `OPS-01` Webhooks: global and per-repository targets, selectable event types, optional secret signing | yes (Pro+): webhook capabilities, listed under the Firewall-licensed items | yes: per project | `wave2` | `rustryx-notify` (new), `/api/v1/webhooks`; HMAC-SHA256 with timestamp, per-webhook secret, replay window (SEC-38); SSRF filter on targets |
 | `OPS-02` Webhook signature header: HMAC SHA-1 of the compact JSON body in a signature header | yes (Pro+) | no signature described: an auth header is configured instead | `wave2` | Rustryx signs with SHA-256 and a timestamp; document a verification snippet for consumers |
 | `OPS-03` Webhook endpoint kinds: HTTP with default or CloudEvents payload, Slack | no | yes | `wave2` | HTTP JSON and CloudEvents first; Slack formatting is `later` (payload only) |
 | `OPS-04` Webhook event catalog: push, pull, delete, scan completed, scan failed, scan stopped, quota exceeded, quota near threshold, replication status, tag retention finished | no | yes | `wave2` | typed event enum in `rustryx-core`; global `audit` stream from compat maps to the audit sink |
 | `OPS-05` Webhook enable and disable per webhook; system-wide on or off; retry count for delivery jobs | no | yes | `wave2` | delivery log table with retries and backoff, `/api/v1/webhook-deliveries` |
-| `OPS-06` Email server settings (SMTP) with verify and disable; used for task notifications and links | yes (npl): email API with get, set, disable, verify | the Harbor docs read did not cover email settings (`unverified`) | `wave2` | `/api/v1/settings/email` plus `POST .../verify`; password as a secret reference |
+| `OPS-06` Email server settings (SMTP) with verify and disable; used for task notifications and links | yes (npl): email API with get, set, disable, verify | the OCI-peer docs read did not cover email settings (`unverified`) | `wave2` | `/api/v1/settings/email` plus `POST .../verify`; password as a secret reference |
 | `OPS-07` Task result email (failure only or success and failure) | yes (npl) | no | `wave2` | tied to `RET-17`; opt-in per task |
 | `OPS-08` Base URL setting used in emails and generated links | yes (npl): capability | external URL in the install config | `phase1` | `http.base_url` is mandatory config (SRE-35) |
 | `OPS-09` Audit log with domains security, repositories, system, firewall; event types created, updated, deleted, purged, changed; entry has time, node, initiator, domain, type, context, attributes | yes (npl): JSON lines file, daily rotation, 90 days | yes: stored in the database | `phase1` | audit of mutations and logins, NDJSON export, stdout JSON (README 3.1, 8.6); monthly partitions (01-architecture 1.3) |
@@ -408,7 +408,7 @@ Sources: N-rhc, N-malware, N-compinfo, N-matrix, N-fields, H-scan, H-pluggable, 
 | `OPS-15` Request log, outbound request log, task logs | yes (npl) | log settings: local rotation and retention, optional external syslog | `phase1` | structured access log with route templates (SRE-08); task logs per run in `wave2` |
 | `OPS-16` Prometheus metrics endpoint with privilege or basic auth | yes (npl): privilege `nx-metrics-all` | yes: separate port, components core, registry, jobservice, exporter | `phase1` | `/metrics` bearer-protected by default (SRE-08) |
 | `OPS-17` Distributed tracing (OTLP, Jaeger), one exporter, request id correlation | no | yes: OpenTelemetry since 2.4 | `phase1` | OTLP (SRE-12); `X-Request-ID` correlation |
-| `OPS-18` Health and readiness endpoints | yes (npl): status page and health endpoints; REST status page not read | metrics `harbor_health`, `harbor_up`; CLI health command | `phase1` | `/healthz` and `/readyz` per README 8.2 |
+| `OPS-18` Health and readiness endpoints | yes (npl): status page and health endpoints; REST status page not read | metrics `registry_health`, `registry_up`; CLI health command | `phase1` | `/healthz` and `/readyz` per README 8.2 |
 | `OPS-19` Status page with checks: resources, blob stores, license, default admin password, scripting, update available, read-only mode, retry storms, H2 limits | yes (npl) | no | `wave2` | `GET /api/v1/system/status`: list of checks with severity, e.g. default credentials, anonymous enabled, tokens that never expire, blob store quota |
 | `OPS-20` System information download (version, plugins, paths, JVM and OS properties, environment variables) per node | yes (npl) | CLI info command | `wave2` | `GET /api/v1/system/info` redacted; no raw environment dump because env may hold secrets |
 | `OPS-21` Support ZIP (logs and sanitized configuration, per node in HA) | yes (npl) | no | `later` | a sanitized `rustryx support-bundle` command; the secret-leak review comes first |
@@ -429,28 +429,28 @@ Sources: N-rhc, N-malware, N-compinfo, N-matrix, N-fields, H-scan, H-pluggable, 
 | `OPS-36` Script REST API (Groovy) | yes (npl): disabled by default | no | `out` | see `AUTH-47` |
 | `OPS-37` Native REST API with interactive explorer (Swagger UI), API version 2.0; authorize with basic credentials | yes (npl): Swagger UI needs a settings-read privilege | yes | `wave2` | OpenAPI contract in `docs/openapi/rustryx-api-v1.yaml` (the source for the generated TypeScript client, see `ui-design-brief.md`), served at `/api/v1/openapi.json`, plus an explorer page (UI inventory) |
 | `OPS-38` Pagination convention | yes (npl): continuation token | `unverified` | `phase1` | `continuationToken` (01-architecture 1.6) |
-| `OPS-39` Official command line client | no (REST and package clients only) | yes: harbor-cli (projects, repositories, artifacts, labels, tags, quotas, webhooks, health, info) | `wave2` | `rustryx-cli` (new), binary `ryx`, OIDC device flow for the confidential `rustryx-cli` client (README 5); mirrors `/api/v1/` |
+| `OPS-39` Official command line client | no (REST and package clients only) | yes: a registry CLI (projects, repositories, artifacts, labels, tags, quotas, webhooks, health, info) | `wave2` | `rustryx-cli` (new), binary `ryx`, OIDC device flow for the confidential `rustryx-cli` client (README 5); mirrors `/api/v1/` |
 | `OPS-40` Bundles and plugin development (new format support) | yes (npl): bundle development pages | no | `out` | formats are compiled in, no plugins (ADR 11) |
 
 Sources: N-webhooks, N-email, N-audit, N-logging, N-prom, N-status, N-sysinfo, N-support, N-caps, N-nodes, N-datastore, N-usage, N-auto, N-apiref, N-oneui, N-matrix, N-pro, H-audit, H-settings, H-metrics, H-tracing, H-api, H-projcfg, H-install, H-cli.
 
-## 11. Harbor concepts that need a design decision
+## 11. OCI-registry concepts that need a design decision
 
-Each subsection states what the Harbor documentation describes (in own words), the proposed Rustryx decision, and the entities and native API resources involved. Statements about Harbor that the pages did not confirm are marked `unverified`.
+Each subsection states what the OCI-registry documentation describes (in own words), the proposed Rustryx decision, and the entities and native API resources involved. Statements about the OCI peer that the pages did not confirm are marked `unverified`.
 
 ### 11.1 Projects (namespaces over repositories, with members and roles)
 
-- Harbor: a project is the namespace in an image path (`project/repository:tag`). It is public or private, has members with one of five roles (limited guest, guest, developer, maintainer, project admin), and carries its own configuration: auto scan, pull gate, CVE allowlist, content trust, retention, immutability, webhooks, robot accounts, labels, scanner choice, logs and a storage quota. Creating projects can be limited to system admins.
+- OCI peer: a project is the namespace in an image path (`project/repository:tag`). It is public or private, has members with one of five roles (limited guest, guest, developer, maintainer, project admin), and carries its own configuration: auto scan, pull gate, CVE allowlist, content trust, retention, immutability, webhooks, robot accounts, labels, scanner choice, logs and a storage quota. Creating projects can be limited to system admins.
 - Rustryx decision: a `project` is an optional access-and-policy container over repositories of any format, not an OCI-only construct, because Rustryx repositories are compat-style and format typed. A repository belongs to at most one project (`repositories.project_id`, nullable). Repositories without a project keep the compat behaviour (global admin, privileges and selectors). For OCI the default mapping is one hosted OCI repository named like the project, so `docker push host/payments/api:1.0` reaches `/v2/payments/api` and needs no new URL space.
 - Roles: the five project roles are templates that expand into ordinary privileges (repository view actions plus a few project actions) over every repository of the project. Membership rows reference a user or an identity-provider group (for example the Keycloak path `/rustryx/team-payments/publishers` mapped to developer in project `payments`, which matches the example group layout in README section 5). Expansion happens in `rustryx-rbac`, so there is still exactly one authorization engine.
 - Visibility: public sets `allow_anonymous` read on the project repositories, and still needs the global anonymous switch (README 8.5, 01-architecture 1.5). Anonymous write is never granted.
-- Boundaries: a project admin edits members and project policies only; registries, scanners, the system CVE allowlist, quotas and global settings stay with `nx-admin` (matches the Harbor permission matrix where quota edit is system admin only).
+- Boundaries: a project admin edits members and project policies only; registries, scanners, the system CVE allowlist, quotas and global settings stay with `nx-admin` (matches the peer permission matrix where quota edit is system admin only).
 - Resources: `/api/v1/projects`, `/api/v1/projects/{id}/members`, `/api/v1/projects/{id}/repositories`, `/api/v1/projects/{id}/policies`. compat v1 compat endpoints do not show projects.
 - Open points: project deletion (block while repositories are non-empty, or cascade after a typed confirmation); how a project with several formats shows quota (sum over repositories).
 
 ### 11.2 Robot accounts (mapped onto API tokens with scopes)
 
-- Harbor: system robots (all projects including future ones, or a chosen set with per-project permissions) and project robots; secret shown once; expiry default 30 days, "never" possible; refresh the secret with a random or manual value; disable without deleting; name prefix; push requires pull; permissions cannot exceed the creator's; robots cannot sign in to the UI.
+- OCI peer: system robots (all projects including future ones, or a chosen set with per-project permissions) and project robots; secret shown once; expiry default 30 days, "never" possible; refresh the secret with a random or manual value; disable without deleting; name prefix; push requires pull; permissions cannot exceed the creator's; robots cannot sign in to the UI.
 - compat: service account tokens bound to one role, expiry 30, 60, 90 days, a year or never, shown once, revocable, expired ones purged daily (Pro, 3.97.0).
 - Rustryx decision: no separate account table with a password. A robot is an `api_tokens` row (`ryx_` prefix, SHA-256 stored) with `kind=robot`, optional `project`, `scopes[]` (pairs of resource selector and action), `expires_at`, `disabled`, `created_by`, `last_used_at`. The principal gets privileges only from its scopes. At creation the scopes must be a subset of the creator's effective privileges. Role presets in the UI expand to scopes, which covers the compat role-bound style.
 - Registry login: Docker and Helm use the token name as username and the token as password. The token name pattern is `robot+<project>+<name>` and is configurable.
@@ -459,23 +459,23 @@ Each subsection states what the Harbor documentation describes (in own words), t
 
 ### 11.3 Retention policies
 
-- Harbor: tag retention keeps what matches rule templates (N most recently pushed, N most recently pulled, pushed within N days, pulled within N days), with repository and tag selectors in matching or excluding mode and an option for untagged artifacts. Several rules (up to 15) combine with OR. Evaluation is by tag but action is by artifact, so an artifact with any kept tag is kept. One schedule per project, dry run and run now.
+- OCI peer: tag retention keeps what matches rule templates (N most recently pushed, N most recently pulled, pushed within N days, pulled within N days), with repository and tag selectors in matching or excluding mode and an option for untagged artifacts. Several rules (up to 15) combine with OR. Evaluation is by tag but action is by artifact, so an artifact with any kept tag is kept. One schedule per project, dry run and run now.
 - compat: cleanup policies with AND-ed criteria (age, last download, release type, retained versions, name matcher) per format, previewed and executed as a soft delete.
-- Rustryx decision: one lifecycle engine in `rustryx-tasks` with two policy modes. `cleanup` mode (compat style) deletes what matches all criteria. `retain` mode (Harbor style) deletes what is in scope and not kept by any rule. Both first produce a plan (candidates plus the reason each was chosen) stored as a run with `dry_run=true`, and a real run re-evaluates and applies in batches as a soft delete. Mandatory protections: immutability rules (11.4), release repositories and legal hold (DSO-34), and never removing the last remaining version unless the policy says so explicitly.
+- Rustryx decision: one lifecycle engine in `rustryx-tasks` with two policy modes. `cleanup` mode (compat style) deletes what matches all criteria. `retain` mode deletes what is in scope and not kept by any rule. Both first produce a plan (candidates plus the reason each was chosen) stored as a run with `dry_run=true`, and a real run re-evaluates and applies in batches as a soft delete. Mandatory protections: immutability rules (11.4), release repositories and legal hold (DSO-34), and never removing the last remaining version unless the policy says so explicitly.
 - Deletions are audited in batches that list the removed digests or coordinates, so volume stays bounded and DSO-34 is still met.
 - Resources: `/api/v1/cleanup-policies`, `/api/v1/retention-policies`, `/api/v1/lifecycle-runs` (plans and reports, CSV export).
-- Dependencies: `last_downloaded` and pulled templates need the pull counters (`BLOB-20`). Proxy repositories get a recommended 7-day retention template (Harbor applies one by default to new proxy cache projects), offered as a choice and not forced.
+- Dependencies: `last_downloaded` and pulled templates need the pull counters (`BLOB-20`). Proxy repositories get a recommended 7-day retention template (the OCI peer applies one by default to new proxy cache projects), offered as a choice and not forced.
 
 ### 11.4 Immutability rules
 
-- Harbor: per-project rules with repository and tag selectors; a tag matched by any rule cannot be overwritten, deleted, re-tagged or replaced by replication; other tags of the same artifact stay editable; up to 15 rules. How this interacts with retention and proxy cache was `unverified` in the pages read.
-- Rustryx decision: `immutability_rules` over a scope (project or repository) with a selector (OCI: repository and tag patterns; other formats: the content selector expression on path or coordinates). Matching writes are rejected with the OCI `DENIED` error or HTTP 409. Re-pushing the identical digest is allowed (idempotent publish; Harbor behaviour for this case is `unverified`). It complements the repository write policy (`allow`, `allow_once`, `deny`).
+- OCI peer: per-project rules with repository and tag selectors; a tag matched by any rule cannot be overwritten, deleted, re-tagged or replaced by replication; other tags of the same artifact stay editable; up to 15 rules. How this interacts with retention and proxy cache was `unverified` in the pages read.
+- Rustryx decision: `immutability_rules` over a scope (project or repository) with a selector (OCI: repository and tag patterns; other formats: the content selector expression on path or coordinates). Matching writes are rejected with the OCI `DENIED` error or HTTP 409. Re-pushing the identical digest is allowed (idempotent publish; OCI-peer behaviour for this case is `unverified`). It complements the repository write policy (`allow`, `allow_once`, `deny`).
 - Interaction decision (conservative): cleanup, retention, promotion move and replication skip immutable items unless an `nx-admin` sets `override_immutable` on that run. The check runs inside the same transaction that publishes or deletes the tag, so a race cannot slip a change past it.
 - Resources: `/api/v1/immutability-rules`; events `IMMUTABLE_REJECT` in the audit stream.
 
 ### 11.5 Quotas
 
-- Harbor: storage quota per project in MiB, GiB or TiB, global default for new projects, per-project override, minus one means unlimited. Blobs shared between projects count once per project, so totals can exceed disk. Retagging into another project adds usage. The manifest is pushed last, so a push can pass the first check and still fail; concurrent pushes compete first come first served. Garbage collection lowers usage.
+- OCI peer: storage quota per project in MiB, GiB or TiB, global default for new projects, per-project override, minus one means unlimited. Blobs shared between projects count once per project, so totals can exceed disk. Retagging into another project adds usage. The manifest is pushed last, so a push can pass the first check and still fail; concurrent pushes compete first come first served. Garbage collection lowers usage.
 - compat: soft quota per blob store (alert only; by maximum used or minimum free space).
 - Rustryx decision: two layers. (1) Hard quota on a project, optionally on a repository (`quota_bytes` already appears in 01-architecture 1.3): distinct blobs referenced by the scope, kept in `quota_usage` and updated in the publish and delete transactions, with a recount task as a safety net. A pre-check uses the declared length and rejects early; the authoritative check runs when the manifest or component is committed. Reads and deletes always continue, as in the disk-full rule SRE-34. (2) Soft quota on a blob store (`BLOB-12`), evaluated by a periodic job, never on the write path.
 - Events: quota exceeded and near-threshold feed the webhook catalog. Quota usage is visible to every project member; only `nx-admin` edits limits.
@@ -483,14 +483,14 @@ Each subsection states what the Harbor documentation describes (in own words), t
 
 ### 11.6 Replication rules and registry endpoints
 
-- Harbor: registry endpoints (provider, URL, credentials, verify certificate, test connection) and rules (push or pull, filters on name, tag, label and resource type, destination namespace, flatten levels, override, bandwidth, delete remote for event-based) with manual, scheduled or event triggers, executions with per-task logs, retries after a few minutes, one active run per rule, no replication between different Harbor versions.
-- Rustryx decision: `registries` (provider `rustryx` or generic `oci` first; URL, credential reference, CA reference, last test result) are shared by proxy repositories, replication rules and any future adapter. Rules, filters and triggers follow Harbor. The executor runs under a distributed lock per rule and creates retryable per-artifact tasks in the lease queue; it copies manifests and blobs, then referrers (signatures and SBOMs) after the subject. The URL passes the SSRF filter (README 8.6). A protocol version header lets nodes refuse an incompatible peer.
+- OCI peer: registry endpoints (provider, URL, credentials, verify certificate, test connection) and rules (push or pull, filters on name, tag, label and resource type, destination namespace, flatten levels, override, bandwidth, delete remote for event-based) with manual, scheduled or event triggers, executions with per-task logs, retries after a few minutes, one active run per rule, no replication between different peer versions.
+- Rustryx decision: `registries` (provider `rustryx` or generic `oci` first; URL, credential reference, CA reference, last test result) are shared by proxy repositories, replication rules and any future adapter. Rules, filters and triggers follow the OCI-peer model. The executor runs under a distributed lock per rule and creates retryable per-artifact tasks in the lease queue; it copies manifests and blobs, then referrers (signatures and SBOMs) after the subject. The URL passes the SSRF filter (README 8.6). A protocol version header lets nodes refuse an incompatible peer.
 - Out of the first cut: vendor token-exchange adapters, compat-style pre-emptive pull for non-OCI formats (`PRX-22`).
 - Resources: `/api/v1/registries`, `/api/v1/replication-rules`, `/api/v1/replication-executions`, `.../tasks`.
 
 ### 11.7 Scanner integration (Trivy and OSV)
 
-- Harbor: Trivy is the default scanner (optional at install), other scanners attach through an endpoint with none, basic, bearer or API key authentication, one default and a per-project choice; scan on push, manual, scan all, scheduled, stop; findings summary and per-CVE list; Security Hub; CVE export; SBOM generation by the default scanner.
+- OCI peer: Trivy is the default scanner (optional at install), other scanners attach through an endpoint with none, basic, bearer or API key authentication, one default and a per-project choice; scan on push, manual, scan all, scheduled, stop; findings summary and per-CVE list; Security Hub; CVE export; SBOM generation by the default scanner.
 - Rustryx decision: `rustryx-scan` (new crate) defines a `Scanner` trait with `capabilities` (vulnerability, sbom), `scan` and `health`. Adapters: `trivy` for OCI images (Trivy server mode or a resource-limited job with an offline database; arguments never built from untrusted strings), `osv` for maven, npm, pypi and cargo using package URLs from stored component metadata (no artifact download needed), and a generic `http` adapter for external scanners with a Rustryx-defined contract.
 - Data: `scan_reports` (component, scanner, status, timing, summary) and `findings` (report, CVE id, package, installed and fixed version, severity, score) with an index on CVE id for the hub search. Allowlist and pull-gate evaluation are pure functions over findings so they are unit-testable.
 - Triggers: after the publish commit (never blocking the push), manual, scheduled, and a periodic re-evaluation of stored package URLs against updated OSV data, which finds new advisories without a rescan of bytes.
@@ -499,7 +499,7 @@ Each subsection states what the Harbor documentation describes (in own words), t
 
 ### 11.8 Webhooks
 
-- Harbor: per-project webhooks with HTTP (default or CloudEvents payload) and Slack kinds, an optional auth header, a catalog of events (push, pull, delete, scan completed, failed and stopped, quota exceeded and near threshold, replication, retention finished), per-webhook enable, a system switch, and a retry limit.
+- OCI peer: per-project webhooks with HTTP (default or CloudEvents payload) and Slack kinds, an optional auth header, a catalog of events (push, pull, delete, scan completed, failed and stopped, quota exceeded and near threshold, replication, retention finished), per-webhook enable, a system switch, and a retry limit.
 - compat: global and repository webhook capabilities, HMAC SHA-1 signature header.
 - Rustryx decision: `rustryx-notify` (new crate). Events are written to an outbox table in the same transaction as the state change, then a dispatcher under a lease delivers them at least once with exponential backoff and a configurable cap. Each delivery has a row (attempt, status code, latency, truncated response). Signing uses HMAC-SHA256 over timestamp plus body with a per-webhook secret (SEC-38, replay window 5 minutes). Targets pass the SSRF filter, redirects are not followed, timeouts and response sizes are capped, and the host allowlist is empty by default (SEC section on SSRF).
 - Scopes: system, project, repository. Pull events are optional because of volume.
@@ -507,7 +507,7 @@ Each subsection states what the Harbor documentation describes (in own words), t
 
 ### 11.9 Labels (and the relation to compat tags)
 
-- Harbor: global labels (system admins) and project labels (project admins) applied to artifacts by developers and above, filterable in lists, listed first for global then project.
+- OCI peer: global labels (system admins) and project labels (project admins) applied to artifacts by developers and above, filterable in lists, listed first for global then project.
 - compat: tags (Pro) group components under a name such as a build id; REST CRUD; name up to 256 characters of letters, digits, underscore, hyphen and dot; JSON attributes up to 20k; used by promotion and the tag cleanup task.
 - Rustryx decision: one metadata mechanism named `labels` with `scope` (system or project), `color`, `description`, bounded `attributes` and a `component_labels` join. The compat tag REST resource is a compatibility view of system-scope labels. In API and UI the word "tag" is reserved for OCI tags to avoid the clash between an OCI tag (version pointer) and a compat tag (label).
 - Uses: list and search filters, replication filter, promotion by label, tag cleanup task.
@@ -515,22 +515,22 @@ Each subsection states what the Harbor documentation describes (in own words), t
 
 ### 11.10 Content trust (Cosign and Notation verification policy)
 
-- Harbor: signatures are stored as accessories linked to the signed artifact and shown in an accessories table; retention, immutability and replication treat artifact and signatures together; a project policy can require Cosign, Notation or both before an artifact can be pulled; Notation needs a trust policy created on the client side; how Harbor itself verifies was not explained in the pages read (`unverified`).
+- OCI peer: signatures are stored as accessories linked to the signed artifact and shown in an accessories table; retention, immutability and replication treat artifact and signatures together; a project policy can require Cosign, Notation or both before an artifact can be pulled; Notation needs a trust policy created on the client side; how that product itself verifies was not explained in the pages read (`unverified`).
 - Rustryx decision: `trust_policies` per project or repository with `required` set to none, cosign, notation or both, and trust material: for Cosign a list of public keys or keyless identities (issuer and subject patterns); for Notation a trust store and trust policy (trusted identities, verification level). Signatures are found through the OCI Referrers API that phase 1 already provides. The verdict is cached by subject digest, policy version and signature digest. A pull of an unverified artifact is denied with a reason. A check that only tests whether a signature exists is rejected as a design: it would give a false sense of security.
-- Indexes: the policy verifies what was requested; a `verify_children` option covers multi-arch indexes (Harbor's behaviour for indexes in this area is `unverified`).
+- Indexes: the policy verifies what was requested; a `verify_children` option covers multi-arch indexes (OCI peer's behaviour for indexes in this area is `unverified`).
 - Risks: the verification library is not chosen. A spike must pick a maintained Rust implementation for each scheme, or run the official verifier as a sandboxed helper process. This is explicitly not verified in this research.
 - Resources: `/api/v1/trust-policies`, `GET /api/v1/components/{id}/accessories`.
 
 ### 11.11 Proxy cache projects
 
-- Harbor: a proxy cache project points at an upstream endpoint; users pull through the project prefix; cached images are revalidated with a lightweight HEAD; if the upstream changed, the new image is fetched; if the upstream is down, the cached copy is served; no push; the upstream account decides what is reachable; optional pull speed limit; new proxy projects get a 7-day retention policy by default.
-- Rustryx decision: not a separate project type. It is an OCI repository of type proxy that belongs to a project and references a registry endpoint. Adopt the Harbor freshness rule (manifest HEAD and digest compare) and serve-stale with a marker header (iteration 2). Because the upstream account defines exposure, each OCI proxy gets an optional namespace allowlist (for example `library/*`), shown as a warning in the UI when empty. Add a bandwidth limit (minus one for none). Retention template suggestion as in 11.3. Quota behaviour for proxy content is `unverified` in Harbor, so Rustryx counts cached blobs in the project quota and relies on retention to evict.
+- OCI peer: a proxy cache project points at an upstream endpoint; users pull through the project prefix; cached images are revalidated with a lightweight HEAD; if the upstream changed, the new image is fetched; if the upstream is down, the cached copy is served; no push; the upstream account decides what is reachable; optional pull speed limit; new proxy projects get a 7-day retention policy by default.
+- Rustryx decision: not a separate project type. It is an OCI repository of type proxy that belongs to a project and references a registry endpoint. Adopt the OCI peer freshness rule (manifest HEAD and digest compare) and serve-stale with a marker header (iteration 2). Because the upstream account defines exposure, each OCI proxy gets an optional namespace allowlist (for example `library/*`), shown as a warning in the UI when empty. Add a bandwidth limit (minus one for none). Retention template suggestion as in 11.3. Quota behaviour for proxy content is `unverified` in OCI peer, so Rustryx counts cached blobs in the project quota and relies on retention to evict.
 - Resources: `/api/v1/repositories` with `type=proxy`, `/api/v1/registries`.
 
 ### 11.12 Garbage collection with dry run
 
-- Harbor: GC removes blobs no manifest references; manual run (not more than once a minute), schedule (hourly, daily, weekly, cron, none), dry run listing what would go and the estimated space, an option to delete untagged artifacts first, a worker count, a two-hour safety window for fresh uploads, a history table with logs, and stop. It runs without pausing pushes and pulls.
-- Rustryx decision: two phases. Deletion by users or policies is a soft delete (tombstone). The GC job marks blobs that are unreferenced and older than `gc.min_age` (default 24 hours per 01-architecture, longer than Harbor's two hours because several nodes stage uploads) and sweeps them in batches, re-checking references inside a transaction per blob so a new reference created since the mark wins. Dry run executes only the mark phase and stores a report (counts, bytes, per blob store, capped sample list). Options: `delete_untagged` (OCI manifests untagged for longer than `min_age` and not referenced as subject or by an index), bounded workers, history with trigger, status, log link and cooperative stop (already removed blobs are not restored), manual trigger rate limit of one per minute.
+- OCI peer: GC removes blobs no manifest references; manual run (not more than once a minute), schedule (hourly, daily, weekly, cron, none), dry run listing what would go and the estimated space, an option to delete untagged artifacts first, a worker count, a two-hour safety window for fresh uploads, a history table with logs, and stop. It runs without pausing pushes and pulls.
+- Rustryx decision: two phases. Deletion by users or policies is a soft delete (tombstone). The GC job marks blobs that are unreferenced and older than `gc.min_age` (default 24 hours per 01-architecture, longer than OCI peer's two hours because several nodes stage uploads) and sweeps them in batches, re-checking references inside a transaction per blob so a new reference created since the mark wins. Dry run executes only the mark phase and stores a report (counts, bytes, per blob store, capped sample list). Options: `delete_untagged` (OCI manifests untagged for longer than `min_age` and not referenced as subject or by an index), bounded workers, history with trigger, status, log link and cooperative stop (already removed blobs are not restored), manual trigger rate limit of one per minute.
 - HA and monitoring: lock `rustryx:lock:gc:<store>`; metric `background_job_last_success_timestamp_seconds{job="blob_gc"}` and the stale alert (SRE section). Abandoned multipart and Docker uploads are removed by the same job.
 - Resources: `/api/v1/gc/runs`, `POST /api/v1/gc/runs` with `dry_run`, `/api/v1/tasks` for the schedule.
 
@@ -538,7 +538,7 @@ Each subsection states what the Harbor documentation describes (in own words), t
 
 ### 12.1 Repository health
 
-- compat: the health check covers proxy repositories of Maven, npm, NuGet, PyPI, RubyGems and Yum. The summary (all editions) counts components by vulnerability severity and by license category; the detailed report with CVSS scores and licenses is Pro. It relies on Sonatype data services, runs an hourly check and refreshes a report at most daily, and is enabled per repository or for all supported repositories.
+- compat: the health check covers proxy repositories of Maven, npm, NuGet, PyPI, RubyGems and Yum. The summary (all editions) counts components by vulnerability severity and by license category; the detailed report with CVSS scores and licenses is Pro. It relies on compat vendor data services, runs an hourly check and refreshes a report at most daily, and is enabled per repository or for all supported repositories.
 - Rustryx decision: "repository health" is an aggregate over stored scan findings (11.7), not a separate subsystem. The repository list shows a severity histogram per repository, and the repository page shows a card with the top findings. Enabling is the repository `health_check` flag. License categories are `later` because Rustryx has no license data source of its own. No call goes to a vendor service; OSV online mode is opt-in (`osv.mode = offline` by default).
 - Resources: `GET /api/v1/repositories/{name}/health`, `PUT .../settings` for the flag.
 
@@ -612,30 +612,30 @@ Each subsection states what the Harbor documentation describes (in own words), t
 
 ## 13. The 20 highest-value gaps relative to the phase 1 scope
 
-Baseline: README section 3.1 and 8.6 (hosted, proxy and group repositories for seven formats, local and S3 blob stores, local, OIDC, LDAP and API-token authentication, roles, privileges and content selectors, the compat v1 REST API subset, audit, health, metrics, tracing, HA, cleanup policies, GC) and no web UI (README 3.2 and 01-architecture 1.1 keep the UI outside the Rust part). Size: S is a few days, M a few weeks, L more than a month for one engineer. Ordered by value for the stated requirement (compat Community plus Harbor, with a quality UI).
+Baseline: README section 3.1 and 8.6 (hosted, proxy and group repositories for seven formats, local and S3 blob stores, local, OIDC, LDAP and API-token authentication, roles, privileges and content selectors, the compat v1 REST API subset, audit, health, metrics, tracing, HA, cleanup policies, GC) and no web UI (README 3.2 and 01-architecture 1.1 keep the UI outside the Rust part). Size: S is a few days, M a few weeks, L more than a month for one engineer. Ordered by value for the stated requirement (compat Community plus OCI peer, with a quality UI).
 
 | Rank | Gap | Why it ranks here | Capability IDs | Size | Stream |
 |---|---|---|---|---|---|
 | 1 | Web UI: shell, browse, search, upload, administration | the product owner requires a quality UI and phase 1 has none, while both reference products ship one | all of the UI inventory | L | UI-M1 |
 | 2 | Native `/api/v1/` admin API with OpenAPI, browse tree, component and asset detail, audit query, system status, client-setup and upload-schema endpoints | the UI contract (01-architecture 1.1) is not yet defined by any phase 1 endpoint; every UI page depends on it | `SRCH-08`, `SRCH-10`, `SRCH-12`, `SRCH-14`, `OPS-10`, `OPS-19`, `OPS-37`, `UPL-01`, `AUTH-31`, `AUTH-53` | M | W2-A |
-| 3 | Projects with members, project roles and Keycloak group mapping | Harbor's central abstraction and the natural home for the group layout in README section 5 | `AUTH-42`, `AUTH-55`, `AUTH-56`, `AUTH-82`, `OPS-24` | L | W2-B |
+| 3 | Projects with members, project roles and Keycloak group mapping | OCI peer's central abstraction and the natural home for the group layout in README section 5 | `AUTH-42`, `AUTH-55`, `AUTH-56`, `AUTH-82`, `OPS-24` | L | W2-B |
 | 4 | Robot and service tokens with scopes, expiry, rotation, project binding | CI access without personal accounts is the main automation need in both products; `ryx_` tokens exist but have no scoped admin model | `AUTH-62` to `AUTH-67` | M | W2-B |
-| 5 | Vulnerability scanning core: Trivy for images, OSV for packages, results, summaries, scan on push and scheduled | Harbor's most visible feature and a ТЗ phase 2 item; the compat health check is a weaker variant | `SCN-01` to `SCN-09`, `SCN-15`, `SCN-20` | L | W2-D |
+| 5 | Vulnerability scanning core: Trivy for images, OSV for packages, results, summaries, scan on push and scheduled | OCI peer's most visible feature and a ТЗ phase 2 item; the compat health check is a weaker variant | `SCN-01` to `SCN-09`, `SCN-15`, `SCN-20` | L | W2-D |
 | 6 | CVE allowlists, pull gate, Security Hub, CSV export | turns scan data into enforcement and into a dashboard | `SCN-10` to `SCN-14` | M | W2-D |
 | 7 | Retention policies and tag immutability rules with dry-run reports | storage growth control for registries; cleanup policies alone do not cover tag-level retention | `RET-05`, `RET-06`, `RET-10`, `RET-03`, `RET-07` to `RET-09` | M | W2-C |
-| 8 | Quotas: project hard quota and blob store soft quota | multi-team use needs a limit per team; compat and Harbor each cover one half | `RET-11` to `RET-13`, `BLOB-12` | M | W2-C |
+| 8 | Quotas: project hard quota and blob store soft quota | multi-team use needs a limit per team; compat and OCI peer each cover one half | `RET-11` to `RET-13`, `BLOB-12` | M | W2-C |
 | 9 | Webhooks with HMAC signature, outbox and delivery log | integration with CI and chat; ТЗ phase 2 item | `OPS-01` to `OPS-05` | M | W2-E |
 | 10 | Task administration: list, schedule, run now, stop, run history, notifications; GC history and dry-run reports | operators cannot manage or trust background jobs without it; the UI needs it for GC and lifecycle pages | `RET-14`, `RET-17` to `RET-19`, `OPS-07` | M | W2-C |
-| 11 | Registry endpoints and replication (OCI first) | Harbor's second pillar and the base for multi-site setups | `PRX-14` to `PRX-21` | L | W2-E |
+| 11 | Registry endpoints and replication (OCI first) | OCI peer's second pillar and the base for multi-site setups | `PRX-14` to `PRX-21` | L | W2-E |
 | 12 | Copy, retag and promotion; labels and tags | release flow between repositories and projects; staging is a ТЗ phase 2 item | `UPL-09` to `UPL-14` | M | W2-E |
 | 13 | Content trust: signature verification policy and accessory handling | Cosign and Notation are the supply chain baseline for images; needs a library spike | `SCN-22` to `SCN-25` | M to L | W2-D |
-| 14 | SBOM generation, storage, display | follows the scanner; Harbor ships it | `SCN-27` to `SCN-29` | S to M | W2-D |
+| 14 | SBOM generation, storage, display | follows the scanner; OCI peer ships it | `SCN-27` to `SCN-29` | S to M | W2-D |
 | 15 | Blob store groups, Azure, S3 credential and encryption options, presigned redirects | compat storage parity and ТЗ phase 2 item | `BLOB-04` to `BLOB-07`, `BLOB-10`, `BLOB-11`, `BLOB-16`, `BLOB-19` | M | W2-F |
 | 16 | System settings bundle: SMTP email, outbound HTTP proxy, managed trust store, read-only mode, runtime log levels, status checks | operations parity; read-only mode is also needed for consistent backups | `OPS-06`, `OPS-14`, `OPS-19`, `OPS-22`, `PRX-07`, `AUTH-85` | M | W2-H |
 | 17 | More formats in ТЗ phase 2 order | compat offers 27 formats; Rustryx covers 7 | `REPO-20` to `REPO-31`, `REPO-42`, `REPO-46` | L (S to M per format) | W2-G |
 | 18 | Identity extras: LDAP multi-server and verify tools, OIDC admin screen and logout, remote user token, default role, self-service profile | closes the Community identity gaps and removes file-only OIDC and LDAP setup | `AUTH-04` to `AUTH-06`, `AUTH-18`, `AUTH-19`, `AUTH-22`, `AUTH-24`, `AUTH-31`, `AUTH-46` | M | W2-H |
 | 19 | Backup and restore verification, repository export and import, compat migration | adoption path from an existing compat and operational safety; ТЗ phase 2 items | `RET-22`, `RET-23`, 01-architecture phase 2 migration | L | W2-H |
-| 20 | `ryx` CLI, client-setup snippets, first-run wizard with optional default repositories | day-one usability and parity with harbor-cli; small but visible | `OPS-39`, `SRCH-18`, `UPL-16`, `REPO-50` | M | W2-H |
+| 20 | `ryx` CLI, client-setup snippets, first-run wizard with optional default repositories | day-one usability and parity with a typical registry CLI; small but visible | `OPS-39`, `SRCH-18`, `UPL-16`, `REPO-50` | M | W2-H |
 
 ## 14. Proposed split: wave 2 backend and UI milestones
 
@@ -663,133 +663,12 @@ The page list and the per-page API and privilege tables are in [ui-page-inventor
 | Milestone | Scope | Backend precondition |
 |---|---|---|
 | UI-M1 Usable core | login (local and OIDC), shell and navigation, dashboard, repositories (list, detail, create, edit), browse tree, component and asset detail, search, upload, `client setup` panel, own profile and tokens, administration of users, roles, privileges, content selectors, group mappings, anonymous access, blob stores, cleanup policies, routing rules, tasks (read only), audit viewer, system status | phase 1 plus W2-A (and routing rules from phase 1) |
-| UI-M2 Harbor parity | projects with members, labels, policies and logs; robot tokens; OCI artifact detail with tags, vulnerabilities, SBOM and accessories; security center and scanners; allowlists; retention, immutability and quotas; GC with dry run; task administration; webhooks; registries and replication; promotion; trust policies; settings pages | W2-B to W2-E |
+| UI-M2 registry parity | projects with members, labels, policies and logs; robot tokens; OCI artifact detail with tags, vulnerabilities, SBOM and accessories; security center and scanners; allowlists; retention, immutability and quotas; GC with dry run; task administration; webhooks; registries and replication; promotion; trust policies; settings pages | W2-B to W2-E |
 | UI-M3 Long tail and polish | usage and trend dashboards, jobs queue view, API explorer page, migration and backup pages, node status, banner and branding, IP allow list, command palette, saved views, accessibility and localization audit | W2-F to W2-H and the `later` items |
 
 ## 15. Sources
 
-All pages were fetched on 2026-10-24. compat pages are on `https://help.sonatype.com/en/` (written as `<page>`). Harbor pages are on `https://goharbor.io/docs/main/` (written as `<path>`). Spec files are in `docs/TZ/nexspence-rust/` of the project docs.
-
-### compat Repository (help.sonatype.com)
-
-| Key | URL |
-|---|---|
-| N-admin | https://help.sonatype.com/en/compat-repository-administration.html |
-| N-using | https://help.sonatype.com/en/using-compat-repository.html |
-| N-product | https://help.sonatype.com/en/product-information.html |
-| N-matrix | https://help.sonatype.com/en/compat-repository-feature-matrix.html |
-| N-tiers | https://help.sonatype.com/en/compat-repository-tiers-and-feature-availability.html |
-| N-pro | https://help.sonatype.com/en/compat-repository-pro-features.html |
-| N-types | https://help.sonatype.com/en/repository-types.html |
-| N-fields | https://help.sonatype.com/en/configurable-repository-fields.html |
-| N-actions | https://help.sonatype.com/en/repository-actions.html |
-| N-formats | https://help.sonatype.com/en/formats.html |
-| N-pub | https://help.sonatype.com/en/pub-repositories.html |
-| N-docker | https://help.sonatype.com/en/docker-registry.html |
-| N-blob | https://help.sonatype.com/en/blob-stores.html |
-| N-s3 | https://help.sonatype.com/en/aws-simple-storage-service--s3-.html |
-| N-changebs | https://help.sonatype.com/en/change-repository-blob-store.html |
-| N-cleanup | https://help.sonatype.com/en/cleanup-policies.html |
-| N-tasks | https://help.sonatype.com/en/tasks.html |
-| N-mvnsnap | https://help.sonatype.com/en/maven-snapshot-tasks.html |
-| N-export | https://help.sonatype.com/en/repository-export.html |
-| N-routing | https://help.sonatype.com/en/routing-rules.html |
-| N-selectors | https://help.sonatype.com/en/content-selectors.html |
-| N-privileges | https://help.sonatype.com/en/privileges.html |
-| N-roles | https://help.sonatype.com/en/roles.html |
-| N-users | https://help.sonatype.com/en/users.html |
-| N-realms | https://help.sonatype.com/en/realms.html |
-| N-anon | https://help.sonatype.com/en/anonymous-access.html |
-| N-ldap | https://help.sonatype.com/en/ldap.html |
-| N-oidc | https://help.sonatype.com/en/openid-connect.html |
-| N-saml | https://help.sonatype.com/en/saml.html |
-| N-rut | https://help.sonatype.com/en/authentication-via-remote-user-token.html |
-| N-utokens | https://help.sonatype.com/en/user-tokens.html |
-| N-satokens | https://help.sonatype.com/en/service-account-tokens-905815.html |
-| N-ratelimit | https://help.sonatype.com/en/authentication-attempt-rate-limiting.html |
-| N-iprules | https://help.sonatype.com/en/ip-allow-list.html |
-| N-defrole | https://help.sonatype.com/en/default-role.html |
-| N-caps | https://help.sonatype.com/en/capabilities.html |
-| N-audit | https://help.sonatype.com/en/auditing.html |
-| N-http | https://help.sonatype.com/en/http-request-and-proxy-settings.html |
-| N-support | https://help.sonatype.com/en/support-features.html |
-| N-status | https://help.sonatype.com/en/status-checks.html |
-| N-prom | https://help.sonatype.com/en/prometheus.html |
-| N-logging | https://help.sonatype.com/en/logging.html |
-| N-sysinfo | https://help.sonatype.com/en/system-information.html |
-| N-recovery | https://help.sonatype.com/en/recovery-mode.html |
-| N-rhc | https://help.sonatype.com/en/repository-health-check.html |
-| N-malware | https://help.sonatype.com/en/malware-risk.html |
-| N-tagging | https://help.sonatype.com/en/tagging.html |
-| N-staging | https://help.sonatype.com/en/staging-concepts.html |
-| N-repl | https://help.sonatype.com/en/content-replication.html |
-| N-nodes | https://help.sonatype.com/en/nodes.html |
-| N-datastore | https://help.sonatype.com/en/data-store.html |
-| N-search | https://help.sonatype.com/en/searching-for-components.html |
-| N-sql | https://help.sonatype.com/en/sql-search.html |
-| N-browse | https://help.sonatype.com/en/browsing-repositories.html |
-| N-upload | https://help.sonatype.com/en/uploading-components.html |
-| N-compinfo | https://help.sonatype.com/en/viewing-component-information.html |
-| N-assetinfo | https://help.sonatype.com/en/viewing-asset-information.html |
-| N-ui | https://help.sonatype.com/en/user-interface-overview-162157.html |
-| N-profile | https://help.sonatype.com/en/working-with-your-user-profile.html |
-| N-oneui | https://help.sonatype.com/en/compat-one-user-interface-overview.html |
-| N-auto | https://help.sonatype.com/en/automation.html |
-| N-apiref | https://help.sonatype.com/en/api-reference.html |
-| N-email | https://help.sonatype.com/en/email-api.html |
-| N-webhooks | https://help.sonatype.com/en/webhooks.html, https://help.sonatype.com/en/enabling-a-repository-webhook-capability.html, https://help.sonatype.com/en/enabling-a-global-webhook-capability.html |
-| N-usage | https://help.sonatype.com/en/usage-metrics.html |
-| N-baseurl | https://help.sonatype.com/en/base-url-capability.html |
-| N-ssl-search | found only through web search summaries, page not fetched directly: https://help.sonatype.com/en/configuring-ssl.html (inbound TLS); the outbound trust store description (Settings, Security, SSL Certificates) comes from a search summary and its source page is not identified, so treat as `unverified` in detail |
-| N-backup-search | found only through web search summaries: https://help.sonatype.com/en/prepare-a-backup.html and https://help.sonatype.com/en/back-up-and-restore-postgresql-backed-deployments.html |
-
-### Harbor (goharbor.io)
-
-| Key | URL |
-|---|---|
-| H-index | https://goharbor.io/docs/main/ |
-| H-auth | https://goharbor.io/docs/main/administration/configure-authentication/ with `db-auth/`, `ldap-auth/`, `oidc-auth/` below it |
-| H-users | https://goharbor.io/docs/main/administration/managing-users/ |
-| H-roles | https://goharbor.io/docs/main/administration/managing-users/user-permissions-by-role/ (role names also confirmed by a web search summary) |
-| H-settings | https://goharbor.io/docs/main/administration/general-settings/ |
-| H-quota | https://goharbor.io/docs/main/administration/configure-project-quotas/ |
-| H-oci | https://goharbor.io/docs/main/administration/user-defined-oci-artifact/ |
-| H-repl | https://goharbor.io/docs/main/administration/configuring-replication/ |
-| H-replendpoints | https://goharbor.io/docs/main/administration/configuring-replication/create-replication-endpoints/ |
-| H-replrules | https://goharbor.io/docs/main/administration/configuring-replication/create-replication-rules/ |
-| H-replmanage | https://goharbor.io/docs/main/administration/configuring-replication/manage-replications/ |
-| H-p2p | https://goharbor.io/docs/main/administration/p2p-preheat/ |
-| H-proxycache | https://goharbor.io/docs/main/administration/configure-proxy-cache/ |
-| H-scan | https://goharbor.io/docs/main/administration/vulnerability-scanning/ |
-| H-pluggable | https://goharbor.io/docs/main/administration/vulnerability-scanning/pluggable-scanners/ |
-| H-sysallow | https://goharbor.io/docs/main/administration/vulnerability-scanning/configure-system-allowlist/ |
-| H-schedulescans | https://goharbor.io/docs/main/administration/vulnerability-scanning/schedule-scans/ |
-| H-scanall | https://goharbor.io/docs/main/administration/vulnerability-scanning/scan-all-artifacts/ |
-| H-scanone | https://goharbor.io/docs/main/administration/vulnerability-scanning/scan-individual-artifact/ |
-| H-deploysec | https://goharbor.io/docs/main/administration/vulnerability-scanning/deployment-security/ |
-| H-metrics | https://goharbor.io/docs/main/administration/metrics/ |
-| H-tracing | https://goharbor.io/docs/main/administration/distributed-tracing/ |
-| H-robot | https://goharbor.io/docs/main/administration/robot-accounts/ |
-| H-gc | https://goharbor.io/docs/main/administration/garbage-collection/ |
-| H-audit | https://goharbor.io/docs/main/administration/audit-log/ |
-| H-logrot | https://goharbor.io/docs/main/administration/log-rotation/ |
-| H-sbom | https://goharbor.io/docs/main/administration/sbom-integration/ |
-| H-hub | https://goharbor.io/docs/main/administration/security-hub/ |
-| H-jobs | https://goharbor.io/docs/main/administration/jobservice-dashboard/ |
-| H-upgrade | https://goharbor.io/docs/main/administration/upgrade/ |
-| H-backup | https://goharbor.io/docs/main/administration/backup-restore/ |
-| H-projects | https://goharbor.io/docs/main/working-with-projects/create-projects/ |
-| H-projcfg | https://goharbor.io/docs/main/working-with-projects/project-configuration/ with subpages `access-project-logs/`, `create-robot-accounts/`, `configure-webhooks/`, `configure-project-allowlist/`, `implementing-content-trust/` (also H-contenttrust and H-projallow) |
-| H-contenttrust | https://goharbor.io/docs/main/working-with-projects/project-configuration/implementing-content-trust/ |
-| H-projallow | https://goharbor.io/docs/main/working-with-projects/project-configuration/configure-project-allowlist/ |
-| H-images | https://goharbor.io/docs/main/working-with-projects/working-with-images/ with subpages `create-tag-retention-rules/` (H-retention), `create-tag-immutability-rules/` (H-immutability), `sign-images/`, `create-labels/`, `repositories/`, `retagging-images/`, `preheat-images/`, `pulling-pushing-images/` |
-| H-retention | https://goharbor.io/docs/main/working-with-projects/working-with-images/create-tag-retention-rules/ |
-| H-immutability | https://goharbor.io/docs/main/working-with-projects/working-with-images/create-tag-immutability-rules/ |
-| H-ocihelm | https://goharbor.io/docs/main/working-with-projects/working-with-oci/working-with-helm-oci-charts/ |
-| H-api | https://goharbor.io/docs/main/working-with-projects/using-api-explorer/ |
-| H-install | https://goharbor.io/docs/main/install-config/ with `configure-yml-file/`, `harbor-compatibility-list/` (H-compat), `harbor-ha-helm/`, `run-installer-script/` |
-| H-compat | https://goharbor.io/docs/main/install-config/harbor-compatibility-list/ |
-| H-cli | https://github.com/goharbor/harbor-cli (project README, known through a web search summary only; the page was not fetched) |
+All pages were fetched on 2026-10-24 from public product documentation. Vendor names and vendor URLs are omitted on purpose (README clean-room rule). Capability notes still use internal keys `N-*` (compat Repository pages) and `H-*` (OCI-registry pages). Spec files are in `docs/TZ/nexspence-rust/` of the project docs.
 
 ### Rustryx specification
 
@@ -797,12 +676,12 @@ README.md sections 3, 5 and 8, `01-architecture.md` sections 1.1 to 1.6, `04-sre
 
 ## 16. Not verified, and open questions
 
-- Harbor email settings: the Harbor pages read do not cover them, a web search found nothing from goharbor.io. `OPS-06` treats it as `unverified` for Harbor.
-- Harbor behaviour on group-to-project-role mapping for LDAP and OIDC groups: the LDAP page covers only the admin group; the OIDC page covers the admin group and a group filter.
-- Harbor vulnerability table columns, the pluggable scanner adapter contract, and how Harbor verifies Cosign and Notation signatures: not documented on the pages read.
-- Harbor: interaction of tag retention with immutability, quota behaviour for proxy cache projects, whether re-pushing the same digest to an immutable tag is allowed.
-- Harbor offline vulnerability data import: a page title exists, the content was not read.
-- Harbor classic Helm chart repository (ChartMuseum): status not found; only OCI charts were confirmed.
+- OCI peer email settings: the OCI peer pages read do not cover them, a web search found nothing from registry-docs.example. `OPS-06` treats it as `unverified` for OCI peer.
+- OCI peer behaviour on group-to-project-role mapping for LDAP and OIDC groups: the LDAP page covers only the admin group; the OIDC page covers the admin group and a group filter.
+- OCI peer vulnerability table columns, the pluggable scanner adapter contract, and how OCI peer verifies Cosign and Notation signatures: not documented on the pages read.
+- OCI peer: interaction of tag retention with immutability, quota behaviour for proxy cache projects, whether re-pushing the same digest to an immutable tag is allowed.
+- OCI peer offline vulnerability data import: a page title exists, the content was not read.
+- OCI peer classic Helm chart repository (ChartMuseum): status not found; only OCI charts were confirmed.
 - compat: edition for items that are neither on the matrix's Community list nor on its Pro-only lists is not confirmed (marked `npl`). Cleanup policies, tasks, audit, capabilities, webhooks edition detail, and the Docker V1 API fall in this group.
 - compat: the Community requests-per-day limit is stated differently on different pages. Only the 40,000 component limit was confirmed on the tiers page.
 - compat: default cleanup schedule differs between the cleanup policies page (hourly) and the tasks page (daily at 1 am).

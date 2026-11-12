@@ -29,7 +29,7 @@ config:
 storage:
   type: s3
   s3:
-    endpoint: https://minio.test.example.com
+    endpoint: https://seaweedfs.test.example.com
     bucket: rustryx-test
     region: us-east-1
     path_style: true

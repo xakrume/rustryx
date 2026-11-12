@@ -3,7 +3,9 @@
 use std::time::Duration;
 
 use rustryx_core::StoreError;
-use rustryx_core::ids::{ProjectId, RegistryId, ReplicationExecutionId, ReplicationRuleId, ReplicationTaskId};
+use rustryx_core::ids::{
+    ProjectId, RegistryId, ReplicationExecutionId, ReplicationRuleId, ReplicationTaskId,
+};
 use rustryx_core::ports::{RegistryRepo, ReplicationRepo};
 use rustryx_core::registry::{Registry, RegistryProvider};
 use rustryx_core::replication::{
@@ -28,7 +30,7 @@ async fn a_replication_rule_keeps_its_registry_until_the_rule_is_gone() {
         RegistryId::generate(),
         unique("reg"),
         RegistryProvider::Oci,
-        "https://harbor.example",
+        "https://registry.example",
         OffsetDateTime::now_utc(),
     );
     registries.create(&registry).await.unwrap();
@@ -108,7 +110,7 @@ async fn one_active_execution_runs_its_task_and_then_settles() {
         RegistryId::generate(),
         unique("reg"),
         RegistryProvider::Oci,
-        "https://harbor.example",
+        "https://registry.example",
         OffsetDateTime::now_utc(),
     );
     registries.create(&registry).await.unwrap();
@@ -149,7 +151,7 @@ async fn one_active_execution_runs_its_task_and_then_settles() {
         "latest",
         OffsetDateTime::now_utc(),
     );
-    rules.add_tasks(&[task.clone()]).await.unwrap();
+    rules.add_tasks(std::slice::from_ref(&task)).await.unwrap();
     let claimed = rules
         .claim_task("worker", Duration::from_secs(30))
         .await
@@ -157,7 +159,12 @@ async fn one_active_execution_runs_its_task_and_then_settles() {
         .unwrap();
     assert_eq!(claimed.status, ReplicationTaskStatus::Running);
     assert_eq!(
-        rules.get_execution(execution.id).await.unwrap().unwrap().status,
+        rules
+            .get_execution(execution.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
         ExecutionStatus::Running
     );
     assert!(

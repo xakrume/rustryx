@@ -406,7 +406,9 @@ export function buildSnippets(input: SnippetInput): ClientSnippet[] {
           language: 'text',
           file: '/etc/apt/sources.list.d/rustryx.list',
           content: `deb ${input.url} <SUITE> main`,
-          placeholders: [{ name: 'SUITE', description: 'Distribution suite, for example trixie or noble.' }],
+          placeholders: [
+            { name: 'SUITE', description: 'Distribution suite, for example trixie or noble.' },
+          ],
           requires: 'browse',
         }),
       ]

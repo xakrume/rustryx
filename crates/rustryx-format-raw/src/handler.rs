@@ -124,10 +124,7 @@ impl FormatHandler for RawHandler {
     }
 }
 
-fn cached_component(
-    format: RepoFormat,
-    path: &str,
-) -> Option<rustryx_format_core::ComponentSpec> {
+fn cached_component(format: RepoFormat, path: &str) -> Option<rustryx_format_core::ComponentSpec> {
     match format {
         RepoFormat::Rpm => crate::rpm_index::component_from_path(path),
         RepoFormat::Apt => crate::apt_index::component_from_path(path),

@@ -7,7 +7,7 @@ import { findTypeAhead, visibleRows } from './tree-model'
 
 const ROOTS: TreeNodeData[] = [
   { id: 'alpha', label: 'alpha', hasChildren: true },
-  { id: 'apple', label: 'apple', hasChildren: false },
+  { id: 'apricot', label: 'apricot', hasChildren: false },
   { id: 'beta', label: 'beta', hasChildren: true },
   { id: 'gamma', label: 'gamma', hasChildren: false },
 ]
@@ -47,7 +47,7 @@ describe('Tree', () => {
     expect(alpha).toHaveAttribute('aria-posinset', '1')
     expect(alpha).toHaveAttribute('aria-setsize', '4')
     expect(alpha).toHaveAttribute('aria-expanded', 'false')
-    expect(item('apple')).not.toHaveAttribute('aria-expanded')
+    expect(item('apricot')).not.toHaveAttribute('aria-expanded')
     const stops = screen
       .getAllByRole('treeitem')
       .filter((el) => el.getAttribute('tabindex') === '0')
@@ -61,7 +61,7 @@ describe('Tree', () => {
     await user.tab()
     expect(item('alpha')).toHaveFocus()
     await user.keyboard('{ArrowDown}')
-    expect(item('apple')).toHaveFocus()
+    expect(item('apricot')).toHaveFocus()
     await user.keyboard('{End}')
     expect(item('gamma')).toHaveFocus()
     await user.keyboard('{Home}')
@@ -112,14 +112,14 @@ describe('Tree', () => {
     await user.keyboard('g')
     expect(item('gamma')).toHaveFocus()
     await user.keyboard('a')
-    // "ga" still matches gamma; a pause resets the buffer, and "a" alone cycles alpha, apple.
+    // "ga" still matches gamma; a pause resets the buffer, and "a" alone cycles alpha, apricot.
     expect(item('gamma')).toHaveFocus()
     await new Promise((r) => setTimeout(r, 650))
     await user.keyboard('a')
     expect(item('alpha')).toHaveFocus()
     await new Promise((r) => setTimeout(r, 650))
     await user.keyboard('a')
-    expect(item('apple')).toHaveFocus()
+    expect(item('apricot')).toHaveFocus()
   })
 
   it('selects on Enter and on click, and folders also toggle', async () => {
@@ -129,8 +129,8 @@ describe('Tree', () => {
     await user.keyboard('{Enter}')
     expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 'alpha' }))
     expect(await screen.findByRole('treeitem', { name: 'one' })).toBeInTheDocument()
-    await user.click(item('apple'))
-    expect(onSelect).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'apple' }))
+    await user.click(item('apricot'))
+    expect(onSelect).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'apricot' }))
   })
 
   it('shows a failure on the row and retries by expanding again', async () => {
@@ -184,7 +184,7 @@ describe('tree model', () => {
       '2:one',
       '2:two',
       '3:deep',
-      '1:apple',
+      '1:apricot',
       '1:beta',
       '1:gamma',
     ])

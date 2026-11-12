@@ -1,10 +1,10 @@
 //! Garbage collection run history.
 
+use rustryx_core::StoreError;
 use rustryx_core::ids::{BlobStoreId, GcRunId, TaskRunId, UserId};
 use rustryx_core::lifecycle::{GcCounts, GcOptions, GcRun, GcSample};
 use rustryx_core::ports::{GcRunRepo, Page, PageRequest};
 use rustryx_core::tasks::{TaskRunStatus, TaskTrigger};
-use rustryx_core::StoreError;
 use sqlx::PgPool;
 use sqlx::types::Json;
 use time::OffsetDateTime;
@@ -478,7 +478,8 @@ fn run_cursor(token: &str) -> Result<(bool, OffsetDateTime, Uuid), StoreError> {
     let key = cursor::decode(PAGE, token)?;
     let (nanos, id) = key.split_once('|').ok_or_else(cursor::invalid_token)?;
     let nanos: i128 = nanos.parse().map_err(|_| cursor::invalid_token())?;
-    let at = OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|_| cursor::invalid_token())?;
+    let at =
+        OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|_| cursor::invalid_token())?;
     let id = Uuid::parse_str(id).map_err(|_| cursor::invalid_token())?;
     Ok((false, at, id))
 }

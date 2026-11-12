@@ -2,8 +2,10 @@
 
 How the delivery pipeline works, which gates block and which only report, how a
 gate is switched to blocking, and how a release is made, signed and verified.
-GitHub Actions is the primary CI (`.github/workflows/`), GitLab CI is an option
-(`.gitlab-ci.yml`) with the same stages and the same scripts. Supply-chain policy
+GitHub Actions is the primary CI (`.github/workflows/`). The same stages and
+scripts also run on the self-managed GitLab at
+<https://gitlab.xakru.me/rustryx/rustryx> (group `rustryx`, project `rustryx`,
+file `.gitlab-ci.yml`). Supply-chain policy
 (licences, advisories, SLA, exceptions) is in [supply-chain.md](supply-chain.md),
 the developer environment in [local-development.md](local-development.md).
 
@@ -11,10 +13,10 @@ the developer environment in [local-development.md](local-development.md).
 
 | File | Purpose |
 |---|---|
-| `.github/workflows/ci.yml` | lint, test, code-security, build, image-security, publish, sign, provenance, verify |
+| `.github/workflows/ci.yml` | lint, ui, test, code-security, build, image-security, publish, sign, provenance, verify |
 | `.github/workflows/nightly.yml` | nightly `cargo audit`, expiry of exceptions, `cargo fuzz` (10 minutes per target) |
 | `.github/dependabot.yml` | keeps the SHA pins of actions and base images current, with a 14 day cooldown |
-| `.gitlab-ci.yml` | the same pipeline for GitLab |
+| `.gitlab-ci.yml` | the same pipeline on `gitlab.xakru.me`, group `rustryx` |
 | `Dockerfile`, `Dockerfile.musl` | glibc image (distroless/cc) and static image (distroless/static) |
 | `deny.toml`, `.cargo/audit.toml` | `cargo deny` and `cargo audit` configuration |
 | `ci/*` | the scripts both pipelines run (table below) |
@@ -25,6 +27,8 @@ the developer environment in [local-development.md](local-development.md).
 ```
 meta
  |-- lint --------------+
+ |-- ui                 |
+ |-- architecture       |
  |-- test (+coverage)   |
  |-- fixtures           |-- build (glibc and musl, amd64 and arm64: 4 jobs)
  |-- code-security      |      pushes untagged digests (main and tags only)
@@ -39,10 +43,10 @@ meta
                       verify   cosign verify, verify-attestation, slsa-verifier
 ```
 
-Pull requests run `lint`, `test`, `fixtures`, `code-security` and `build` (the
-image is built, loaded and tested, nothing is pushed). Pushes to `main` and tags
-`vX.Y.Z` run the whole chain. A run of `workflow_dispatch` on another branch
-builds but does not publish.
+Pull requests run `lint`, `ui`, `architecture`, `test`, `fixtures`, `code-security`
+and `build` (the image is built, loaded and tested, nothing is pushed). Pushes to
+`main` and tags `vX.Y.Z` run the whole chain. A run of `workflow_dispatch` on
+another branch builds but does not publish.
 
 A new push to a pull request cancels the older run (`concurrency` with
 `cancel-in-progress` for `pull_request` events only). Runs of `main` and of tags
@@ -53,7 +57,9 @@ are never cancelled: cancelling one could leave a tag without an image.
 | Job | What it checks | Mode |
 |---|---|---|
 | `lint` | `cargo fmt`, `clippy -D warnings --locked`, hadolint, yamllint, actionlint, shellcheck, the Python tests of `ci/`, compiler and base image pins, `ci/release-check.sh` on tags | blocking |
-| `test` | unit and integration tests (nextest, `RUSTRYX_IT=1`), doc tests, JUnit, Cobertura | blocking |
+| `ui` | `npm ci` in `ui/`, then `npm run check` (typecheck, lint, vitest, licences) and `npm run build`; same as `make ui-check` / `make ui-build` | blocking |
+| `architecture` | `easement check` (full on `main`, `--diff origin/main` on pull requests) | blocking |
+| `test` | unit tests and in-process integration tests (nextest under llvm-cov), doc tests, JUnit, Cobertura. Docker/testcontainers tests are excluded | blocking |
 | `test`, coverage step | 80% workspace, 90% for `rustryx-auth`, `rustryx-rbac` and the format parser crates, no drop against main | observation |
 | `fixtures` | `ci/verify-fixtures.sh`: realm and LDIF behave as README 8.6 needs | blocking |
 | `code-security`, every step | exceptions record, `cargo deny`, deny.toml negative tests, `cargo audit` (high and above), gitleaks, Trivy on `Cargo.lock`, SBOM not empty | observation |
@@ -63,6 +69,15 @@ are never cancelled: cancelling one could leave a tag without an image.
 | `publish` | tags, immutability guard | blocking |
 | `sign`, `provenance`, `verify` | signature, SBOM attestation, SLSA provenance, verification by digest | blocking |
 | `nightly` | `cargo audit`, `cargo deny check advisories`, exceptions not expired, fuzzing | blocks nothing, a red run is the alert |
+
+GitHub's `test` job does not start Docker. The nextest filter drops the
+testcontainers binaries: `rustryx-db` `it` (PostgreSQL), `rustryx-server`
+`postgres_serve` and `postgres_tasks`, `rustryx-blob` `s3_seaweed`, `rustryx-auth`
+`oidc_keycloak`, and `ldap::integration_tests::openldap_with_the_shared_fixture`.
+`RUSTRYX_IT` is unset, so any other real-client test skips. Run those locally
+with Docker (`cargo test -p rustryx-db`, and `RUSTRYX_IT=1` for SeaweedFS, Keycloak,
+OpenLDAP and real clients). GitLab's `test` job still runs the full set.
+`nightly.yml` does not run them.
 
 There is no `deploy` job. Deployment is by GitOps or `helm upgrade` and belongs
 with the chart in `deploy/helm/`; a job that does not deploy would be an empty job.
@@ -142,17 +157,20 @@ No secret is needed: registry access uses the job token. These are variables
 | `COSIGN_KMS_KEY_REF` | key reference for `kms` and `both`, for example `hashivault://rustryx-release` |
 | `VAULT_ADDR`, `VAULT_JWT_ROLE`, `VAULT_JWT_AUDIENCE` | Vault or OpenBao login of the workflow (audience defaults to `rustryx-release`) |
 | `IMAGE_SIZE_BUDGET_MB` | fails `ci/test-image.sh` above this uncompressed size; unset means report only |
-| `RUSTRYX_MINIO_IMAGE` | MinIO image for the S3 integration test (see below) |
+| `RUSTRYX_SEAWEEDFS_IMAGE` | SeaweedFS image for the S3 integration test (default `chrislusf/seaweedfs:4.13`) |
 | `ENABLE_SEMGREP` | `true` turns the Semgrep job on |
 
-Also set: required status checks `lint`, `test`, `fixtures`, `code-security`,
-`build` on `main`; protected tags `v*` created by the release role only; the
-package `ghcr.io/<owner>/rustryx` public after the first publish (a new GHCR
-package is private).
+Also set: required status checks `lint`, `ui`, `architecture`, `test`,
+`fixtures`, `code-security`, `build` on `main`; protected tags `v*` created by
+the release role only; the package `ghcr.io/<owner>/rustryx` public after the
+first publish (a new GHCR package is private).
 
-`RUSTRYX_MINIO_IMAGE`: the community MinIO image is no longer published, so the
-default image candidates of the S3 test may not pull. Set the variable to an image
-you can reach. The local compose stack pins `bitnamilegacy/minio` for the same reason.
+Branch protection / rulesets need GitHub Pro on a private repository (or a public
+repo). Until that is available, the `ci` workflow still runs and reports checks on
+every pull request and every push to `main`; they are not merge-blocking yet.
+
+`RUSTRYX_SEAWEEDFS_IMAGE`: the S3 integration test and the local compose stack
+use `chrislusf/seaweedfs:4.13`. Set the variable when that tag cannot be pulled.
 
 ## Images and tags
 
@@ -173,7 +191,7 @@ Rules enforced by the `publish` job, because GHCR has no tag immutability:
 * Nothing is tagged before `image-security` passed; `build` pushes untagged digests.
 
 Pin deployments by digest (`image.digest`), not by tag. If the registry supports
-immutable tags (Harbor does), switch them on for the pattern `*.*.*-*`.
+immutable tags, switch them on for the pattern `*.*.*-*`.
 
 Build facts: the builder is `rust:<toolchain>` pinned by digest, the final image is
 `distroless/cc` or `distroless/static` pinned by digest, UID/GID 10001, no shell,
@@ -302,6 +320,7 @@ are releases older than two weeks at the time of writing.
 | Action | Version |
 |---|---|
 | `actions/checkout` | v7.0.1 |
+| `actions/setup-node` | v6.5.0 |
 | `actions/upload-artifact` | v7.0.2 |
 | `actions/download-artifact` | v8.0.2 |
 | `actions/cache` (restore, save) | v6.1.0 |
@@ -316,23 +335,69 @@ are releases older than two weeks at the time of writing.
 
 Not installed by an action, pinned by SHA-256 in `ci/tools.lock`: hadolint,
 actionlint, gitleaks (and trivy, cosign for GitLab). Python tools: hash-pinned in
-`ci/requirements-lint.txt`. Container images (Semgrep, Docker, Alpine, builders,
-distroless) by digest. To update, take the Dependabot pull request or repeat the
-resolution by hand and run `ci/check-toolchain-pin.sh`.
+`ci/requirements-lint.txt`. Container images (Semgrep, Docker, Alpine, Node 22 for
+the GitLab `ui` job, builders, distroless) by digest. To update, take the
+Dependabot pull request or repeat the resolution by hand and run
+`ci/check-toolchain-pin.sh`.
 
-## GitLab option
+## GitLab (`gitlab.xakru.me`)
+
+The GitLab home of this tree is its own group:
+<https://gitlab.xakru.me/rustryx/rustryx>. Creating that group and project needs
+a personal access token with the `api` scope on `gitlab.xakru.me`. This
+repository does not store that token. After the first push of the default
+branch, merge requests and version tags start `.gitlab-ci.yml`.
+The `workflow` rules already limit pipelines to merge requests, the default
+branch, and version tags, so every check below is the project's CI. There is
+no second, shorter pipeline.
+
+| Check | Stage | What it gates |
+|---|---|---|
+| `lint` | lint | `cargo fmt`, Clippy, hadolint, yamllint, actionlint, shellcheck, OpenAPI, toolchain pins |
+| `architecture` | lint | `easement check` |
+| `ui` | lint | typecheck, lint, unit tests, production UI build |
+| `test` | test | workspace tests, including Docker integration tests (`RUSTRYX_IT=1`) |
+| `coverage-gate` | test | coverage report (observation until the marker is removed) |
+| `fixtures` | test | compose fixtures on a shell runner (`FIXTURES_RUNNER_TAG`) |
+| `cargo-audit` | code-security | Rust advisories |
+| `cargo-deny` | code-security | licences and bans |
+| `secret-detection` | code-security | gitleaks |
+| `dependency-scan` | code-security | Trivy on the lockfiles |
+| `sbom` | code-security | CycloneDX from the Rust build |
+| `build-amd64`, `build-arm64` | build | glibc and musl images, untagged digests |
+| `image-security` | image-security | Trivy on the built images |
+| `publish` | publish | tags the images (default branch and `vX.Y.Z` only) |
+| `sign` | sign | cosign |
+| `provenance` | sign | SLSA-style predicate (`ci/gitlab-provenance.sh`) |
+| `verify` | verify | signature and provenance |
+
+Jobs marked `allow_failure: true # OBSERVATION MODE` report without failing the
+pipeline. Removing that line makes the check blocking. On `gitlab.xakru.me` the Docker jobs use the runner tag `docker` (`gw-docker`),
+and `fixtures` uses the shell runner tag `shell` (`gw-shell`). `build-arm64`
+runs only when `RUNNER_ARM64` names an arm64 runner; it is empty on this
+instance, so that job is skipped. `architecture` runs one cargo thread
+(`CARGO_BUILD_JOBS`, `RAYON_NUM_THREADS`, `RA_MAX_THREADS`) so rustc does not
+stack several compilers. The docker host also needs `vm.overcommit_memory=1`:
+with the default `0`, `Committed_AS` on that machine sits near `CommitLimit`,
+and the kernel SIGKILLs `rust-analyzer` while RAM and swap are still free.
+The job cannot change the sysctl. On the host:
+
+```
+printf 'vm.overcommit_memory=1\n' | sudo tee /etc/sysctl.d/99-overcommit.conf
+sudo sysctl --system
+```
 
 Same stages and scripts. Differences worth knowing:
 
 * Every stage a job uses is declared in `stages`; `ci/check-gitlab-ci.py` checks
   it in `lint`, and the merged YAML can be checked on the server with
-  `POST /projects/:id/ci/lint?include_merged_yaml=true` (this file has been
-  reviewed and statically checked, not run on a GitLab server).
+  `POST /projects/:id/ci/lint?include_merged_yaml=true`.
 * `fixtures` needs a shell-executor runner (tag in `FIXTURES_RUNNER_TAG`), because
   the stack is queried on `localhost`; docker-in-docker publishes its ports on
-  another host. `test` uses docker-in-docker with `TESTCONTAINERS_HOST_OVERRIDE`.
-* The arm64 jobs use the tag `saas-linux-medium-arm64`; change it on a
-  self-managed instance.
+  another host. `test` uses docker-in-docker with `TESTCONTAINERS_HOST_OVERRIDE`
+  and `RUSTRYX_IT=1`, so it still runs the Docker integration tests that GitHub's
+  `test` job skips.
+* `build-arm64` uses the tag in `RUNNER_ARM64`. An empty value skips the job.
 * Keyless signing uses the job's `SIGSTORE_ID_TOKEN`; the verification identity is
   `<server>/<project>//.gitlab-ci.yml@refs/...`.
 * GitLab validates the stage of a job before its rules, so a stage missing from

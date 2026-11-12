@@ -18,8 +18,8 @@ use rustryx_api::{
 };
 use rustryx_core::ids::{CleanupPolicyId, GcRunId, LifecycleRunId};
 use rustryx_core::lifecycle::{
-    CleanupCriteria, CleanupPolicy, GcRun, ItemDecision, LifecycleItem, LifecycleKind, LifecycleRun,
-    ReleaseType,
+    CleanupCriteria, CleanupPolicy, GcRun, ItemDecision, LifecycleItem, LifecycleKind,
+    LifecycleRun, ReleaseType,
 };
 use rustryx_core::model::RepoFormat;
 use rustryx_core::ports::{
@@ -80,7 +80,9 @@ impl RouteModule for OpsModule {
             .route(
                 "/api/v1/cleanup-policies",
                 Requires::Admin,
-                get(list_policies).post(create_policy).with_state(state.clone()),
+                get(list_policies)
+                    .post(create_policy)
+                    .with_state(state.clone()),
             )
             .route(
                 "/api/v1/cleanup-policies/{policy_id}",
@@ -232,7 +234,10 @@ fn page_request(query: &PageQuery) -> PageRequest {
 }
 
 fn stamp(value: Option<OffsetDateTime>, fallback: OffsetDateTime) -> String {
-    value.unwrap_or(fallback).format(&Rfc3339).unwrap_or_default()
+    value
+        .unwrap_or(fallback)
+        .format(&Rfc3339)
+        .unwrap_or_default()
 }
 
 fn opt_stamp(value: Option<OffsetDateTime>) -> Value {
@@ -280,7 +285,9 @@ fn opt_u32(value: &Value, key: &str) -> Result<Option<u32>, ApiError> {
             .as_u64()
             .and_then(|n| u32::try_from(n).ok())
             .map(Some)
-            .ok_or_else(|| ApiError::bad_request("invalid_input", format!("{key} is out of range"))),
+            .ok_or_else(|| {
+                ApiError::bad_request("invalid_input", format!("{key} is out of range"))
+            }),
         Some(_) => Err(ApiError::bad_request(
             "invalid_input",
             format!("{key} must be a number"),
@@ -295,11 +302,7 @@ fn criteria_from_api(value: &Value) -> Result<CleanupCriteria, ApiError> {
             "criteria must be an object",
         ));
     }
-    let mut criteria = CleanupCriteria::default();
-    criteria.max_age_days = opt_u32(value, "older_than_days")?;
-    criteria.not_downloaded_days = opt_u32(value, "last_downloaded_days")?;
-    criteria.keep_latest_versions = opt_u32(value, "keep_last_versions")?;
-    criteria.name_regex = match value.get("name_pattern") {
+    let name_regex = match value.get("name_pattern") {
         None | Some(Value::Null) => None,
         Some(Value::String(text)) => Some(text.clone()),
         Some(_) => {
@@ -309,7 +312,7 @@ fn criteria_from_api(value: &Value) -> Result<CleanupCriteria, ApiError> {
             ));
         }
     };
-    criteria.release_type = match value.get("release_type") {
+    let release_type = match value.get("release_type") {
         None | Some(Value::Null) => None,
         Some(Value::String(text)) if text == "release" => Some(ReleaseType::Release),
         Some(Value::String(text)) if text == "prerelease" => Some(ReleaseType::Prerelease),
@@ -320,9 +323,17 @@ fn criteria_from_api(value: &Value) -> Result<CleanupCriteria, ApiError> {
             ));
         }
     };
-    criteria
-        .validate()
-        .map_err(|_| ApiError::bad_request("invalid_input", "A cleanup policy needs one criterion"))?;
+    let criteria = CleanupCriteria {
+        max_age_days: opt_u32(value, "older_than_days")?,
+        not_downloaded_days: opt_u32(value, "last_downloaded_days")?,
+        keep_latest_versions: opt_u32(value, "keep_last_versions")?,
+        name_regex,
+        release_type,
+        ..CleanupCriteria::default()
+    };
+    criteria.validate().map_err(|_| {
+        ApiError::bad_request("invalid_input", "A cleanup policy needs one criterion")
+    })?;
     Ok(criteria)
 }
 
@@ -344,7 +355,6 @@ fn status_name(status: TaskRunStatus) -> &'static str {
         TaskRunStatus::Queued => "queued",
         TaskRunStatus::Running => "running",
         TaskRunStatus::Succeeded => "succeeded",
-        TaskRunStatus::Failed => "failed",
         TaskRunStatus::Cancelled => "cancelled",
         TaskRunStatus::Skipped => "skipped",
         TaskRunStatus::Abandoned => "abandoned",
@@ -380,7 +390,10 @@ async fn policy_view(api: &OpsApi, policy: &CleanupPolicy) -> Result<Value, ApiE
         .list(
             Some(LifecycleKind::Cleanup),
             Some(PolicyRef::Cleanup(policy.id, None)),
-            &PageRequest { limit: 1, after: None },
+            &PageRequest {
+                limit: 1,
+                after: None,
+            },
         )
         .await?
         .items
@@ -409,7 +422,11 @@ async fn policy_view(api: &OpsApi, policy: &CleanupPolicy) -> Result<Value, ApiE
     }))
 }
 
-fn build_policy(body: PolicyBody, id: CleanupPolicyId, now: OffsetDateTime) -> Result<CleanupPolicy, ApiError> {
+fn build_policy(
+    body: PolicyBody,
+    id: CleanupPolicyId,
+    now: OffsetDateTime,
+) -> Result<CleanupPolicy, ApiError> {
     let format = serde_json::from_value::<RepoFormat>(Value::String(body.format))
         .map_err(|_| ApiError::bad_request("invalid_input", "Unknown format"))?;
     let mut policy = CleanupPolicy::new(id, body.name, criteria_from_api(&body.criteria)?, now);
@@ -428,11 +445,9 @@ async fn list_policies(
 ) -> Result<Json<Value>, ApiError> {
     let mut items = Vec::new();
     for policy in api.cleanup.list().await? {
-        if query
-            .format
-            .as_ref()
-            .is_some_and(|format| policy.format.map(|item| item.as_str()) != Some(format.as_str()))
-        {
+        if query.format.as_ref().is_some_and(|format| {
+            policy.format.map(rustryx_core::model::RepoFormat::as_str) != Some(format.as_str())
+        }) {
             continue;
         }
         if query.q.as_ref().is_some_and(|needle| {
@@ -469,11 +484,8 @@ async fn create_policy(
 ) -> Result<Response, ApiError> {
     let policy = build_policy(body, CleanupPolicyId::generate(), api.clock.now())?;
     api.cleanup.create(&policy).await.map_err(conflict)?;
-    let mut response = (
-        StatusCode::CREATED,
-        Json(policy_view(&api, &policy).await?),
-    )
-        .into_response();
+    let mut response =
+        (StatusCode::CREATED, Json(policy_view(&api, &policy).await?)).into_response();
     if let Ok(value) = http::HeaderValue::from_str(&etag(policy.version)) {
         response.headers_mut().insert(ETAG, value);
     }
@@ -504,7 +516,10 @@ async fn update_policy(
     let mut policy = build_policy(body, id, current.created_at)?;
     policy.version = current.version;
     policy.created_at = current.created_at;
-    api.cleanup.update(&policy, expected).await.map_err(conflict)?;
+    api.cleanup
+        .update(&policy, expected)
+        .await
+        .map_err(conflict)?;
     let stored = api
         .cleanup
         .get(id)
@@ -572,7 +587,10 @@ async fn preview_policy(
     run.started_at = Some(now);
     run.finished_at = Some(now);
     api.runs.create(&run).await?;
-    Ok((StatusCode::ACCEPTED, Json(lifecycle_view(&run, Some(&policy.name), now))))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(lifecycle_view(&run, Some(&policy.name), now)),
+    ))
 }
 
 fn lifecycle_view(run: &LifecycleRun, policy_name: Option<&str>, now: OffsetDateTime) -> Value {
@@ -604,7 +622,7 @@ fn lifecycle_view(run: &LifecycleRun, policy_name: Option<&str>, now: OffsetDate
     })
 }
 
-async fn names_for<'a>(api: &OpsApi, runs: &'a [LifecycleRun]) -> Result<Vec<Option<String>>, ApiError> {
+async fn names_for(api: &OpsApi, runs: &[LifecycleRun]) -> Result<Vec<Option<String>>, ApiError> {
     let policies = api.cleanup.list().await?;
     Ok(runs
         .iter()
@@ -658,7 +676,11 @@ async fn get_lifecycle(
     ApiPath(path): ApiPath<RunPath>,
 ) -> Result<Json<Value>, ApiError> {
     let id = LifecycleRunId::from_uuid(parse_uuid(&path.run_id)?);
-    let run = api.runs.get(id).await?.ok_or_else(ApiError::route_not_found)?;
+    let run = api
+        .runs
+        .get(id)
+        .await?
+        .ok_or_else(ApiError::route_not_found)?;
     let name = names_for(&api, std::slice::from_ref(&run))
         .await?
         .into_iter()
@@ -689,7 +711,10 @@ fn candidate_view(item: &LifecycleItem) -> Value {
 
 fn reason_or_default(reason: &str) -> &str {
     match reason {
-        "older_than_days" | "last_downloaded_days" | "keep_last_versions" | "name_pattern"
+        "older_than_days"
+        | "last_downloaded_days"
+        | "keep_last_versions"
+        | "name_pattern"
         | "release_type" => reason,
         _ => "older_than_days",
     }
@@ -745,7 +770,12 @@ async fn list_gc(
         .items
         .iter()
         .filter(|run| query.dry_run.is_none_or(|dry| run.options.dry_run == dry))
-        .filter(|run| query.status.as_ref().is_none_or(|status| gc_status(run) == status))
+        .filter(|run| {
+            query
+                .status
+                .as_ref()
+                .is_none_or(|status| gc_status(run) == status)
+        })
         .map(|run| gc_view(run, now))
         .collect::<Vec<_>>();
     Ok(Json(json!({ "items": items, "next": page.next })))
@@ -757,7 +787,11 @@ async fn get_gc(
     ApiPath(path): ApiPath<RunPath>,
 ) -> Result<Json<Value>, ApiError> {
     let id = GcRunId::from_uuid(parse_uuid(&path.run_id)?);
-    let run = api.gc.get(id).await?.ok_or_else(ApiError::route_not_found)?;
+    let run = api
+        .gc
+        .get(id)
+        .await?
+        .ok_or_else(ApiError::route_not_found)?;
     Ok(Json(gc_view(&run, api.clock.now())))
 }
 
@@ -796,7 +830,11 @@ async fn stop_gc(
     if !api.gc.request_stop(id).await? {
         return Err(ApiError::route_not_found());
     }
-    let run = api.gc.get(id).await?.ok_or_else(ApiError::route_not_found)?;
+    let run = api
+        .gc
+        .get(id)
+        .await?
+        .ok_or_else(ApiError::route_not_found)?;
     Ok(Json(gc_view(&run, api.clock.now())))
 }
 
@@ -845,7 +883,10 @@ fn task_run_view(row: &sqlx::postgres::PgRow) -> Value {
     })
 }
 
-async fn load_task(pool: &sqlx::PgPool, id: Uuid) -> Result<Option<sqlx::postgres::PgRow>, ApiError> {
+async fn load_task(
+    pool: &sqlx::PgPool,
+    id: Uuid,
+) -> Result<Option<sqlx::postgres::PgRow>, ApiError> {
     sqlx::query(
         "SELECT id, kind, name, params, schedule, enabled, system, next_run_at, last_run_id \
          FROM task_definitions WHERE id = $1",
@@ -904,7 +945,10 @@ async fn list_tasks(
         let kind: String = row.try_get("kind").unwrap_or_default();
         let system: bool = row.try_get("system").unwrap_or(false);
         let enabled: bool = row.try_get("enabled").unwrap_or(false);
-        if query.kind.as_ref().is_some_and(|want| want != &kind.replace('_', "-") && want != &kind)
+        if query
+            .kind
+            .as_ref()
+            .is_some_and(|want| want != &kind.replace('_', "-") && want != &kind)
             || query.system.is_some_and(|want| want != system)
             || query.enabled.is_some_and(|want| want != enabled)
         {
@@ -922,7 +966,9 @@ async fn get_task(
     ApiPath(path): ApiPath<TaskPath>,
 ) -> Result<Json<Value>, ApiError> {
     let id = parse_uuid(&path.task_id)?;
-    let row = load_task(&api.pool, id).await?.ok_or_else(ApiError::route_not_found)?;
+    let row = load_task(&api.pool, id)
+        .await?
+        .ok_or_else(ApiError::route_not_found)?;
     Ok(Json(task_view(&row, latest_run(&api.pool, id).await?)))
 }
 
@@ -1005,13 +1051,13 @@ async fn task_log(
     if exists.is_none() {
         return Err(ApiError::route_not_found());
     }
-    let from = query.from_line.unwrap_or(0).max(0);
+    let from = i32::try_from(query.from_line.unwrap_or(0).max(0)).unwrap_or(i32::MAX);
     let limit = i64::from(query.limit.unwrap_or(500).clamp(1, 500));
     let rows = sqlx::query(
         "SELECT seq, at, level, message FROM task_run_log WHERE run_id = $1 AND seq >= $2 ORDER BY seq LIMIT $3",
     )
     .bind(run)
-    .bind(from as i32)
+    .bind(from)
     .bind(limit)
     .fetch_all(&api.pool)
     .await
@@ -1028,7 +1074,11 @@ async fn task_log(
             })
         })
         .collect::<Vec<_>>();
-    let next = lines.last().and_then(|line| line.get("n")).and_then(Value::as_i64).map(|n| n + 1);
+    let next = lines
+        .last()
+        .and_then(|line| line.get("n"))
+        .and_then(Value::as_i64)
+        .map(|n| n + 1);
     Ok(Json(json!({
         "run_id": run,
         "lines": lines,

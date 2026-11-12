@@ -1,6 +1,6 @@
-//! Sonatype compat Repository 3 REST API, version 1, under `/service/rest/v1`.
+//! Compat Repository 3 REST API, version 1, under `/service/rest/v1`.
 //!
-//! The shapes follow the public Sonatype help pages (Repositories API, Components
+//! The shapes follow the public compat help pages (Repositories API, Components
 //! API, Search API): a repository list is a JSON array of name, format, type, url
 //! and attributes, and search returns `items` plus `continuationToken`. This is
 //! not the native `/api/v1` contract.
@@ -34,7 +34,7 @@ use serde_json::{Value, json};
 use url::Url;
 
 /// What the compatibility routes need besides the HTTP settings.
-pub struct compatDeps {
+pub struct CompatDeps {
     /// Repositories.
     pub repositories: Arc<dyn RepositoryRepo>,
     /// Blob stores, addressed by name in this API.
@@ -54,16 +54,16 @@ pub struct compatDeps {
 }
 
 /// `/service/rest/v1` compatibility routes.
-pub struct compatModule {
-    state: compatApi,
+pub struct CompatModule {
+    state: CompatApi,
 }
 
-impl compatModule {
+impl CompatModule {
     /// Builds the module.
     #[must_use]
-    pub fn new(deps: compatDeps) -> Self {
+    pub fn new(deps: CompatDeps) -> Self {
         Self {
-            state: compatApi {
+            state: CompatApi {
                 repositories: deps.repositories,
                 blob_stores: deps.blob_stores,
                 components: deps.components,
@@ -77,7 +77,7 @@ impl compatModule {
     }
 }
 
-impl RouteModule for compatModule {
+impl RouteModule for CompatModule {
     fn name(&self) -> &'static str {
         "compat-v1"
     }
@@ -124,7 +124,7 @@ impl RouteModule for compatModule {
 }
 
 #[derive(Clone)]
-struct compatApi {
+struct CompatApi {
     repositories: Arc<dyn RepositoryRepo>,
     blob_stores: Arc<dyn BlobStoreRepo>,
     components: Arc<dyn ComponentRepo>,
@@ -213,7 +213,7 @@ async fn status() -> StatusCode {
 }
 
 async fn list_repositories(
-    State(api): State<compatApi>,
+    State(api): State<CompatApi>,
     RequestPrincipal(principal): RequestPrincipal,
     headers: HeaderMap,
 ) -> Result<Json<Vec<Value>>, ApiError> {
@@ -229,20 +229,20 @@ async fn list_repositories(
 }
 
 async fn get_repository(
-    State(api): State<compatApi>,
+    State(api): State<CompatApi>,
     RequestPrincipal(principal): RequestPrincipal,
     ApiPath(path): ApiPath<NamePath>,
     headers: HeaderMap,
-) -> Result<Json<Value>, compatFail> {
+) -> Result<Json<Value>, CompatFail> {
     let repository = visible(&api, &principal, &path.name).await?;
     Ok(Json(summary(&repository, &origin_of(&api, &headers))))
 }
 
 async fn delete_repository(
-    State(api): State<compatApi>,
+    State(api): State<CompatApi>,
     _proof: Authorized<AdminGrant>,
     ApiPath(path): ApiPath<NamePath>,
-) -> Result<StatusCode, compatFail> {
+) -> Result<StatusCode, CompatFail> {
     let name = parse_name(&path.name)?;
     let Some(repository) = api.repositories.get_by_name(&name).await.map_err(store)? else {
         return Err(missing());
@@ -255,11 +255,11 @@ async fn delete_repository(
 }
 
 async fn create_repository(
-    State(api): State<compatApi>,
+    State(api): State<CompatApi>,
     _proof: Authorized<AdminGrant>,
     ApiPath(path): ApiPath<RecipePath>,
     ApiJson(body): ApiJson<CreateBody>,
-) -> Result<StatusCode, compatFail> {
+) -> Result<StatusCode, CompatFail> {
     let repository = build(&api, &path, body).await?;
     match api.repositories.create(&repository).await {
         Ok(()) => Ok(StatusCode::CREATED),
@@ -271,19 +271,19 @@ async fn create_repository(
 }
 
 async fn search(
-    State(api): State<compatApi>,
+    State(api): State<CompatApi>,
     RequestPrincipal(principal): RequestPrincipal,
     ApiQuery(query): ApiQuery<SearchQuery>,
-) -> Result<Json<Value>, compatFail> {
+) -> Result<Json<Value>, CompatFail> {
     let page = find_components(&api, &principal, &query, false).await?;
     Ok(Json(page))
 }
 
 async fn components(
-    State(api): State<compatApi>,
+    State(api): State<CompatApi>,
     RequestPrincipal(principal): RequestPrincipal,
     ApiQuery(query): ApiQuery<SearchQuery>,
-) -> Result<Json<Value>, compatFail> {
+) -> Result<Json<Value>, CompatFail> {
     if query.repository.is_none() {
         return Err(fail(StatusCode::BAD_REQUEST, "repository is required"));
     }
@@ -291,11 +291,11 @@ async fn components(
 }
 
 async fn find_components(
-    api: &compatApi,
+    api: &CompatApi,
     principal: &Principal,
     query: &SearchQuery,
     require_visible: bool,
-) -> Result<Value, compatFail> {
+) -> Result<Value, CompatFail> {
     let repository_id = match &query.repository {
         Some(name) => Some(visible(api, principal, name).await?.id),
         None => None,
@@ -347,10 +347,10 @@ async fn find_components(
 }
 
 async fn build(
-    api: &compatApi,
+    api: &CompatApi,
     path: &RecipePath,
     body: CreateBody,
-) -> Result<Repository, compatFail> {
+) -> Result<Repository, CompatFail> {
     let format = recipe(&path.format)?;
     let kind = recipe_kind(&path.kind)?;
     let name = parse_name(&body.name)?;
@@ -389,10 +389,10 @@ async fn build(
 }
 
 fn proxy_into(
-    api: &compatApi,
+    api: &CompatApi,
     repository: &mut Repository,
     proxy: Option<ProxyBody>,
-) -> Result<(), compatFail> {
+) -> Result<(), CompatFail> {
     let Some(proxy) = proxy else {
         return Err(fail(
             StatusCode::BAD_REQUEST,
@@ -420,10 +420,10 @@ fn proxy_into(
 }
 
 async fn group_into(
-    api: &compatApi,
+    api: &CompatApi,
     repository: &mut Repository,
     group: Option<GroupBody>,
-) -> Result<(), compatFail> {
+) -> Result<(), CompatFail> {
     let Some(group) = group.filter(|group| !group.member_names.is_empty()) else {
         return Err(fail(
             StatusCode::BAD_REQUEST,
@@ -494,7 +494,7 @@ fn maven_config(maven: &MavenBody) -> Value {
     Value::Object(config)
 }
 
-fn recipe(format: &str) -> Result<RepoFormat, compatFail> {
+fn recipe(format: &str) -> Result<RepoFormat, CompatFail> {
     match format {
         "maven" | "maven2" => Ok(RepoFormat::Maven2),
         "npm" => Ok(RepoFormat::Npm),
@@ -511,7 +511,7 @@ fn recipe(format: &str) -> Result<RepoFormat, compatFail> {
     }
 }
 
-fn recipe_kind(kind: &str) -> Result<RepoType, compatFail> {
+fn recipe_kind(kind: &str) -> Result<RepoType, CompatFail> {
     match kind {
         "hosted" => Ok(RepoType::Hosted),
         "proxy" => Ok(RepoType::Proxy),
@@ -520,7 +520,7 @@ fn recipe_kind(kind: &str) -> Result<RepoType, compatFail> {
     }
 }
 
-fn write_policy(raw: Option<&str>) -> Result<WritePolicy, compatFail> {
+fn write_policy(raw: Option<&str>) -> Result<WritePolicy, CompatFail> {
     match raw.unwrap_or("allow_once").to_ascii_lowercase().as_str() {
         "allow" => Ok(WritePolicy::Allow),
         "allow_once" => Ok(WritePolicy::AllowOnce),
@@ -529,22 +529,22 @@ fn write_policy(raw: Option<&str>) -> Result<WritePolicy, compatFail> {
     }
 }
 
-fn parse_name(raw: &str) -> Result<RepoName, compatFail> {
+fn parse_name(raw: &str) -> Result<RepoName, CompatFail> {
     RepoName::parse(raw).map_err(|_| fail(StatusCode::BAD_REQUEST, "Invalid repository name"))
 }
 
 async fn visible(
-    api: &compatApi,
+    api: &CompatApi,
     principal: &Principal,
     raw: &str,
-) -> Result<Repository, compatFail> {
+) -> Result<Repository, CompatFail> {
     let name = parse_name(raw)?;
     let Some(repository) = api.repositories.get_by_name(&name).await.map_err(store)? else {
         return Err(missing());
     };
     if may_browse(api, principal, &repository)
         .await
-        .map_err(|error| compatFail::Stored(Box::new(error)))?
+        .map_err(|error| CompatFail::Stored(Box::new(error)))?
     {
         Ok(repository)
     } else {
@@ -553,7 +553,7 @@ async fn visible(
 }
 
 async fn may_browse(
-    api: &compatApi,
+    api: &CompatApi,
     principal: &Principal,
     repository: &Repository,
 ) -> Result<bool, ApiError> {
@@ -568,7 +568,7 @@ async fn may_browse(
     }
 }
 
-fn origin_of(api: &compatApi, headers: &HeaderMap) -> String {
+fn origin_of(api: &CompatApi, headers: &HeaderMap) -> String {
     if let Some(base) = &api.base_url {
         return base.as_str().trim_end_matches('/').to_owned();
     }
@@ -579,12 +579,12 @@ fn origin_of(api: &compatApi, headers: &HeaderMap) -> String {
     format!("{}://{host}", api.fallback_scheme)
 }
 
-enum compatFail {
+enum CompatFail {
     Message(StatusCode, &'static str),
     Stored(Box<ApiError>),
 }
 
-impl IntoResponse for compatFail {
+impl IntoResponse for CompatFail {
     fn into_response(self) -> Response {
         match self {
             Self::Message(status, message) => {
@@ -595,16 +595,16 @@ impl IntoResponse for compatFail {
     }
 }
 
-fn fail(status: StatusCode, message: &'static str) -> compatFail {
-    compatFail::Message(status, message)
+fn fail(status: StatusCode, message: &'static str) -> CompatFail {
+    CompatFail::Message(status, message)
 }
 
-fn missing() -> compatFail {
+fn missing() -> CompatFail {
     fail(StatusCode::NOT_FOUND, "Repository not found")
 }
 
-fn store(error: StoreError) -> compatFail {
-    compatFail::Stored(Box::new(ApiError::from(error)))
+fn store(error: StoreError) -> CompatFail {
+    CompatFail::Stored(Box::new(ApiError::from(error)))
 }
 
 #[cfg(test)]
@@ -626,7 +626,7 @@ mod tests {
     use serde_json::Value;
     use tower::ServiceExt;
 
-    use super::{compatDeps, compatModule};
+    use super::{CompatDeps, CompatModule};
 
     struct Gate;
 
@@ -686,7 +686,7 @@ mod tests {
     fn router() -> axum::Router {
         let store = MemStore::with_builtin_roles().with_default_blob_store();
         let gate = Arc::new(Gate);
-        let module = compatModule::new(compatDeps {
+        let module = CompatModule::new(CompatDeps {
             repositories: Arc::new(store.clone()),
             blob_stores: Arc::new(store.clone()),
             components: Arc::new(store),

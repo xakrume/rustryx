@@ -224,21 +224,18 @@ impl LabelRepo for PgLabelRepo {
         if !exists {
             return Err(missing_label(id));
         }
-        let links: i64 = sqlx::query_scalar(
-            "SELECT count(*)::bigint FROM component_labels WHERE label_id = $1",
-        )
-        .bind(id.as_uuid())
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| map_err("delete label", e))?;
+        let links: i64 =
+            sqlx::query_scalar("SELECT count(*)::bigint FROM component_labels WHERE label_id = $1")
+                .bind(id.as_uuid())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| map_err("delete label", e))?;
         sqlx::query("DELETE FROM labels WHERE id = $1")
             .bind(id.as_uuid())
             .execute(&mut *tx)
             .await
             .map_err(|e| map_err("delete label", e))?;
-        tx.commit()
-            .await
-            .map_err(|e| map_err("delete label", e))?;
+        tx.commit().await.map_err(|e| map_err("delete label", e))?;
         to_u64(links, "delete label")
     }
 
@@ -321,13 +318,12 @@ impl LabelRepo for PgLabelRepo {
     }
 
     async fn usage(&self, label: LabelId) -> Result<u64, StoreError> {
-        let count: i64 = sqlx::query_scalar(
-            "SELECT count(*)::bigint FROM component_labels WHERE label_id = $1",
-        )
-        .bind(label.as_uuid())
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| map_err("read label usage", e))?;
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*)::bigint FROM component_labels WHERE label_id = $1")
+                .bind(label.as_uuid())
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| map_err("read label usage", e))?;
         to_u64(count, "read label usage")
     }
 }

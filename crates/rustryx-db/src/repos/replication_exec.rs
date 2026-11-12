@@ -83,11 +83,12 @@ pub(super) async fn start_execution(
         stored.counts = ExecutionCounts::default();
         return Ok(Some(stored));
     }
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM replication_rules WHERE id = $1)")
-        .bind(execution.rule_id.as_uuid())
-        .fetch_one(repo.pool())
-        .await
-        .map_err(|e| map_err("read replication rule", e))?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM replication_rules WHERE id = $1)")
+            .bind(execution.rule_id.as_uuid())
+            .fetch_one(repo.pool())
+            .await
+            .map_err(|e| map_err("read replication rule", e))?;
     if !exists {
         return Err(StoreError::Conflict(format!(
             "rule {} does not exist",
@@ -167,7 +168,10 @@ pub(super) async fn request_stop(
     let Some(status) = status else {
         return Err(StoreError::NotFound("replication execution".to_owned()));
     };
-    if matches!(status.as_str(), "succeeded" | "partially_failed" | "failed" | "stopped") {
+    if matches!(
+        status.as_str(),
+        "succeeded" | "partially_failed" | "failed" | "stopped"
+    ) {
         return Ok(false);
     }
     sqlx::query(
@@ -186,13 +190,21 @@ pub(super) async fn add_tasks(
     tasks: &[ReplicationTask],
 ) -> Result<(), StoreError> {
     if tasks.len() > MAX_TASKS {
-        return Err(StoreError::Invalid("at most 1000 tasks per call".to_owned()));
+        return Err(StoreError::Invalid(
+            "at most 1000 tasks per call".to_owned(),
+        ));
     }
-    let mut tx = repo.pool().begin().await.map_err(|e| map_err("add replication tasks", e))?;
+    let mut tx = repo
+        .pool()
+        .begin()
+        .await
+        .map_err(|e| map_err("add replication tasks", e))?;
     for task in tasks {
         insert_task(&mut tx, task).await?;
     }
-    tx.commit().await.map_err(|e| map_err("add replication tasks", e))
+    tx.commit()
+        .await
+        .map_err(|e| map_err("add replication tasks", e))
 }
 
 pub(super) async fn create_event_tasks(
@@ -202,19 +214,26 @@ pub(super) async fn create_event_tasks(
     advance: Option<&CursorAdvance>,
 ) -> Result<u64, StoreError> {
     if tasks.len() > MAX_TASKS {
-        return Err(StoreError::Invalid("at most 1000 tasks per call".to_owned()));
+        return Err(StoreError::Invalid(
+            "at most 1000 tasks per call".to_owned(),
+        ));
     }
-    let mut tx = repo.pool().begin().await.map_err(|e| map_err("create event tasks", e))?;
+    let mut tx = repo
+        .pool()
+        .begin()
+        .await
+        .map_err(|e| map_err("create event tasks", e))?;
     if let Some(advance) = advance
         && !outbox::advance_cursor(&mut tx, advance).await?
     {
         return Ok(0);
     }
-    let rule_exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM replication_rules WHERE id = $1)")
-        .bind(rule.as_uuid())
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| map_err("read replication rule", e))?;
+    let rule_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM replication_rules WHERE id = $1)")
+            .bind(rule.as_uuid())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| map_err("read replication rule", e))?;
     if !rule_exists {
         return Err(StoreError::NotFound("replication rule".to_owned()));
     }
@@ -246,7 +265,9 @@ pub(super) async fn create_event_tasks(
         row.execution_id = ReplicationExecutionId::from_uuid(execution);
         insert_task(&mut tx, &row).await?;
     }
-    tx.commit().await.map_err(|e| map_err("create event tasks", e))?;
+    tx.commit()
+        .await
+        .map_err(|e| map_err("create event tasks", e))?;
     Ok(u64::try_from(tasks.len()).unwrap_or(u64::MAX))
 }
 
@@ -320,7 +341,11 @@ pub(super) async fn finish_task(
             "a task ends with a terminal status or goes back with a retry delay".to_owned(),
         ));
     }
-    let mut tx = repo.pool().begin().await.map_err(|e| map_err("finish replication task", e))?;
+    let mut tx = repo
+        .pool()
+        .begin()
+        .await
+        .map_err(|e| map_err("finish replication task", e))?;
     let held: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM replication_tasks \
          WHERE id = $1 AND lease_owner = $2 AND status = 'running' FOR UPDATE",
@@ -363,7 +388,9 @@ pub(super) async fn finish_task(
         .map_err(|e| map_err("finish replication task", e))?;
     }
     outbox::insert_events(&mut tx, events).await?;
-    tx.commit().await.map_err(|e| map_err("finish replication task", e))?;
+    tx.commit()
+        .await
+        .map_err(|e| map_err("finish replication task", e))?;
     Ok(true)
 }
 
@@ -392,8 +419,13 @@ pub(super) async fn tasks(
     .fetch_all(repo.pool())
     .await
     .map_err(|e| map_err("list replication tasks", e))?;
-    let items = rows.into_iter().map(decode_task).collect::<Result<Vec<_>, _>>()?;
-    let next = (items.len() == limit as usize).then(|| items.last().map(|task| task.id.to_string())).flatten();
+    let items = rows
+        .into_iter()
+        .map(decode_task)
+        .collect::<Result<Vec<_>, _>>()?;
+    let next = (items.len() == limit as usize)
+        .then(|| items.last().map(|task| task.id.to_string()))
+        .flatten();
     Ok(Page { items, next })
 }
 
@@ -402,12 +434,17 @@ pub(super) async fn append_task_log(
     id: ReplicationTaskId,
     lines: &[TaskLogLine],
 ) -> Result<(), StoreError> {
-    let mut tx = repo.pool().begin().await.map_err(|e| map_err("append replication log", e))?;
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM replication_tasks WHERE id = $1)")
-        .bind(id.as_uuid())
-        .fetch_one(&mut *tx)
+    let mut tx = repo
+        .pool()
+        .begin()
         .await
-        .map_err(|e| map_err("read replication task", e))?;
+        .map_err(|e| map_err("append replication log", e))?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM replication_tasks WHERE id = $1)")
+            .bind(id.as_uuid())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| map_err("read replication task", e))?;
     if !exists {
         return Err(StoreError::NotFound("replication task".to_owned()));
     }
@@ -425,7 +462,9 @@ pub(super) async fn append_task_log(
         .await
         .map_err(|e| map_err("append replication log", e))?;
     }
-    tx.commit().await.map_err(|e| map_err("append replication log", e))
+    tx.commit()
+        .await
+        .map_err(|e| map_err("append replication log", e))
 }
 
 pub(super) async fn read_task_log(
@@ -434,11 +473,12 @@ pub(super) async fn read_task_log(
     after_seq: i32,
     limit: u32,
 ) -> Result<Vec<TaskLogLine>, StoreError> {
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM replication_tasks WHERE id = $1)")
-        .bind(id.as_uuid())
-        .fetch_one(repo.pool())
-        .await
-        .map_err(|e| map_err("read replication task", e))?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM replication_tasks WHERE id = $1)")
+            .bind(id.as_uuid())
+            .fetch_one(repo.pool())
+            .await
+            .map_err(|e| map_err("read replication task", e))?;
     if !exists {
         return Err(StoreError::NotFound("replication task".to_owned()));
     }
@@ -467,7 +507,11 @@ pub(super) async fn settle_executions(
     repo: &PgReplicationRepo,
     now: OffsetDateTime,
 ) -> Result<u64, StoreError> {
-    let mut tx = repo.pool().begin().await.map_err(|e| map_err("settle replication", e))?;
+    let mut tx = repo
+        .pool()
+        .begin()
+        .await
+        .map_err(|e| map_err("settle replication", e))?;
     let open: Vec<(Uuid, Uuid, bool, OffsetDateTime)> = sqlx::query_as(
         "SELECT id, rule_id, stop_requested_at IS NOT NULL, created_at \
          FROM replication_executions WHERE status IN ('queued', 'running') FOR UPDATE",
@@ -528,7 +572,9 @@ pub(super) async fn settle_executions(
         outbox::insert_events(&mut tx, &[draft]).await?;
         settled += 1;
     }
-    tx.commit().await.map_err(|e| map_err("settle replication", e))?;
+    tx.commit()
+        .await
+        .map_err(|e| map_err("settle replication", e))?;
     Ok(settled)
 }
 
@@ -571,11 +617,23 @@ async fn insert_task(tx: &mut PgConnection, task: &ReplicationTask) -> Result<()
     Ok(())
 }
 
-async fn counts(pool: &sqlx::PgPool, id: ReplicationExecutionId) -> Result<ExecutionCounts, StoreError> {
-    let mut conn = pool.acquire().await.map_err(|e| map_err("count replication tasks", e))?;
+async fn counts(
+    pool: &sqlx::PgPool,
+    id: ReplicationExecutionId,
+) -> Result<ExecutionCounts, StoreError> {
+    let mut conn = pool
+        .acquire()
+        .await
+        .map_err(|e| map_err("count replication tasks", e))?;
     let (total, succeeded, failed, skipped, in_progress) =
         counts_raw(&mut conn, id.as_uuid()).await?;
-    Ok(ExecutionCounts { total, succeeded, failed, skipped, in_progress })
+    Ok(ExecutionCounts {
+        total,
+        succeeded,
+        failed,
+        skipped,
+        in_progress,
+    })
 }
 
 async fn counts_raw(

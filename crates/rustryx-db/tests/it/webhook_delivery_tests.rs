@@ -41,7 +41,10 @@ async fn a_delivery_is_created_once_claimed_and_purged() {
     assert_eq!(deliveries.create_for_events(&rows, None).await.unwrap(), 1);
     assert_eq!(deliveries.create_for_events(&rows, None).await.unwrap(), 0);
     let missing = [(WebhookId::generate(), EventId::generate(), EventKind::Push)];
-    assert_eq!(deliveries.create_for_events(&missing, None).await.unwrap(), 0);
+    assert_eq!(
+        deliveries.create_for_events(&missing, None).await.unwrap(),
+        0
+    );
     assert_eq!(deliveries.pending_count().await.unwrap(), 1);
 
     let claimed = deliveries
@@ -59,8 +62,18 @@ async fn a_delivery_is_created_once_claimed_and_purged() {
         excerpt: Some("ok".to_owned()),
         next_attempt_at: None,
     };
-    assert!(deliveries.finish(claimed.id, "worker", &outcome).await.unwrap());
-    assert!(!deliveries.finish(claimed.id, "worker", &outcome).await.unwrap());
+    assert!(
+        deliveries
+            .finish(claimed.id, "worker", &outcome)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !deliveries
+            .finish(claimed.id, "worker", &outcome)
+            .await
+            .unwrap()
+    );
     assert_eq!(deliveries.pending_count().await.unwrap(), 0);
 
     let removed = deliveries

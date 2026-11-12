@@ -14,8 +14,8 @@ use futures::StreamExt;
 use http::{Method, StatusCode};
 use rustryx_api::{AdminGrant, ApiError, Authorized, Requires, RouteModule, RouteSet};
 use rustryx_core::audit::{AuditEvent, AuditKind};
-use rustryx_core::identity::Principal;
 use rustryx_core::error::StoreError;
+use rustryx_core::identity::Principal;
 use rustryx_core::ids::RepositoryId;
 use rustryx_core::model::{RepoFormat, RepoType};
 use rustryx_core::names::RepoName;
@@ -137,8 +137,13 @@ async fn sync_status(
     Path(name): Path<String>,
 ) -> Result<Json<SyncView>, ApiError> {
     let _ = parse_name(&name)?;
-    let runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
-    Ok(Json(runs.get(&name).cloned().unwrap_or_else(SyncView::idle)))
+    let runs = api
+        .runs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Ok(Json(
+        runs.get(&name).cloned().unwrap_or_else(SyncView::idle),
+    ))
 }
 
 async fn sync_start(
@@ -165,7 +170,10 @@ async fn sync_start(
         ));
     }
     {
-        let mut runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut runs = api
+            .runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if runs
             .get(&name)
             .is_some_and(|view| view.status == "running" || view.status == "stopping")
@@ -185,25 +193,25 @@ async fn sync_start(
             let mut runs = api_task
                 .runs
                 .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let view = runs.entry(key).or_insert_with(SyncView::running);
             let (outcome, error) = if view.status == "stopping" || view.status == "cancelled" {
-                view.status = "cancelled".to_owned();
+                "cancelled".clone_into(&mut view.status);
                 view.error = None;
                 ("success", None)
             } else {
                 match result {
                     Ok(()) if view.packages_failed == 0 => {
-                        view.status = "succeeded".to_owned();
+                        "succeeded".clone_into(&mut view.status);
                         ("success", None)
                     }
                     Ok(()) => {
-                        view.status = "failed".to_owned();
+                        "failed".clone_into(&mut view.status);
                         view.error = Some("Some packages could not be fetched".to_owned());
                         ("failure", view.error.clone())
                     }
                     Err(error) => {
-                        view.status = "failed".to_owned();
+                        "failed".clone_into(&mut view.status);
                         view.error = Some(error);
                         ("failure", view.error.clone())
                     }
@@ -224,7 +232,10 @@ async fn sync_start(
         record_sync(&api_task, &principal, &repo, outcome, detail).await;
     });
     let view = {
-        let runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
+        let runs = api
+            .runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         runs.get(&name).cloned().unwrap_or_else(SyncView::running)
     };
     Ok((StatusCode::ACCEPTED, Json(view)).into_response())
@@ -236,13 +247,18 @@ async fn sync_stop(
     Path(name): Path<String>,
 ) -> Result<Json<SyncView>, ApiError> {
     let _ = parse_name(&name)?;
-    let mut runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut runs = api
+        .runs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(view) = runs.get_mut(&name)
         && view.status == "running"
     {
-        view.status = "stopping".to_owned();
+        "stopping".clone_into(&mut view.status);
     }
-    Ok(Json(runs.get(&name).cloned().unwrap_or_else(SyncView::idle)))
+    Ok(Json(
+        runs.get(&name).cloned().unwrap_or_else(SyncView::idle),
+    ))
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -349,15 +365,17 @@ fn syncable(format: RepoFormat) -> bool {
 }
 
 fn stopping(api: &SyncApi, name: &str) -> bool {
-    let runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
+    let runs = api
+        .runs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     runs.get(name)
         .is_some_and(|view| view.status == "stopping" || view.status == "cancelled")
 }
 
 fn parse_name(name: &str) -> Result<RepoName, ApiError> {
-    RepoName::parse(name).map_err(|_| {
-        ApiError::bad_request("invalid_input", "The repository name is not valid")
-    })
+    RepoName::parse(name)
+        .map_err(|_| ApiError::bad_request("invalid_input", "The repository name is not valid"))
 }
 
 async fn run_sync(
@@ -390,7 +408,10 @@ async fn run_sync(
         .count();
     packages.retain(|path| path_selected(path, &include, &exclude));
     {
-        let mut runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut runs = api
+            .runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(view) = runs.get_mut(name) {
             view.packages_excluded = u64::try_from(excluded).unwrap_or(u64::MAX);
             view.packages_total = u64::try_from(packages.len()).unwrap_or(u64::MAX);
@@ -431,21 +452,30 @@ async fn run_sync(
 }
 
 fn note_skipped(api: &SyncApi, name: &str) {
-    let mut runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut runs = api
+        .runs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(view) = runs.get_mut(name) {
         view.packages_skipped = view.packages_skipped.saturating_add(1);
     }
 }
 
 fn note_fetched(api: &SyncApi, name: &str) {
-    let mut runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut runs = api
+        .runs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(view) = runs.get_mut(name) {
         view.packages_fetched = view.packages_fetched.saturating_add(1);
     }
 }
 
 fn note_failure(api: &SyncApi, name: &str) {
-    let mut runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut runs = api
+        .runs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(view) = runs.get_mut(name) {
         view.packages_failed = view.packages_failed.saturating_add(1);
     }
@@ -455,7 +485,10 @@ fn note_bytes(api: &SyncApi, name: &str, bytes: u64) {
     if bytes == 0 {
         return;
     }
-    let mut runs = api.runs.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut runs = api
+        .runs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(view) = runs.get_mut(name) {
         view.bytes_stored = view.bytes_stored.saturating_add(bytes);
     }
@@ -506,12 +539,7 @@ async fn serve(
     principal: &Principal,
     path: &str,
 ) -> axum::response::Response {
-    let head = RequestHead::new(
-        Method::GET,
-        path,
-        principal.clone(),
-        api.base_url.clone(),
-    );
+    let head = RequestHead::new(Method::GET, path, principal.clone(), api.base_url.clone());
     api.engine
         .serve(Arc::clone(repository), head, Body::empty())
         .await
@@ -592,17 +620,10 @@ async fn apt_packages(
         if path_excluded(&repository.format_config, &release_path) {
             return Err(format!("{release_path} is excluded"));
         }
-        let release_bytes = read_path(
-            api,
-            repository,
-            principal,
-            name,
-            &release_path,
-            INDEX_LIMIT,
-        )
-        .await?;
-        let release = String::from_utf8(release_bytes)
-            .map_err(|_| format!("{release_path} is not UTF-8"))?;
+        let release_bytes =
+            read_path(api, repository, principal, name, &release_path, INDEX_LIMIT).await?;
+        let release =
+            String::from_utf8(release_bytes).map_err(|_| format!("{release_path} is not UTF-8"))?;
         let indexes = apt_index::package_indexes(&release, &scope.components, &scope.architectures)
             .map_err(apt_error)?;
         for index in indexes {
@@ -756,7 +777,9 @@ fn clean_patterns(patterns: &[String]) -> Result<Vec<String>, ApiError> {
     let mut cleaned = Vec::with_capacity(patterns.len());
     for pattern in patterns {
         let pattern = pattern.trim();
-        if pattern.is_empty() || pattern.len() > PATTERN_LEN || pattern.chars().any(char::is_control)
+        if pattern.is_empty()
+            || pattern.len() > PATTERN_LEN
+            || pattern.chars().any(char::is_control)
         {
             return Err(ApiError::bad_request(
                 "invalid_input",
@@ -774,7 +797,9 @@ fn write_patterns(config: &mut serde_json::Value, include: &[String], exclude: &
     if !config.is_object() {
         *config = serde_json::json!({});
     }
-    let object = config.as_object_mut().expect("format_config is an object");
+    let Some(object) = config.as_object_mut() else {
+        return;
+    };
     object.insert(
         "sync_include".to_owned(),
         serde_json::Value::from(include.to_vec()),
@@ -822,14 +847,26 @@ fn string_list(config: &serde_json::Value, key: &str) -> Option<Vec<String>> {
 fn apt_error(error: apt_index::IndexError) -> String {
     match error {
         apt_index::IndexError::Syntax => "the APT index is not valid".to_owned(),
-        apt_index::IndexError::Path => "the APT index contains a path outside the repository".to_owned(),
+        apt_index::IndexError::Path => {
+            "the APT index contains a path outside the repository".to_owned()
+        }
     }
 }
 
 fn apk_error(error: apk_index::IndexError) -> String {
     match error {
         apk_index::IndexError::Syntax => "the APK index is not valid".to_owned(),
-        apk_index::IndexError::Path => "the APK index contains a path outside the repository".to_owned(),
+        apk_index::IndexError::Path => {
+            "the APK index contains a path outside the repository".to_owned()
+        }
+    }
+}
+
+fn index_error(error: IndexError) -> String {
+    match error {
+        IndexError::Syntax => "the RPM index is not valid XML".to_owned(),
+        IndexError::Path => "the RPM index contains a path outside the repository".to_owned(),
+        IndexError::NoPrimary => "repomd has no primary index".to_owned(),
     }
 }
 
@@ -870,13 +907,5 @@ mod tests {
         assert_eq!(config.get("distribution").unwrap(), "stable");
         let mut covered = serde_json::json!({ "sync_exclude": ["*.rpm"] });
         assert!(!push_exclusion(&mut covered, "a/b.rpm"));
-    }
-}
-
-fn index_error(error: IndexError) -> String {
-    match error {
-        IndexError::Syntax => "the RPM index is not valid XML".to_owned(),
-        IndexError::Path => "the RPM index contains a path outside the repository".to_owned(),
-        IndexError::NoPrimary => "repomd has no primary index".to_owned(),
     }
 }

@@ -26,8 +26,16 @@ pub fn deletions_for(
     let mut covered: HashMap<ComponentId, Vec<usize>> = HashMap::new();
     for (index, rule) in policy.rules.iter().enumerate() {
         for candidate in candidates {
-            if covers(&rule.repository, &rule.item, rule.include_untagged, candidate)? {
-                covered.entry(candidate.component_id).or_default().push(index);
+            if covers(
+                &rule.repository,
+                &rule.item,
+                rule.include_untagged,
+                candidate,
+            )? {
+                covered
+                    .entry(candidate.component_id)
+                    .or_default()
+                    .push(index);
             }
         }
     }
@@ -76,11 +84,8 @@ fn covers(
 }
 
 fn matches_selector(selector: &NameSelector, name: &str) -> Result<bool, DomainError> {
-    selector.selects(|pattern| {
-        regex::Regex::new(pattern)
-            .map(|compiled| compiled.is_match(name))
-            .unwrap_or(false)
-    })
+    selector
+        .selects(|pattern| regex::Regex::new(pattern).is_ok_and(|compiled| compiled.is_match(name)))
 }
 
 fn keep(
@@ -90,7 +95,8 @@ fn keep(
     kept: &mut HashSet<ComponentId>,
 ) {
     match *template {
-        RetentionTemplate::KeepLastPushed { count } | RetentionTemplate::KeepLatestVersions { count } => {
+        RetentionTemplate::KeepLastPushed { count }
+        | RetentionTemplate::KeepLatestVersions { count } => {
             let by_push = matches!(template, RetentionTemplate::KeepLastPushed { .. });
             group.sort_by(|left, right| {
                 let key = if by_push {
@@ -98,7 +104,8 @@ fn keep(
                 } else {
                     left.published_at.cmp(&right.published_at)
                 };
-                key.then(left.component_id.cmp(&right.component_id)).reverse()
+                key.then(left.component_id.cmp(&right.component_id))
+                    .reverse()
             });
             for candidate in group.iter().take(count as usize) {
                 kept.insert(candidate.component_id);
@@ -118,15 +125,19 @@ fn keep(
         }
         RetentionTemplate::KeepPushedWithinDays { days } => {
             let cutoff = now - time::Duration::days(i64::from(days));
-            for candidate in group.iter().filter(|candidate| candidate.pushed_at >= cutoff) {
+            for candidate in group
+                .iter()
+                .filter(|candidate| candidate.pushed_at >= cutoff)
+            {
                 kept.insert(candidate.component_id);
             }
         }
         RetentionTemplate::KeepPulledWithinDays { days } => {
             let cutoff = now - time::Duration::days(i64::from(days));
-            for candidate in group.iter().filter(|candidate| {
-                candidate.pulled_at.is_some_and(|pulled| pulled >= cutoff)
-            }) {
+            for candidate in group
+                .iter()
+                .filter(|candidate| candidate.pulled_at.is_some_and(|pulled| pulled >= cutoff))
+            {
                 kept.insert(candidate.component_id);
             }
         }
@@ -144,7 +155,9 @@ fn keep_newest_of_each_package(candidates: &[Candidate], kept: &mut HashSet<Comp
         packages.entry(key).or_default().push(candidate);
     }
     for group in packages.values() {
-        let any_kept = group.iter().any(|candidate| kept.contains(&candidate.component_id));
+        let any_kept = group
+            .iter()
+            .any(|candidate| kept.contains(&candidate.component_id));
         if any_kept {
             continue;
         }
@@ -213,7 +226,7 @@ mod tests {
 
         let only = vec![candidate("left", "1", 1)];
         let dropped = deletions_for(&policy(0, false), &only, now).unwrap();
-        assert!(dropped.is_empty());
+        assert_eq!(dropped, Vec::<ComponentId>::new());
         let dropped = deletions_for(&policy(0, true), &only, now).unwrap();
         assert_eq!(dropped, vec![only[0].component_id]);
     }

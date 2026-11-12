@@ -150,7 +150,7 @@ mod tests {
     fn registry(url: &str) -> Registry {
         Registry::new(
             RegistryId::generate(),
-            "harbor",
+            "origin",
             RegistryProvider::Oci,
             url,
             at(),

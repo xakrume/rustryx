@@ -127,7 +127,10 @@ async fn starts_with_nothing_wired_and_answers_probes() {
         ready.body
     );
 
-    let missing = http_test::get(server.addr, "/nothing").await.expect("404");
+    // Browser paths fall through to the embedded UI. A reserved API prefix stays 404.
+    let missing = http_test::get(server.addr, "/api/v1/nothing")
+        .await
+        .expect("404");
     assert_eq!(missing.status, 404);
     assert!(missing.body.contains("route_not_found"));
     assert!(missing.header("x-request-id").is_some());

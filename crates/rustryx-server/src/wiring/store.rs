@@ -7,9 +7,9 @@
 use std::sync::Arc;
 
 use rustryx_core::ports::{
-    AssetRepo, AuditReadRepo, AuditSink, BlobRepo, BlobStoreRepo, Clock, ComponentRepo, IdpMappingRepo,
-    LoginAttemptRepo, PrivilegeRepo, RepositoryRepo, RevokedTokenRepo, RoleRepo, RoutingRuleRepo,
-    SelectorRepo, SystemClock, TokenRepo, UserRepo,
+    AssetRepo, AuditReadRepo, AuditSink, BlobRepo, BlobStoreRepo, Clock, ComponentRepo,
+    IdpMappingRepo, LoginAttemptRepo, PrivilegeRepo, RepositoryRepo, RevokedTokenRepo, RoleRepo,
+    RoutingRuleRepo, SelectorRepo, SystemClock, TokenRepo, UserRepo,
 };
 use rustryx_db::PgStore;
 

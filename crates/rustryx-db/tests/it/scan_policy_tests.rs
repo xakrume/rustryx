@@ -69,9 +69,7 @@ async fn a_scan_policy_inherits_and_drops_a_deleted_scanner() {
     ));
     project_policy.allowlist_mode = Some(AllowlistMode::Project);
     assert!(matches!(
-        policies
-            .upsert_scan_policy(&project_policy, Some(2))
-            .await,
+        policies.upsert_scan_policy(&project_policy, Some(2)).await,
         Err(StoreError::Conflict(_))
     ));
     policies
@@ -79,10 +77,15 @@ async fn a_scan_policy_inherits_and_drops_a_deleted_scanner() {
         .await
         .unwrap();
 
-    let mut repo_policy =
-        ScanPolicy::new(SecurityPolicyId::generate(), PolicyScope::Repository(repo.id));
+    let mut repo_policy = ScanPolicy::new(
+        SecurityPolicyId::generate(),
+        PolicyScope::Repository(repo.id),
+    );
     repo_policy.quarantine = Some(true);
-    policies.upsert_scan_policy(&repo_policy, None).await.unwrap();
+    policies
+        .upsert_scan_policy(&repo_policy, None)
+        .await
+        .unwrap();
 
     let effective = policies.effective_for(repo.id).await.unwrap();
     assert_eq!(effective.scope, PolicyScope::Repository(repo.id));

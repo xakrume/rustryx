@@ -1,6 +1,6 @@
-# GitLab CI option of the Rustryx pipeline. GitHub Actions (.github/workflows/ci.yml)
-# is the primary CI; this file has the same stages and the same gates, built from
-# the same scripts in ci/. Reading guide: docs/ci-and-release.md.
+# GitLab CI for https://gitlab.xakru.me/rustryx/rustryx (group rustryx).
+# GitHub Actions (.github/workflows/ci.yml) is the other copy of this pipeline.
+# Same stages and the same scripts in ci/. Reading guide: docs/ci-and-release.md.
 #
 # Rules this file follows, each for a reason:
 #  - GitLab validates a job's `stage` BEFORE it evaluates `rules`, so every stage
@@ -32,6 +32,8 @@ workflow:
 variables:
   # Same digests as the Dockerfiles; ci/check-toolchain-pin.sh keeps them equal.
   RUST_IMAGE: rust:1.99.0-trixie@sha256:81015672d6939b0265f09adf96d5de125482bb1330106076956b0518e74edc90
+  # Node 22 for the UI job (ui/package.json engines). Pin by digest like the rest.
+  NODE_IMAGE: node:22-bookworm@sha256:e273cf2a19c7334c03f52e2ca933ecdfc3fbfaad49db7b8bc8c3edd9ac34e9c7
   TOOLS_IMAGE: alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
   DOCKER_CLI_IMAGE: docker:29.7-cli@sha256:3f4743208d2338c934d7b8bcfbe1bb54c0b2355c510ad5e0f31c0c4a54bd704e
   DOCKER_DIND_IMAGE: docker:29.7-dind@sha256:3ef33f2e220b79ed3ef3b99d81746f06f306cd6340e2cb7331d17ae996e74cb6
@@ -47,7 +49,15 @@ variables:
   # Release or default-branch pipelines publish; merge requests only build.
   PUBLISH: "false"
   # Runner tag of the shell executor that runs the fixtures job.
-  FIXTURES_RUNNER_TAG: docker-shell
+  # gitlab.xakru.me: the shell runner is tagged `shell` (gw-shell).
+  FIXTURES_RUNNER_TAG: shell
+  # Set to an arm64 runner tag to build arm64 images. Empty skips build-arm64.
+  RUNNER_ARM64: ""
+
+default:
+  # gitlab.xakru.me: jobs that pull an image run on gw-docker (`docker`).
+  # A job with its own tags replaces this list.
+  tags: [docker]
 
 .publishing: &publishing
   - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
@@ -73,17 +83,22 @@ lint:
     - |
       if [ -n "$CI_COMMIT_TAG" ]; then ci/release-check.sh "$CI_COMMIT_TAG"; fi
     - rustup toolchain install --profile minimal
+    - |
+      mkdir -p ui/dist
+      printf '%s\n' '<!doctype html><html><body><div id="root"></div></body></html>' >ui/dist/index.html
+      printf '%s\n' '' >ui/dist/theme-init.js
+      printf '%s\n' '<svg xmlns="http://www.w3.org/2000/svg"/>' >ui/dist/favicon.svg
     - cargo fmt --all -- --check
     - cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
     - apt-get update -qq && apt-get install -y -qq --no-install-recommends shellcheck python3-venv >/dev/null
     - ci/install-tool.sh hadolint
     - ci/install-tool.sh actionlint
-    - hadolint Dockerfile Dockerfile.musl deploy/compose/ldap/Dockerfile
+    - $HOME/.local/bin/hadolint Dockerfile Dockerfile.musl deploy/compose/ldap/Dockerfile
     - python3 -m venv /tmp/lint-venv
     - /tmp/lint-venv/bin/pip install --quiet --require-hashes --no-deps -r ci/requirements-lint.txt
     - /tmp/lint-venv/bin/yamllint -c ci/yamllint.yml --strict .github deploy/compose ci .gitlab-ci.yml
     - /tmp/lint-venv/bin/python ci/check-gitlab-ci.py .gitlab-ci.yml
-    - actionlint
+    - $HOME/.local/bin/actionlint
     - shellcheck ci/*.sh ci/tests/*.sh deploy/compose/ldap/*.sh
     - python3 -I -m unittest discover -s ci/tests -v
     - ci/check-toolchain-pin.sh
@@ -92,22 +107,77 @@ architecture:
   stage: lint
   image: $RUST_IMAGE
   interruptible: true
+  # gw-shell is a 4 GiB slice, so this job stays on the docker runner.
+  # The host has vm.overcommit_memory=1. One cargo thread keeps rustc from
+  # stacking several compilers in this job.
   variables:
     GIT_DEPTH: "0"
+    CARGO_BUILD_JOBS: "1"
+    RAYON_NUM_THREADS: "1"
+    RA_MAX_THREADS: "1"
   script:
-    - rustup toolchain install --profile minimal
-    - rustup component add rust-analyzer
-    - apt-get update -qq && apt-get install -y -qq --no-install-recommends nodejs npm >/dev/null
-    - npm install -g @sourcegraph/scip-typescript
-    - npm ci --prefix ui
-    - ci/install-tool.sh easement
     - |
+      set -eu
+      echo "cpus=$(nproc)"
+      echo "overcommit=$(cat /proc/sys/vm/overcommit_memory 2>/dev/null || echo n/a)"
+      awk '/CommitLimit:|Committed_AS:|MemAvailable:/ {printf "%s %s\n", $1, $2}' /proc/meminfo || true
+      echo "memory.max=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo n/a) high=$(cat /sys/fs/cgroup/memory.high 2>/dev/null || echo n/a)"
+      echo "memory.events=$(tr '\n' ' ' </sys/fs/cgroup/memory.events 2>/dev/null || echo n/a)"
+      free -h || true
+      if ! command -v git >/dev/null; then
+        apt-get update -qq
+        apt-get install -y -qq --no-install-recommends git
+      fi
+      rustup toolchain install --profile minimal
+      rustup component add rust-analyzer
+      node_ver=22.21.1
+      curl -fsSL -o /tmp/node.tar.gz "https://nodejs.org/dist/v${node_ver}/node-v${node_ver}-linux-x64.tar.gz"
+      tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1
+      npm install -g @sourcegraph/scip-typescript
+      npm ci --prefix ui
+      ci/install-tool.sh easement
+      export PATH="$HOME/.local/bin:$PATH"
+      memlog="$CI_PROJECT_DIR/architecture-memory.log"
+      # The runner shell has pipefail. `ps` exits 1 when rust-analyzer is not
+      # up yet, which would stop the sampler on the first miss.
+      ( set +e
+        set +o pipefail
+        while true; do
+          printf '%s ' "$(date +%H:%M:%S)"
+          awk '/MemAvailable:|CommitLimit:|Committed_AS:/ {printf "%s=%sMB ", $1, int($2/1024)}' /proc/meminfo
+          awk '/oom_kill/ {printf "oom_kill=%s ", $2}' /sys/fs/cgroup/memory.events 2>/dev/null
+          ps -C rust-analyzer -o rss=,vsz= --no-headers 2>/dev/null | awk '{printf "ra_rss=%dMB ra_vsz=%dMB ", $1/1024, $2/1024}'
+          echo
+          sleep 15
+        done
+      ) >"$memlog" 2>&1 &
+      mempid=$!
+      set +e
       if [ "$CI_PIPELINE_SOURCE" = merge_request_event ]; then
         git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
         easement check --diff "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
       else
         easement check
       fi
+      code=$?
+      set -e
+      kill "$mempid" 2>/dev/null || true
+      echo "=== memory during easement ==="
+      cat "$memlog" || true
+      if [ "$code" != 0 ]; then
+        dmesg 2>/dev/null | tail -n 30 || true
+        exit "$code"
+      fi
+
+# Same gates as `make ui-check` and `make ui-build`. Playwright e2e stays local.
+ui:
+  stage: lint
+  image: $NODE_IMAGE
+  interruptible: true
+  script:
+    - npm ci --prefix ui
+    - npm --prefix ui run check
+    - npm --prefix ui run build
 
 # ---------------------------------------------------------------- test
 # Integration tests start their dependencies with testcontainers, so the job needs
@@ -131,6 +201,11 @@ test:
   script:
     - rustup toolchain install --profile minimal
     - cargo install --locked --version 0.9.148 cargo-nextest
+    - |
+      mkdir -p ui/dist
+      printf '%s\n' '<!doctype html><html><body><div id="root"></div></body></html>' >ui/dist/index.html
+      printf '%s\n' '' >ui/dist/theme-init.js
+      printf '%s\n' '<svg xmlns="http://www.w3.org/2000/svg"/>' >ui/dist/favicon.svg
     - cargo install --locked --version 0.9.1 cargo-llvm-cov
     - |
       cargo llvm-cov nextest --workspace --all-features --locked \
@@ -217,7 +292,7 @@ secret-detection:
       set +e
       rc=0
       for mode in git dir; do
-        gitleaks "$mode" --config ci/gitleaks.toml --redact --no-banner \
+        $HOME/.local/bin/gitleaks "$mode" --config ci/gitleaks.toml --redact --no-banner \
           --report-format json --report-path "gitleaks-$mode.json" . 2>&1 | tee "gitleaks-$mode.log"
         [ "${PIPESTATUS[0]}" -eq 0 ] || rc=1
         bytes=$(sed -n 's/.*scanned ~\([0-9][0-9]*\) bytes.*/\1/p' "gitleaks-$mode.log" | tail -n 1)
@@ -236,7 +311,7 @@ dependency-scan:
     - ci/install-tool.sh trivy
     - |
       set +e
-      trivy fs --scanners vuln --list-all-pkgs --skip-dirs target --skip-dirs .cargo-home \
+      $HOME/.local/bin/trivy fs --scanners vuln --list-all-pkgs --skip-dirs target --skip-dirs .cargo-home \
         --ignorefile ci/trivyignore.yaml --exit-code 0 --format json --output trivy-fs.json .
       scan_rc=$?
       python3 ci/check-trivy.py --label trivy-fs --scanner-exit-code "$scan_rc" --min-components 50 \
@@ -339,12 +414,14 @@ build-amd64:
 
 build-arm64:
   extends: .build
-  tags: [saas-linux-medium-arm64]
+  tags: [$RUNNER_ARM64]
   parallel:
     matrix:
       - VARIANT: [glibc, musl]
         ARCH: arm64
   rules:
+    - if: $RUNNER_ARM64 == ""
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       variables: { PUBLISH: "false" }
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
@@ -365,6 +442,7 @@ image-security:
       artifacts: true
     - job: build-arm64
       artifacts: true
+      optional: true
   before_script:
     - apk add --no-cache bash curl python3 tar coreutils
     - ci/install-tool.sh trivy
@@ -374,8 +452,9 @@ image-security:
       status=0
       export TRIVY_USERNAME=$CI_REGISTRY_USER TRIVY_PASSWORD=$CI_REGISTRY_PASSWORD
       for id in glibc-amd64 glibc-arm64 musl-amd64 musl-arm64; do
+        [ -f "digests/$id" ] || continue
         ref="$CI_REGISTRY_IMAGE@$(cat "digests/$id")"
-        trivy image --scanners vuln --list-all-pkgs --ignorefile ci/trivyignore.yaml \
+        $HOME/.local/bin/trivy image --scanners vuln --list-all-pkgs --ignorefile ci/trivyignore.yaml \
           --exit-code 0 --format json --output "trivy-$id.json" "$ref"
         scan_rc=$?
         python3 ci/check-trivy.py --label "trivy-$id" --scanner-exit-code "$scan_rc" --min-components 10 \
@@ -383,7 +462,7 @@ image-security:
         rc=$?
         if [ "$rc" -eq 2 ]; then rc=0; fi
         [ "$rc" -eq 0 ] || { echo "image scan of $ref failed with $rc"; status=$rc; }
-        trivy image --format cyclonedx --output "sbom-$id.cdx.json" "$ref" || status=3
+        $HOME/.local/bin/trivy image --format cyclonedx --output "sbom-$id.cdx.json" "$ref" || status=3
         python3 ci/check-sbom.py --min 10 --expect-purl-prefix pkg:cargo/ "sbom-$id.cdx.json" || status=3
       done
       exit "$status"
@@ -410,6 +489,7 @@ publish:
       artifacts: true
     - job: build-arm64
       artifacts: true
+      optional: true
   services:
     - name: $DOCKER_DIND_IMAGE
       alias: docker
@@ -436,8 +516,12 @@ publish:
           set -- "$@" -t "$image:$tag"
         done
         amd64="$image@$(cat "digests/$variant-amd64")"
-        arm64="$image@$(cat "digests/$variant-arm64")"
-        docker buildx imagetools create "$@" "$amd64" "$arm64"
+        if [ -f "digests/$variant-arm64" ]; then
+          arm64="$image@$(cat "digests/$variant-arm64")"
+          docker buildx imagetools create "$@" "$amd64" "$arm64"
+        else
+          docker buildx imagetools create "$@" "$amd64"
+        fi
         digest=$(docker buildx imagetools inspect "$image:sha-${short}-${variant}" --format '{{.Manifest.Digest}}')
         echo "INDEX_DIGEST_$(echo "$variant" | tr a-z A-Z)=$digest" >>index-digests.env
       done
@@ -469,7 +553,7 @@ sign:
   before_script:
     - apk add --no-cache bash curl jq tar coreutils
     - ci/install-tool.sh cosign
-    - echo "$CI_REGISTRY_PASSWORD" | cosign login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - echo "$CI_REGISTRY_PASSWORD" | $HOME/.local/bin/cosign login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
     - |
       set -eu
@@ -481,15 +565,15 @@ sign:
       ref="$CI_REGISTRY_IMAGE@$digest"
       sbom="sbom-$VARIANT-amd64.cdx.json"
       if [ "$RUSTRYX_SIGNING" = keyless ] || [ "$RUSTRYX_SIGNING" = both ]; then
-        cosign sign --yes "$ref"
-        cosign attest --yes --type cyclonedx --predicate "$sbom" "$ref"
+        $HOME/.local/bin/cosign sign --yes "$ref"
+        $HOME/.local/bin/cosign attest --yes --type cyclonedx --predicate "$sbom" "$ref"
       fi
       if [ "$RUSTRYX_SIGNING" = kms ] || [ "$RUSTRYX_SIGNING" = both ]; then
         VAULT_TOKEN=$(curl -fsS --request POST --data "{\"jwt\": \"$VAULT_ID_TOKEN\", \"role\": \"${VAULT_JWT_ROLE:?}\"}" \
           "${VAULT_ADDR:?}/v1/auth/jwt/login" | jq -r .auth.client_token)
         export VAULT_TOKEN VAULT_ADDR
-        cosign sign --yes --key "$COSIGN_KMS_KEY_REF" "$ref"
-        cosign attest --yes --key "$COSIGN_KMS_KEY_REF" --type cyclonedx --predicate "$sbom" "$ref"
+        $HOME/.local/bin/cosign sign --yes --key "$COSIGN_KMS_KEY_REF" "$ref"
+        $HOME/.local/bin/cosign attest --yes --key "$COSIGN_KMS_KEY_REF" --type cyclonedx --predicate "$sbom" "$ref"
       fi
 
 # SLSA provenance (in-toto v1) attested to the index, signed with the job identity.
@@ -511,13 +595,13 @@ provenance:
   before_script:
     - apk add --no-cache bash curl jq tar coreutils
     - ci/install-tool.sh cosign
-    - echo "$CI_REGISTRY_PASSWORD" | cosign login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - echo "$CI_REGISTRY_PASSWORD" | $HOME/.local/bin/cosign login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
     - |
       set -eu
       digest=$INDEX_DIGEST_MUSL; [ "$VARIANT" = glibc ] && digest=$INDEX_DIGEST_GLIBC
       ci/gitlab-provenance.sh "$VARIANT" >provenance.json
-      cosign attest --yes --type slsaprovenance1 --predicate provenance.json "$CI_REGISTRY_IMAGE@$digest"
+      $HOME/.local/bin/cosign attest --yes --type slsaprovenance1 --predicate provenance.json "$CI_REGISTRY_IMAGE@$digest"
 
 # ---------------------------------------------------------------- verify
 verify:
@@ -535,7 +619,7 @@ verify:
   before_script:
     - apk add --no-cache bash curl jq tar coreutils
     - ci/install-tool.sh cosign
-    - echo "$CI_REGISTRY_PASSWORD" | cosign login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - echo "$CI_REGISTRY_PASSWORD" | $HOME/.local/bin/cosign login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
     - |
       set -eu
@@ -544,14 +628,14 @@ verify:
       if [ "$RUSTRYX_SIGNING" = keyless ] || [ "$RUSTRYX_SIGNING" = both ]; then
         # The signer is THIS file of THIS project, on the default branch or a release tag.
         identity="^${CI_SERVER_URL}/${CI_PROJECT_PATH}//\.gitlab-ci\.yml@refs/(heads/${CI_DEFAULT_BRANCH}|tags/v[0-9]+\.[0-9]+\.[0-9]+)\$"
-        cosign verify "$ref" --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$CI_SERVER_URL"
+        $HOME/.local/bin/cosign verify "$ref" --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$CI_SERVER_URL"
         for type in cyclonedx slsaprovenance1; do
-          cosign verify-attestation "$ref" --type "$type" \
+          $HOME/.local/bin/cosign verify-attestation "$ref" --type "$type" \
             --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$CI_SERVER_URL" >/dev/null
         done
       fi
       if [ "$RUSTRYX_SIGNING" = kms ] || [ "$RUSTRYX_SIGNING" = both ]; then
         test -s ci/cosign.pub || { echo "ci/cosign.pub is missing: commit the public key of the KMS key"; exit 1; }
-        cosign verify --key ci/cosign.pub "$ref"
-        cosign verify-attestation --key ci/cosign.pub --type cyclonedx "$ref" >/dev/null
+        $HOME/.local/bin/cosign verify --key ci/cosign.pub "$ref"
+        $HOME/.local/bin/cosign verify-attestation --key ci/cosign.pub --type cyclonedx "$ref" >/dev/null
       fi

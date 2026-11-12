@@ -4,7 +4,6 @@ import { StrictMode, useState } from 'react'
 import { createQueryClient } from '@/api/query-client'
 import { ErrorBoundary } from '@/components/error-boundary'
 import { Toaster } from '@/components/toaster'
-import { TooltipProvider } from '@/components/ui/tooltip'
 import { ThemeProvider } from '@/features/theme/theme-provider'
 import { toast } from '@/lib/toast-store'
 import { createAppRouter } from './router'
@@ -20,10 +19,10 @@ export function App() {
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
           <ThemeProvider>
-            <TooltipProvider delayDuration={300}>
-              <RouterProvider router={router} />
-              <Toaster />
-            </TooltipProvider>
+            {/* Toaster stays here so renderApp tests and every route (including login) see it.
+                TooltipProvider lives in AppShell so floating-ui stays out of the entry. */}
+            <RouterProvider router={router} />
+            <Toaster />
           </ThemeProvider>
         </QueryClientProvider>
       </ErrorBoundary>

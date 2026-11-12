@@ -51,6 +51,13 @@ pub fn expected_schema_version() -> i64 {
     MIGRATOR.iter().map(|m| m.version).max().unwrap_or(0)
 }
 
+/// How many migration files this binary embeds (may be less than
+/// [`expected_schema_version`] when version numbers have gaps).
+#[must_use]
+pub fn embedded_migration_count() -> usize {
+    MIGRATOR.iter().count()
+}
+
 /// Relation between the schema in the database and the binary.
 ///
 /// The "N-1" of the expand/contract scheme is the BINARY: during a rolling update the

@@ -248,7 +248,8 @@ async fn record_downloads_adds_daily_counts_and_fills_gaps_with_zero() {
         .await
         .unwrap()
         .asset;
-    let noon = time::OffsetDateTime::now_utc().replace_time(time::Time::from_hms(12, 0, 0).unwrap());
+    let noon =
+        time::OffsetDateTime::now_utc().replace_time(time::Time::from_hms(12, 0, 0).unwrap());
     let yesterday = noon - Span::days(1);
     let ghost = AssetId::generate();
     let mut ticks = vec![
