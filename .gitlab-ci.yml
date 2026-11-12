@@ -81,6 +81,10 @@ lint:
   cache: *rust-cache
   script:
     - |
+      echo "overcommit=$(cat /proc/sys/vm/overcommit_memory 2>/dev/null || echo n/a) cpus=$(nproc)"
+      awk '/CommitLimit:|Committed_AS:|MemAvailable:/ {printf "%s %s\n", $1, $2}' /proc/meminfo || true
+      echo "memory.max=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo n/a) events=$(tr '\n' ' ' </sys/fs/cgroup/memory.events 2>/dev/null || echo n/a)"
+    - |
       if [ -n "$CI_COMMIT_TAG" ]; then ci/release-check.sh "$CI_COMMIT_TAG"; fi
     - rustup toolchain install --profile minimal
     - |
@@ -107,16 +111,27 @@ architecture:
   stage: lint
   image: $RUST_IMAGE
   interruptible: true
-  # gw-shell is a 4 GiB slice, so this job stays on the docker runner, which
-  # sees the host (about 20 GiB free). Capping cargo at one thread made the
-  # index take so long that the process was SIGKILL'd; GitHub finishes the
-  # same check in a few minutes with the default parallelism.
+  # gw-shell is a 4 GiB slice, so this job stays on the docker runner.
+  # A previous run was SIGKILL'd with ~15 GiB still available and swap idle,
+  # which is what vm.overcommit_memory=2 does to rust-analyzer. Allow
+  # overcommit when this container may change the host sysctl.
   variables:
     GIT_DEPTH: "0"
   script:
     - |
       set -eu
       echo "cpus=$(nproc)"
+      echo "overcommit=$(cat /proc/sys/vm/overcommit_memory 2>/dev/null || echo n/a)"
+      awk '/CommitLimit:|Committed_AS:|MemAvailable:/ {printf "%s %s\n", $1, $2}' /proc/meminfo || true
+      echo "memory.max=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo n/a) high=$(cat /sys/fs/cgroup/memory.high 2>/dev/null || echo n/a)"
+      echo "memory.events=$(tr '\n' ' ' </sys/fs/cgroup/memory.events 2>/dev/null || echo n/a)"
+      if [ "$(cat /proc/sys/vm/overcommit_memory 2>/dev/null || echo 0)" = 2 ]; then
+        if echo 1 >/proc/sys/vm/overcommit_memory 2>/dev/null; then
+          echo "set overcommit_memory=1"
+        else
+          echo "cannot set overcommit_memory"
+        fi
+      fi
       free -h || true
       if ! command -v git >/dev/null; then
         apt-get update -qq
@@ -134,9 +149,11 @@ architecture:
       memlog="$CI_PROJECT_DIR/architecture-memory.log"
       ( while true; do
           printf '%s ' "$(date +%H:%M:%S)"
-          awk '/MemAvailable:|MemFree:|SwapFree:/ {printf "%s=%sMB ", $1, int($2/1024)}' /proc/meminfo
+          awk '/MemAvailable:|CommitLimit:|Committed_AS:/ {printf "%s=%sMB ", $1, int($2/1024)}' /proc/meminfo
+          awk '/oom_kill/ {printf "oom_kill=%s ", $2}' /sys/fs/cgroup/memory.events 2>/dev/null || true
+          ps -C rust-analyzer -o rss=,vsz= --no-headers 2>/dev/null | awk '{printf "ra_rss=%dMB ra_vsz=%dMB ", $1/1024, $2/1024}'
           echo
-          sleep 30
+          sleep 15
         done ) >"$memlog" 2>&1 &
       mempid=$!
       set +e
