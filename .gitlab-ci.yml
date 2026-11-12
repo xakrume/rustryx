@@ -105,34 +105,37 @@ lint:
 
 architecture:
   stage: lint
-  image: $RUST_IMAGE
   interruptible: true
+  # The Docker runner's cgroup kills rust-analyzer (SIGKILL) while it indexes the
+  # workspace. The shell runner is the host, which has the memory the index needs.
+  # A shell executor ignores `image`, so the toolchain is installed into the job dir.
+  tags: [shell]
   variables:
     GIT_DEPTH: "0"
-    # rust-analyzer's index of this workspace was SIGKILL'd on the Docker runner.
+    CARGO_HOME: "$CI_PROJECT_DIR/.cargo-home"
+    RUSTUP_HOME: "$CI_PROJECT_DIR/.rustup"
     CARGO_BUILD_JOBS: "1"
-    RAYON_NUM_THREADS: "1"
   script:
-    - rustup toolchain install --profile minimal
-    - rustup component add rust-analyzer
-    - apt-get update -qq && apt-get install -y -qq --no-install-recommends nodejs npm >/dev/null
-    - npm install -g @sourcegraph/scip-typescript
-    - npm ci --prefix ui
-    - ci/install-tool.sh easement
     - |
-      if ! swapon --show | grep -q .; then
-        fallocate -l 4G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=4096
-        chmod 600 /swapfile
-        mkswap /swapfile
-        swapon /swapfile || echo "swap was not enabled; continuing without it"
+      set -eu
+      export PATH="$CARGO_HOME/bin:$HOME/.local/bin:$PATH"
+      if ! command -v rustup >/dev/null; then
+        curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
       fi
-      free -h || true
-    - |
+      rustup toolchain install --profile minimal
+      rustup component add rust-analyzer
+      node_ver=22.21.1
+      curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v${node_ver}/node-v${node_ver}-linux-x64.tar.xz"
+      tar -xJf /tmp/node.tar.xz -C "$CI_PROJECT_DIR"
+      export PATH="$CI_PROJECT_DIR/node-v${node_ver}-linux-x64/bin:$PATH"
+      npm install -g @sourcegraph/scip-typescript
+      npm ci --prefix ui
+      ci/install-tool.sh easement
       if [ "$CI_PIPELINE_SOURCE" = merge_request_event ]; then
         git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
-        $HOME/.local/bin/easement check --diff "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+        "$HOME/.local/bin/easement" check --diff "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
       else
-        $HOME/.local/bin/easement check
+        "$HOME/.local/bin/easement" check
       fi
 
 # Same gates as `make ui-check` and `make ui-build`. Playwright e2e stays local.
