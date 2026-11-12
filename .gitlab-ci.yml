@@ -107,9 +107,9 @@ architecture:
   stage: lint
   image: $RUST_IMAGE
   interruptible: true
-  # gw-shell is a 4 GiB user slice with no swap, and rust-analyzer is SIGKILL'd
-  # there. The docker runner sees the host memory. One thread keeps the index
-  # under that.
+  # gw-shell is a 4 GiB slice. On the docker runner rust-analyzer is still
+  # SIGKILL'd once the index grows, so the job adds swap when the kernel allows
+  # it and keeps the index to one thread.
   variables:
     GIT_DEPTH: "0"
     CARGO_BUILD_JOBS: "1"
@@ -118,6 +118,18 @@ architecture:
   script:
     - |
       set -eu
+      echo "=== memory ==="
+      free -h || true
+      echo "memory.max=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo n/a) swap.max=$(cat /sys/fs/cgroup/memory.swap.max 2>/dev/null || echo n/a)"
+      if ! swapon --show | grep -q .; then
+        if dd if=/dev/zero of=/swapfile bs=1M count=8192 status=none && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile; then
+          echo "swap enabled"
+        else
+          echo "swap not available"
+          rm -f /swapfile
+        fi
+      fi
+      free -h || true
       if ! command -v git >/dev/null; then
         apt-get update -qq
         apt-get install -y -qq --no-install-recommends git
