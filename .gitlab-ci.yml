@@ -81,17 +81,6 @@ lint:
   cache: *rust-cache
   script:
     - |
-      echo "overcommit=$(cat /proc/sys/vm/overcommit_memory 2>/dev/null || echo n/a) cpus=$(nproc)"
-      awk '/CommitLimit:|Committed_AS:|MemAvailable:/ {printf "%s %s\n", $1, $2}' /proc/meminfo || true
-      echo "memory.max=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo n/a) events=$(tr '\n' ' ' </sys/fs/cgroup/memory.events 2>/dev/null || echo n/a)"
-      overcommit_probe=$(cat /proc/sys/vm/overcommit_memory 2>/dev/null || echo 0)
-      if echo 1 >/proc/sys/vm/overcommit_memory 2>/dev/null; then
-        echo "$overcommit_probe" >/proc/sys/vm/overcommit_memory 2>/dev/null || true
-        echo "overcommit is writable"
-      else
-        echo "overcommit is not writable"
-      fi
-    - |
       if [ -n "$CI_COMMIT_TAG" ]; then ci/release-check.sh "$CI_COMMIT_TAG"; fi
     - rustup toolchain install --profile minimal
     - |
@@ -119,9 +108,10 @@ architecture:
   image: $RUST_IMAGE
   interruptible: true
   # gw-shell is a 4 GiB slice, so this job stays on the docker runner.
-  # A previous run was SIGKILL'd with ~15 GiB still available and swap idle,
-  # which is what vm.overcommit_memory=2 does to rust-analyzer. Allow
-  # overcommit when this container may change the host sysctl.
+  # rust-analyzer is SIGKILL'd there while RAM and swap are still free:
+  # vm.overcommit_memory=0 and Committed_AS is already near CommitLimit.
+  # The container cannot change that sysctl (read-only). The host has to
+  # set vm.overcommit_memory=1. See docs/ci-and-release.md.
   variables:
     GIT_DEPTH: "0"
   script:
@@ -132,17 +122,6 @@ architecture:
       awk '/CommitLimit:|Committed_AS:|MemAvailable:/ {printf "%s %s\n", $1, $2}' /proc/meminfo || true
       echo "memory.max=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo n/a) high=$(cat /sys/fs/cgroup/memory.high 2>/dev/null || echo n/a)"
       echo "memory.events=$(tr '\n' ' ' </sys/fs/cgroup/memory.events 2>/dev/null || echo n/a)"
-      # Mode 0 still SIGKILLs an allocation once Committed_AS reaches
-      # CommitLimit, while MemAvailable stays high. rust-analyzer reserves
-      # far more virtual memory than it uses. Allow it for this job only.
-      overcommit_was=$(cat /proc/sys/vm/overcommit_memory 2>/dev/null || echo 0)
-      overcommit_set=0
-      if [ "$overcommit_was" != 1 ] && echo 1 >/proc/sys/vm/overcommit_memory 2>/dev/null; then
-        overcommit_set=1
-        echo "set overcommit_memory=1 (was $overcommit_was)"
-      else
-        echo "overcommit stays $overcommit_was"
-      fi
       free -h || true
       if ! command -v git >/dev/null; then
         apt-get update -qq
@@ -177,9 +156,6 @@ architecture:
       code=$?
       set -e
       kill "$mempid" 2>/dev/null || true
-      if [ "$overcommit_set" = 1 ]; then
-        echo "$overcommit_was" >/proc/sys/vm/overcommit_memory 2>/dev/null || true
-      fi
       echo "=== memory during easement ==="
       cat "$memlog" || true
       if [ "$code" != 0 ]; then
