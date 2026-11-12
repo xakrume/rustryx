@@ -116,6 +116,7 @@ architecture:
   script:
     - |
       set -eu
+      echo "cpus=$(nproc)"
       free -h || true
       if ! command -v git >/dev/null; then
         apt-get update -qq
@@ -130,6 +131,14 @@ architecture:
       npm ci --prefix ui
       ci/install-tool.sh easement
       export PATH="$HOME/.local/bin:$PATH"
+      memlog="$CI_PROJECT_DIR/architecture-memory.log"
+      ( while true; do
+          printf '%s ' "$(date +%H:%M:%S)"
+          awk '/MemAvailable:|MemFree:|SwapFree:/ {printf "%s=%sMB ", $1, int($2/1024)}' /proc/meminfo
+          echo
+          sleep 30
+        done ) >"$memlog" 2>&1 &
+      mempid=$!
       set +e
       if [ "$CI_PIPELINE_SOURCE" = merge_request_event ]; then
         git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
@@ -139,6 +148,9 @@ architecture:
       fi
       code=$?
       set -e
+      kill "$mempid" 2>/dev/null || true
+      echo "=== memory during easement ==="
+      cat "$memlog" || true
       if [ "$code" != 0 ]; then
         dmesg 2>/dev/null | tail -n 30 || true
         exit "$code"
