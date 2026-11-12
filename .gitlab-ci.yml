@@ -107,28 +107,15 @@ architecture:
   stage: lint
   image: $RUST_IMAGE
   interruptible: true
-  # gw-shell is a 4 GiB slice. On the docker runner rust-analyzer is still
-  # SIGKILL'd once the index grows, so the job adds swap when the kernel allows
-  # it and keeps the index to one thread.
+  # gw-shell is a 4 GiB slice, so this job stays on the docker runner, which
+  # sees the host (about 20 GiB free). Capping cargo at one thread made the
+  # index take so long that the process was SIGKILL'd; GitHub finishes the
+  # same check in a few minutes with the default parallelism.
   variables:
     GIT_DEPTH: "0"
-    CARGO_BUILD_JOBS: "1"
-    RA_MAX_THREADS: "1"
-    RAYON_NUM_THREADS: "1"
   script:
     - |
       set -eu
-      echo "=== memory ==="
-      free -h || true
-      echo "memory.max=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo n/a) swap.max=$(cat /sys/fs/cgroup/memory.swap.max 2>/dev/null || echo n/a)"
-      if ! swapon --show | grep -q .; then
-        if dd if=/dev/zero of=/swapfile bs=1M count=8192 status=none && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile; then
-          echo "swap enabled"
-        else
-          echo "swap not available"
-          rm -f /swapfile
-        fi
-      fi
       free -h || true
       if ! command -v git >/dev/null; then
         apt-get update -qq
@@ -143,11 +130,18 @@ architecture:
       npm ci --prefix ui
       ci/install-tool.sh easement
       export PATH="$HOME/.local/bin:$PATH"
+      set +e
       if [ "$CI_PIPELINE_SOURCE" = merge_request_event ]; then
         git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
         easement check --diff "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
       else
         easement check
+      fi
+      code=$?
+      set -e
+      if [ "$code" != 0 ]; then
+        dmesg 2>/dev/null | tail -n 30 || true
+        exit "$code"
       fi
 
 # Same gates as `make ui-check` and `make ui-build`. Playwright e2e stays local.
