@@ -131,6 +131,7 @@ architecture:
       exec "$tools/busybox" unxz \$files
       EOF
       chmod +x "$tools/bin/xz"
+      export PATH="$tools/bin:$PATH"
       if ! command -v sha256sum >/dev/null; then
         printf '#!/bin/sh\nexec "%s" sha256sum "$@"\n' "$tools/busybox" >"$tools/bin/sha256sum"
         chmod +x "$tools/bin/sha256sum"
@@ -146,7 +147,6 @@ architecture:
         printf '#!/bin/sh\nexec "%s" cc "$@"\n' "$tools/zig-x86_64-linux-${zig_ver}/zig" >"$tools/bin/cc"
         chmod +x "$tools/bin/cc"
       fi
-      export PATH="$tools/bin:$PATH"
       export CARGO_HOME="$CI_PROJECT_DIR/.cargo-home"
       export RUSTUP_HOME="$CI_PROJECT_DIR/.rustup"
       export CARGO_BUILD_JOBS=1
